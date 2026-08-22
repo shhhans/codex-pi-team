@@ -1,3 +1,5 @@
 .tmp-real-role/
+.tmp-role-audit*/
 .pi/auth.json
 .pi/models-store.json
+.pi/communication/reply-store/

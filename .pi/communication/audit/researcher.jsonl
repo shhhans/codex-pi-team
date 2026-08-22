@@ -1,2 +1,7 @@
 {"at":"2026-08-22T03:49:07.893Z","role":"researcher","direction":"outbound","action":"send","recipient":"critic","outcome":"refused","reason":"unauthorized-peer","trace":[{"event":"refuse-before-intercom","sender":"researcher","recipient":"critic","action":"send"}]}
 {"at":"2026-08-22T04:17:37.884Z","role":"researcher","direction":"outbound","action":"send","recipient":"architect","outcome":"allowed"}
+{"at":"2026-08-22T05:49:33.357Z","role":"researcher","direction":"supervisor","outcome":"allowed","reason":"progress_update"}
+{"at":"2026-08-22T05:50:24.327Z","role":"researcher","direction":"supervisor","outcome":"allowed","reason":"progress_update"}
+{"at":"2026-08-22T05:51:02.022Z","role":"researcher","direction":"supervisor","outcome":"allowed","reason":"progress_update"}
+{"at":"2026-08-22T05:52:07.074Z","role":"researcher","direction":"supervisor","outcome":"allowed","reason":"progress_update"}
+{"at":"2026-08-22T05:53:14.068Z","role":"researcher","direction":"supervisor","outcome":"allowed","reason":"progress_update"}

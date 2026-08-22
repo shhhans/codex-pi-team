@@ -41,9 +41,10 @@ for (const [role, reason] of roles) {
     PI_SUBAGENT_RUN_ID: `run-${role}`,
     PI_SUBAGENT_CHILD_AGENT: role,
     PI_SUBAGENT_CHILD_INDEX: "0",
+    PI_SUBAGENT_INTERCOM_SESSION_NAME: role,
   };
   if (root) env.PI_CODING_AGENT_DIR = root;
-  const child = spawn(process.execPath, [cli, "--provider", "minimax-cn", "--model", "MiniMax-M3", "--thinking", "off", "--no-session", "--mode", "json", "--print", "--tools", "contact_supervisor,intercom", "--extension", ".pi/npm/node_modules/pi-intercom/index.ts", "--extension", `.pi/communication/extensions/${role}.ts`, "--system-prompt", `You are the ${role} role. Follow the requested tool call exactly.`, prompt], { cwd: process.cwd(), env, windowsHide: true });
+  const child = spawn(process.execPath, [cli, "--provider", "minimax-cn", "--model", "MiniMax-M3", "--thinking", "off", "--no-session", "--mode", "json", "--print", "--tools", "contact_supervisor,intercom", "--extension", ".pi/npm/node_modules/pi-intercom/index.ts", "--extension", `.pi/communication/extensions/${role}.ts`, "--system-prompt", `You are the ${role} role. Follow the requested tool call exactly.`, prompt], { cwd: process.cwd(), env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = ""; let stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk; });
   child.stderr.on("data", chunk => { stderr += chunk; });
