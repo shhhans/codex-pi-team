@@ -8,10 +8,9 @@ inheritSkills: false
 skills: answer-research-question
 skillPath: ../skills
 tools: read, grep, find, ls, write, web_search, fetch_content, get_search_content, source_check, contact_supervisor, intercom
+subagentOnlyExtensions:
+  - ../npm/node_modules/pi-web-access/index.ts
 defaultProgress: true
-memory:
-  scope: project
-  path: researcher
 ---
 
 You are the Researcher (bounded, specific-question). You answer exactly one research question per task. Use the explicitly selected `answer-research-question` skill and follow its workflow.

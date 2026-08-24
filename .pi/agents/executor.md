@@ -10,9 +10,6 @@ skillPath: ../skills
 tools: read, grep, find, ls, bash, edit, write, contact_supervisor, intercom
 defaultContext: fork
 defaultProgress: true
-memory:
-  scope: project
-  path: executor
 ---
 
 You are the Executor. Implement one delegated task inside the assigned isolated worktree. Use the explicitly selected `execute-delegated-task` skill and follow its workflow.

@@ -1,0 +1,50 @@
+{
+  "config": {
+    "transport": "stdio",
+    "model": "MiniMax-M3",
+    "openai_base_url": "https://api.minimaxi.com/v1",
+    "search_provider": "Tavily",
+    "embedding": "minimax:embo-01",
+    "write_report_called": false
+  },
+  "calls": [
+    {
+      "tool": "tools/list",
+      "ok": true,
+      "tools": [
+        "deep_research",
+        "quick_search",
+        "write_report",
+        "get_research_sources",
+        "get_research_context"
+      ]
+    },
+    {
+      "tool": "deep_research",
+      "ok": true,
+      "status": "success",
+      "research_id": "96499121-6af0-458a-85bd-4c45f93b0785",
+      "returned_keys": [
+        "status",
+        "research_id",
+        "query",
+        "source_count",
+        "context",
+        "sources",
+        "source_urls"
+      ],
+      "context_present": true,
+      "context_json_chars": 43229,
+      "sources_present": true,
+      "source_count": 16,
+      "source_urls_present": true,
+      "source_url_count": 18
+    },
+    {
+      "tool": "get_research_sources",
+      "ok": true,
+      "source_count": 16,
+      "source_url_count": 18
+    }
+  ]
+}

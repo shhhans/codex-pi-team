@@ -4,4 +4,18 @@
 .pi/auth.json
 .pi/models-store.json
 .pi/communication/reply-store/
+.pi/communication/audit/
+.pi/agent-memory/
+.pi/researcher-runtime/node_modules/
+.pi/npm/node_modules/
 .sidecar/gptr-mcp/.venv/
+.sidecar/gptr-mcp/__pycache__/
+.sidecar/gptr-mcp/.git/
+.sidecar-original/
+.traces/
+.pi/traces/
+caches/
+
+# Preserve historical evidence under legacy (no gitignore entries below).
+# .pi/legacy/agents/, .pi/legacy/communication/, .pi/legacy/deep-research/,
+# .pi/legacy/research/, and .pi/legacy/PROVENANCE.md are tracked.

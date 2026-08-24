@@ -1,0 +1,74 @@
+{
+  "config": {
+    "transport": "stdio",
+    "model": "MiniMax-M3",
+    "openai_base_url": "https://api.minimaxi.com/v1",
+    "search_provider": "Tavily",
+    "embedding": "minimax:embo-01",
+    "write_report_called": false
+  },
+  "run_id": "951e83d9-9235-4aa0-890d-071968699109",
+  "calls": [
+    {
+      "tool": "deep_research",
+      "action": "call",
+      "task_id": "a665f31c-f5ae-4735-a740-5c8ae80db93f",
+      "status": "completed",
+      "model": "MiniMax-M3"
+    },
+    {
+      "tool": "deep_research",
+      "action": "status",
+      "task_id": "a665f31c-f5ae-4735-a740-5c8ae80db93f",
+      "status": "completed",
+      "progress": 1
+    },
+    {
+      "tool": "get_research_context/get_research_sources",
+      "action": "result",
+      "task_id": "a665f31c-f5ae-4735-a740-5c8ae80db93f",
+      "context_chars": 44552,
+      "source_count": 15,
+      "source_url_count": 20
+    },
+    {
+      "tool": "Researcher MiniMax synthesis",
+      "action": "call",
+      "model": "MiniMax-M3",
+      "input": "frozen MCP result only",
+      "write_report_called": false,
+      "attempt": 1
+    },
+    {
+      "tool": "Researcher MiniMax synthesis",
+      "action": "call",
+      "model": "MiniMax-M3",
+      "input": "frozen MCP result only",
+      "write_report_called": false,
+      "attempt": 1
+    }
+  ],
+  "review": {
+    "task_id": "a665f31c-f5ae-4735-a740-5c8ae80db93f",
+    "verdict": "READY_FOR_SYNTHESIS",
+    "issues": [],
+    "source_count": 15,
+    "citation_count": 15,
+    "orphan_citations": 0,
+    "coverage_rate": 1,
+    "contradiction_count": 0,
+    "gap_count": 0,
+    "reviewed_at": "2026-08-23T19:34:31.709Z"
+  },
+  "synthesis": {
+    "frozen_result_path": "D:/Coding/Harness/Pi-team/.pi/research/runs/951e83d9-9235-4aa0-890d-071968699109/deep-research/a665f31c-f5ae-4735-a740-5c8ae80db93f.json",
+    "bounded_report_chars": 44552,
+    "bounded_source_count": 15,
+    "fresh_session_required": true,
+    "input_report_chars": 8000,
+    "input_source_count": 15
+  },
+  "status": "failed",
+  "report_path": "D:\\Coding\\Harness\\Pi-team\\.pi\\research\\runs\\951e83d9-9235-4aa0-890d-071968699109\\report.md",
+  "error": "TypeError: fetch failed\n    at node:internal/deps/undici/undici:15845:13\n    at async file:///D:/Coding/Harness/Pi-team/tests/synthesize-frozen-acceptance.mjs:24:22"
+}

@@ -9,9 +9,6 @@ skills: review-delegated-task
 skillPath: ../skills
 tools: read, grep, find, ls, bash, edit, write, contact_supervisor, intercom
 defaultProgress: true
-memory:
-  scope: project
-  path: reviewer
 ---
 
 You are the Reviewer (paired). Enter a paired Executor's worktree only after Executor has stopped. Use the explicitly selected `review-delegated-task` skill and follow its workflow.
