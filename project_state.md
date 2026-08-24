@@ -1,4 +1,4 @@
-# Project State (as of BOOTSTRAP-SELF-003 cutover)
+# Project State (as of BOOTSTRAP-SELF-004A review pass)
 
 ## Active agent surface
 
@@ -12,6 +12,9 @@ role memory** (no `memory:` frontmatter, no active `.pi/agent-memory/{role}/MEMO
 | `researcher` | `answer-research-question` | `.pi/npm/node_modules/pi-web-access/index.ts` (via `subagentOnlyExtensions`) | none (prompt + private skill only) |
 | `executor` | `execute-delegated-task` | n/a | none (prompt + private skill only) |
 | `reviewer` | `review-delegated-task` | n/a | none (prompt + private skill only) |
+
+All three roles also load their matching communication-policy extension.
+Researcher additionally loads `pi-web-access`.
 
 The legacy role files for `architect`, `critic`, and `engineer`
 are present in `.pi/legacy/agents/` but are not loaded.
@@ -68,23 +71,51 @@ MCP tools are **not** wired to the active Researcher.
 
 The canonical repository `D:\Coding\Harness\Pi-team` is unchanged.
 
+## Communication state
+
+- Active topology: `Researcher <-> Executor <-> Reviewer`.
+- Researcher and Reviewer are directly denied in both directions.
+- Lead assigns the concrete Executor/Reviewer pairing; current policy
+  enforces role topology, not a task-scoped pair identifier.
+- Denied inbound messages are filtered before model context and cause
+  no reply-store access. Allowed inbound messages are retained.
+- The four BOOTSTRAP-SELF-004A Reviewer findings are resolved.
+
 ## Validation
 
-- `tests/run-tests.ps1` runs only `tests/team-contract.test.mjs`
-  (the deterministic team-contract test).
-- `node --test tests/team-contract.test.mjs` is the direct
-  command-line entry point for the same test.
-- `git diff --check` must pass with no whitespace or conflict
-  markers.
-- `git status` must show the new artifacts and moved files; no
-  commits or staging are performed.
+- `tests/run-tests.ps1` runs both deterministic test files.
+- `node --test tests/team-contract.test.mjs tests/communication-policy.test.mjs`
+  is the cross-shell entry point.
+- Current result: 25/25 tests pass; `git diff --check` passes.
 - Skill frontmatter is validated by `quick_validate.py` for all
   three skills.
 
-## Out of scope (current task)
+## Operational limitation
 
-- Refactoring the shared intercom implementation under
-  `.pi/communication/`.
-- Production deployment or runtime orchestration outside the
-  routine development loop.
-- Replacing or modifying the canonical repository.
+`pi-subagents runs.run` has expanded narrow review briefs into extra
+reconnaissance, and Pi child shells cannot execute Windows PowerShell
+binaries from WSL. Directly loading the role prompt, private skill, and
+role extension produced the bounded Reviewer PASS.
+
+The live intercom smoke established session discovery and an
+Executor-to-Reviewer `socket_delivered` transport acknowledgement. The
+message was not injected into the Reviewer's active non-interactive
+turn, so Reviewer did not send an acknowledgement and Executor correctly
+reported `NOT SUCCESS`. Bidirectional direct communication is therefore
+configured and unit-tested but not yet operationally proven end to end.
+Unit tests and socket delivery alone are not a causal capability claim.
+
+## Remaining bootstrap work
+
+- Bounded Researcher smoke passed: BOOTSTRAP-SELF-005 answered one
+  official-documentation question with ordinary web-access tools and
+  wrote `research/BOOTSTRAP-SELF-005-node-test-exit-code.md`. Direct
+  content fetch was blocked by the provider's SSRF/TUN guard, so the
+  artifact records that its official-source evidence came through
+  search snippets and `source_check`.
+- Determine and test the required turn-boundary/resume behavior for a
+  live paired Executor/Reviewer intercom exchange without concurrent
+  editing.
+- Commit the reviewed communication cutover and merge it into the
+  canonical repository after preserving canonical untracked legacy
+  material.

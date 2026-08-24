@@ -10,6 +10,7 @@ skillPath: ../skills
 tools: read, grep, find, ls, write, web_search, fetch_content, get_search_content, source_check, contact_supervisor, intercom
 subagentOnlyExtensions:
   - ../npm/node_modules/pi-web-access/index.ts
+  - ../communication/extensions/researcher.ts
 defaultProgress: true
 ---
 

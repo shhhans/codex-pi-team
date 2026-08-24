@@ -8,6 +8,8 @@ inheritSkills: false
 skills: execute-delegated-task
 skillPath: ../skills
 tools: read, grep, find, ls, bash, edit, write, contact_supervisor, intercom
+subagentOnlyExtensions:
+  - ../communication/extensions/executor.ts
 defaultContext: fork
 defaultProgress: true
 ---

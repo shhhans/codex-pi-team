@@ -11,7 +11,7 @@ Three active roles plus the Lead form the minimal loop:
 
 | Role | Surface | Skill | Artifact root |
 | --- | --- | --- | --- |
-| Lead (Codex) | user-facing session | n/a | decisions under `.pi/decisions/`, project-level docs at repo root |
+| Lead (Codex) | user-facing session | n/a | `ADR/`, `architect.md`, `goal.md`, `project_state.md` |
 | Researcher | `.pi/agents/researcher.md` | `answer-research-question` | `research/<task-id>-<slug>.md` |
 | Executor | `.pi/agents/executor.md` | `execute-delegated-task` | `implementation_notes/<task-id>.md` |
 | Reviewer | `.pi/agents/reviewer.md` | `review-delegated-task` | `failures/<task-id>-<finding-id>.md` |
@@ -49,16 +49,23 @@ stopped. Reviewer edits tests and writes failure artifacts only; it
 
 ## Communication
 
-- The shared intercom implementation under `.pi/communication/`
-  remains active and unchanged.
-- The Researcher role's runtime policy extension is
-  `.pi/communication/extensions/researcher.ts`.
-- The Reviewer role's runtime policy extension is
-  `.pi/communication/extensions/reviewer.ts`.
-- The Executor is paired with the Researcher and the Reviewer.
-- All agents route routine completions to Lead via
-  `pi-subagents` and escalate with `contact_supervisor` using the
-  closed reason enum.
+- Each active role loads its matching runtime-policy extension under
+  `.pi/communication/extensions/{researcher,executor,reviewer}.ts`.
+- Direct peer exchange is asynchronous and limited to
+  `Researcher <-> Executor <-> Reviewer`. Researcher and Reviewer
+  cannot address each other directly.
+- Executor and Reviewer pairing is assigned by Lead. The role-level
+  ACL proves only the allowed role pair, not same-task identity.
+- Routine peer results can travel directly. Material risk, a changed
+  downstream assumption, or a decision request is mirrored to Lead
+  with `contact_supervisor` using `need_decision`, `progress_update`,
+  or `interview_request`.
+- Runtime-policy tests prove policy behavior and extension wiring.
+  They do not, by themselves, prove causal use of the transport.
+- `pi-subagents runs.run` may add reconnaissance or rewrite a narrow
+  brief. Until that orchestration layer is constrained, Lead may run
+  a role directly with its prompt, private skill, and extension when
+  exact task boundaries matter.
 
 ## Legacy
 

@@ -77,10 +77,14 @@ Negative / accepted tradeoffs:
 
 No content hashes are used; IDs come from Lead.
 
+Transport correlation UUIDs are an internal intercom detail and are
+not application artifact IDs. Direct role topology is limited to
+Researcher <-> Executor <-> Reviewer; Lead assigns the concrete pairing.
+
 ## Validation
 
-- `tests/run-tests.ps1` runs only the current deterministic
-  team-contract test.
+- `tests/run-tests.ps1` runs the team-contract and communication-policy
+  tests.
 - The team-contract test asserts: exactly three active agents
   (researcher, executor, reviewer); explicit skills; Researcher
   provider/no Deep Research tools; exact root artifact contracts;
@@ -89,10 +93,13 @@ No content hashes are used; IDs come from Lead.
   skills (`answer-research-question`, `execute-delegated-task`,
   `review-delegated-task`).
 
-## Out of scope
+## Operational evidence boundary
 
-- Refactoring the shared intercom topology under `.pi/communication/`.
-- Replacing the legacy five-agent material in canonical (it remains
-  unchanged and untouched in `D:\Coding\Harness\Pi-team`).
-- Production deployment or runtime orchestration outside the routine
-  development loop.
+Policy unit tests and extension loading do not by themselves establish
+causal transport capability. The first live smoke established peer
+discovery and Executor-to-Reviewer socket delivery, but did not inject
+the message into the Reviewer's already-running non-interactive turn.
+Bidirectional direct communication remains operationally unproven until
+the turn-boundary/resume behavior is exercised successfully.
+
+Production deployment remains out of scope.

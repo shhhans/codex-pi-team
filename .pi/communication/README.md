@@ -1,17 +1,51 @@
-# Agent-team communication policy
+# Minimal-loop communication policy
 
-This is the project-level policy layer for Architecture v2.1. Codex is the sole Lead; Pi is only the execution and communication bridge. The default route is Agent → Lead → Agent. Direct peer policy is limited to Researcher ↔ Architect and Architect ↔ Critic. Reviewer routes through Lead.
+This directory implements the runtime policy for `minimal-loop-v1`.
+Codex is the user-facing Lead. The only active Pi roles are Researcher,
+Executor, and Reviewer.
 
-The bounded-peer rule is enforced by role prompts and Lead audit. It is not an intercom transport ACL: the generic local bus can address any visible session, so a compliant Agent must refuse before calling `intercom` for a disallowed peer.
+## Allowed routes
 
-The concrete outbound gate is `sendWithPolicy` in `send.mjs`; it records an audit event and does not invoke the client for a disallowed pair. Each role loads a project extension from `communication/extensions/`. Its `tool_call` hook runs that gate before an `intercom send` reaches the transport, permits only canonical bounded-peer role names, and blocks peer `ask`, `reply`, and `cancel`. Discovery/status actions remain available. Critic and Reviewer supervisor calls are restricted to `reason: "need_decision"`.
+Direct peer messages are asynchronous and restricted to:
 
-The concrete inbound gate is `PolicyReceiver`. The role extension applies it in Pi's `context` event, before a provider request and before any Agent tool call. It validates only structured `intercom_message` entries and uses the transport-provided `details.from` and `details.bodyText`; user text that imitates an intercom header is not trusted. Rejected entries are removed from model context without calling `ctx.abort()`, so an illegal message cannot interrupt an in-flight legitimate task. This guarantees zero model/business-tool side effects from the rejected entry, not zero transport/session side effects. Runtime audit metadata is appended under `communication/audit/`; message bodies and hashes are not recorded. These are Agent/runtime policy gates layered above the generic intercom bus, not transport security.
+- Researcher <-> Executor
+- Executor <-> Reviewer
 
-The context hook also reserves each accepted logical UUID in the persistent reply store. A retry with a completed record receives a replay entry containing the original reply; a retry with a pending record is removed without reprocessing. The store is enabled by default under `communication/reply-store/` and can be redirected with `HARNESS_REPLY_STORE_DIR`.
+Researcher and Reviewer cannot communicate directly. Lead does not use
+the peer-send route. Lead assigns each Executor/Reviewer pair; the
+role-level ACL does not prove that two allowed sessions belong to the
+same task.
 
-Messages use the text convention implemented in `policy.mjs`: one UUID per logical request, reused for retries; correlation is explicit; deduplication is `(UUID, recipient)` for one hour; no application-layer hash is used. `send` is asynchronous and does not wait for a reply. Invalid, expired, duplicate, unauthorized, or malformed messages are rejected without side effects.
+`sendWithPolicy` in `send.mjs` applies the outbound gate. Each active
+agent loads its matching extension from `extensions/`. The extension
+blocks disallowed peer sends and blocks peer `ask`, `reply`, and
+`cancel`; discovery/status actions remain available.
 
-Scope changes mark the old run stale, preserve valid partial artifacts, and start a new run under a new plan version. `intercom cancel` only cancels a sent message and is never treated as subagent-task cancellation. If Critic is unavailable, continue only with `unverified-architecture`; security-sensitive, irreversible, publishing, deployment, external-user, billing, secret, and remote-infrastructure actions remain blocked.
+`PolicyReceiver` and `createRoleRuntimePolicy` apply the inbound gate
+before an intercom entry reaches model context. Sender identity comes
+from transport metadata rather than message text. An unauthorized entry
+is removed without aborting the legitimate run and without reading or
+writing the reply store. An authorized entry is retained. Completed
+reply replay remains available through `receiveAndReplay`; `onContext`
+does not create eager pending reservations.
 
-Run the empirical checks with `powershell -File tests/run-tests.ps1`. A test that depends on intercom must fail or defer when intercom is disabled or its policy is removed; passing the policy unit tests alone is not evidence of transport causality.
+All three active roles may contact Lead only with the closed reason set:
+`need_decision`, `progress_update`, and `interview_request`. Routine peer
+results need not be relayed through Lead, but material risk, changed
+downstream assumptions, and decision requests must be mirrored.
+
+Messages use the structured `agent-team/v1` envelope. UUIDs are internal
+transport correlation identifiers; application artifacts use Lead task
+IDs and no application-level content hash.
+
+## Evidence boundary
+
+Run `powershell -ExecutionPolicy Bypass -File tests/run-tests.ps1` on
+Windows, or run both Node test files directly. These tests establish the
+policy contract, denial side effects, and extension wiring. They do not
+establish causal transport capability merely because an extension was
+loaded or an audit event exists. A live Executor/Reviewer exchange must
+be reported separately as an operational smoke test.
+
+The legacy v2.1 roles and Deep Research implementation are archived
+under `.pi/legacy/` and are not part of this active policy.

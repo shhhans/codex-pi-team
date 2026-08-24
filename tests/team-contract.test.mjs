@@ -111,8 +111,8 @@ test("researcher provider is installed pi-web-access and has no Deep Research to
     assert.equal(tools.includes(banned), false, `Researcher must not include Deep Research tool ${banned}`);
   }
   const exts = parseScalarList(fm.subagentOnlyExtensions);
-  assert.deepEqual(exts, ["../npm/node_modules/pi-web-access/index.ts"],
-    "Researcher must point subagentOnlyExtensions at the local pi-web-access provider");
+  assert.deepEqual(exts, ["../npm/node_modules/pi-web-access/index.ts", "../communication/extensions/researcher.ts"],
+    "Researcher must point subagentOnlyExtensions at the local pi-web-access provider and the researcher policy extension");
   // Provider must exist on disk so the contract is enforceable.
   await expectExists(join(REPO, ".pi/npm/node_modules/pi-web-access/index.ts"));
   assert.match(text, /answer-research-question/);
@@ -236,15 +236,16 @@ test("legacy role material is preserved under .pi/legacy/", async () => {
   assert.doesNotMatch(prov, /sha256|sha1|md5/i);
 });
 
-test("tests directory contains only the current deterministic contract test", async () => {
+test("tests directory contains the deterministic contract and communication-policy tests", async () => {
   const { readdir } = await import("node:fs/promises");
   const entries = (await readdir(join(REPO, "tests"))).filter((name) => !name.startsWith(".")).sort();
-  assert.deepEqual(entries, ["legacy", "run-tests.ps1", "team-contract.test.mjs"].sort(),
-    `tests/ must contain only legacy, run-tests.ps1, and the current contract test; got ${entries.join(", ")}`);
-  // The current contract test is the only top-level .test.mjs file.
-  const topLevelTests = entries.filter((name) => name.endsWith(".test.mjs"));
-  assert.deepEqual(topLevelTests, ["team-contract.test.mjs"]);
+  assert.deepEqual(entries, ["communication-policy.test.mjs", "legacy", "run-tests.ps1", "team-contract.test.mjs"].sort(),
+    `tests/ must contain only the deterministic contract and communication-policy tests; got ${entries.join(", ")}`);
+  // Both top-level .test.mjs files are allowed.
+  const topLevelTests = entries.filter((name) => name.endsWith(".test.mjs")).sort();
+  assert.deepEqual(topLevelTests, ["communication-policy.test.mjs", "team-contract.test.mjs"]);
   // The contract test must be referenced by run-tests.ps1.
   const runner = await readFile(join(REPO, "tests/run-tests.ps1"), "utf8");
   assert.match(runner, /team-contract\.test\.mjs/);
+  assert.match(runner, /communication-policy\.test\.mjs/);
 });

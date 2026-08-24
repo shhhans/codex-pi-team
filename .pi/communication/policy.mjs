@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 
-export const ROLES = ["lead", "researcher", "architect", "engineer", "critic", "reviewer"];
+export const ROLES = ["lead", "researcher", "executor", "reviewer"];
 export const BOUNDED_PEERS = new Map([
-  ["researcher", new Set(["architect"])],
-  ["architect", new Set(["researcher", "critic"])],
-  ["critic", new Set(["architect"])],
-  ["engineer", new Set()],
-  ["reviewer", new Set()],
+  ["researcher", new Set(["executor"])],
+  ["executor", new Set(["researcher", "reviewer"])],
+  ["reviewer", new Set(["executor"])],
   ["lead", new Set()],
 ]);
+export const ACTIVE_ROLES = new Set(["researcher", "executor", "reviewer"]);
+export const LEGACY_ROLES = new Set(["architect", "critic", "engineer"]);
 export const KINDS = new Set(["request", "reply", "error", "progress"]);
 export const SUPERVISOR_REASONS = new Set(["need_decision", "progress_update", "interview_request"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -20,7 +20,8 @@ export function authorizePeer(sender, recipient) {
 }
 
 export function authorizeSupervisorEscalation(sender, reason) {
-  return (sender === "critic" || sender === "reviewer") && reason === "need_decision";
+  if (!ACTIVE_ROLES.has(sender)) return false;
+  return SUPERVISOR_REASONS.has(reason);
 }
 
 export function makeEnvelope({ id, correlationId = id, kind, subject, body, planVersion, artifactPath }) {
@@ -149,11 +150,4 @@ export function refusalTrace(sender, recipient, trace = []) {
 
 export function shouldMirror({ changesDownstream = false, materialRisk = false, invalidatesAssumption = false, cosmeticOnly = false }) {
   return changesDownstream || materialRisk || invalidatesAssumption || !cosmeticOnly;
-}
-
-export function leadFallback({ criticAvailable, actionClass }) {
-  const blocked = new Set(["security", "irreversible", "publishing", "deployment", "external-user", "billing", "secret", "remote-infrastructure"]);
-  if (criticAvailable) return { status: "reviewed" };
-  if (blocked.has(actionClass)) return { status: "blocked", marker: "unverified-architecture" };
-  return { status: "degraded", marker: "unverified-architecture" };
 }

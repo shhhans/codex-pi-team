@@ -30,7 +30,9 @@ The routine development path runs as a minimal three-agent loop:
 The path is fully traceable: every task has an ID supplied by Lead,
 every artifact lands at a known project-root path, and every peer
 exchange goes through the shared intercom implementation with
-runtime policy enforcement. No content hashes, no self-generated
-UUIDs, no Deep Research MCP, no cross-worktree scope, no
-production-code edits by Reviewer, no commits without Lead
+runtime policy enforcement. Application artifacts use human-readable
+Lead task IDs and no content hashes. Transport correlation UUIDs remain
+an internal intercom mechanism and are not application artifact IDs.
+There is no Deep Research MCP, no cross-worktree scope, no
+production-code edits by Reviewer, and no commits without Lead
 authorization.

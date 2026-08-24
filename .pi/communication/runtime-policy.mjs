@@ -7,8 +7,10 @@ import { PersistentReplyStore } from "./persistent-store.mjs";
 import { PersistentRunLifecycle } from "./lifecycle.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ROLE_NAMES = new Set(["researcher", "architect", "engineer", "critic", "reviewer", "lead"]);
+const ACTIVE_ROLE_NAMES = new Set(["researcher", "executor", "reviewer"]);
+const ROLE_NAMES = new Set(["lead", ...ACTIVE_ROLE_NAMES]);
 const SAFE_INTERCOM_ACTIONS = new Set(["list", "list-cwd", "status", "pending"]);
+const SUPERVISOR_REASONS = new Set(["need_decision", "progress_update", "interview_request"]);
 
 function normalizedRole(value) {
   if (typeof value !== "string") return undefined;
@@ -41,9 +43,7 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
   async function onToolCall(event) {
     if (event.toolName === "contact_supervisor") {
       const reason = event.input?.reason;
-      const restricted = (normalized === "critic" || normalized === "reviewer") && reason !== "need_decision";
-      const mirrorInvalid = (normalized === "researcher" || normalized === "architect") && !["need_decision", "progress_update", "interview_request"].includes(reason);
-      if (restricted || mirrorInvalid) {
+      if (!SUPERVISOR_REASONS.has(reason)) {
         await auditSafely({ direction: "supervisor", outcome: "refused", reason: "reason-not-allowed" });
         return { block: true, reason: `${normalized} may not use contact_supervisor with reason=${reason ?? "missing"}` };
       }
@@ -131,21 +131,24 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
         } else {
           let parsed;
           try { parsed = parseEnvelope(text); } catch { parsed = undefined; }
-          const previous = parsed ? await replyStore.read(normalized, parsed.id) : undefined;
-          if (previous?.status === "completed") {
-            kept.push({ ...message, customType: "intercom_replay", details: { ...message.details, bodyText: `REPLAY-OF:${parsed.id}\n${previous.reply}` } });
-            changed = true;
-            continue;
-          }
-          if (previous?.status === "pending") {
+          // Authorization MUST precede every reply-store side effect
+          // (read/reserve/write) so an unauthorized sender-to-recipient pair
+          // never triggers a persistent lookup or creates a pending record
+          // that could collide with a later legitimate send.
+          const authorization = receiver.receive({ sender, text });
+          if (!authorization.accepted) {
             accepted = false;
           } else {
-            const reservation = parsed ? await replyStore.reserve(normalized, parsed.id) : undefined;
-            if (reservation && !reservation.created) accepted = false;
-            else {
-              const result = receiver.receive({ sender, text });
-              accepted = result.accepted;
+            // Authorized: look up any prior completed reply for replay only.
+            // No "pending" reservation is written on accept; duplicates within
+            // the window are deduped by PolicyReceiver's in-memory DedupStore.
+            const previous = parsed ? await replyStore.read(normalized, parsed.id) : undefined;
+            if (previous?.status === "completed") {
+              kept.push({ ...message, customType: "intercom_replay", details: { ...message.details, bodyText: `REPLAY-OF:${parsed.id}\n${previous.reply}` } });
+              changed = true;
+              continue;
             }
+            accepted = true;
           }
           const result = parsed && accepted ? { accepted, envelope: parsed } : { accepted };
           const audited = await auditSafely({
