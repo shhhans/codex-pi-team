@@ -46,7 +46,7 @@ v2 replaces v1 entirely. The following v1 claims are **removed or corrected** in
 - Mirror-to-Lead rule (baseline item 7).
 - Scope-change handling using mark-stale / cancel / preserve-partial / restart under a new plan version (baseline item 9).
 - Six-signal HITL escalation set (confidence breach, action-risk tier, frustration, SLA-approaching, irreversibility, anomaly/injection) as the descriptive trigger taxonomy that informs Lead→User escalation triggers (§3).
-- Researcher round-gating via `research_checkpoint` (already in the Researcher agent definition).
+- Researcher synthesis-gating via `deep_research_review`; search/retrieval rounds are owned by the professional Deep Research MCP.
 
 ### 1.3 What v2.1 does NOT change (baseline is fixed)
 
@@ -176,7 +176,7 @@ None of the five existing agent definitions (`architect.md`, `critic.md`, `engin
 | architect | `read, grep, find, ls, write, contact_supervisor` | No | Yes |
 | critic | `read, grep, find, ls` | No | **No** |
 | engineer | `read, grep, find, ls, bash, edit, write, contact_supervisor` | No | Yes |
-| researcher | `read, write, web_search, web_extract, research_checkpoint, contact_supervisor` | No | Yes |
+| researcher | local inspection, `research_run`, `deep_research_task`, `deep_research_review`, clean synthesis/report, `contact_supervisor`, `intercom` | Yes | Yes |
 | reviewer | `read, grep, find, ls` | No | **No** |
 
 `intercom` is registered by the `npm:pi-intercom` extension at runtime, **not** declared in agent definitions. Whether each role's runtime sees the `intercom` tool depends on the runtime's allowlist for that session. v2 (and v2.1) does not assume that allowlist is currently expanded to include Critic, Reviewer, or any specific peer pair.

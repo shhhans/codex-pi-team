@@ -1,5 +1,9 @@
 {
+  "type": "module",
   "dependencies": {
-    "pi-deep-research": "0.1.6"
+    "@modelcontextprotocol/sdk": "1.30.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
   }
 }

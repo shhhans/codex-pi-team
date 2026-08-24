@@ -1,5 +1,7 @@
 .tmp-real-role/
 .tmp-role-audit*/
+.pi/research/runs/
 .pi/auth.json
 .pi/models-store.json
 .pi/communication/reply-store/
+.sidecar/gptr-mcp/.venv/

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { authorizePeer, authorizeSupervisorEscalation, DedupStore, LeadAudit, MessageQueue, PolicyReceiver, RunRegistry, leadFallback, makeEnvelope, newRequestId, parseEnvelope, refusalTrace, resolvePeerRole, shouldMirror } from "../.pi/communication/policy.mjs";
@@ -9,6 +9,7 @@ import { PersistentReplyStore } from "../.pi/communication/persistent-store.mjs"
 import { PersistentRunLifecycle } from "../.pi/communication/lifecycle.mjs";
 import { sendWithPolicy } from "../.pi/communication/send.mjs";
 import { createRoleRuntimePolicy } from "../.pi/communication/runtime-policy.mjs";
+import { LOCAL_ECOSYSTEM_START, createLocalEcosystemSnapshot, installResearcherLocalDiscovery } from "../.pi/communication/researcher-local-discovery.mjs";
 import { discoverAgents } from "../.pi/npm/node_modules/pi-subagents/src/agents/agents.ts";
 
 test("policy keeps topology and refuses unauthorized pairs before intercom", async () => {
@@ -53,6 +54,46 @@ test("role/config smoke and intercom dependency negative control", async () => {
   try {
     const child = await runChild(["tests/intercom-child.mjs", "--disabled"], { ...process.env, PI_CODING_AGENT_DIR: root });
     assert.equal(child.code, 0); assert.deepEqual(JSON.parse(child.stdout), { disabled: true });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("Researcher gets live incremental local-discovery context and matching tools", async () => {
+  const researcherDefinition = await (await import("node:fs/promises")).readFile(".pi/agents/researcher.md", "utf8");
+  for (const tool of ["read", "grep", "find", "ls"]) assert.match(researcherDefinition, new RegExp(`^tools:.*\\b${tool}\\b`, "m"));
+  assert.match(researcherDefinition, /provenance/i);
+  assert.match(researcherDefinition, /reuse, extend, or build/i);
+
+  const root = await mkdtemp(join(tmpdir(), "harness-researcher-discovery-"));
+  try {
+    await mkdir(join(root, ".pi", "agents"), { recursive: true });
+    await mkdir(join(root, ".pi", "npm", "node_modules", "example-local"), { recursive: true });
+    await mkdir(join(root, ".pi", "researcher-runtime", "node_modules", "example-research"), { recursive: true });
+    await writeFile(join(root, ".pi", "settings.json"), JSON.stringify({ packages: ["npm:example-local", "npm:missing-local"] }), "utf8");
+    await writeFile(join(root, ".pi", "agents", "researcher.md"), "subagentOnlyExtensions:\n  - ../researcher-runtime/node_modules/example-research/extension.ts\n", "utf8");
+    await writeFile(join(root, ".pi", "npm", "node_modules", "example-local", "package.json"), JSON.stringify({ name: "example-local", version: "1.0.0" }), "utf8");
+    await writeFile(join(root, ".pi", "researcher-runtime", "node_modules", "example-research", "package.json"), JSON.stringify({ name: "example-research", version: "2.0.0" }), "utf8");
+
+    const firstSnapshot = createLocalEcosystemSnapshot(root);
+    assert.match(firstSnapshot, /example-local 1\.0\.0/);
+    assert.match(firstSnapshot, /example-research 2\.0\.0/);
+    assert.match(firstSnapshot, /missing-local: NOT FOUND/);
+    assert.match(firstSnapshot, /\.pi\/npm\/node_modules/);
+    assert.match(firstSnapshot, /\.pi\/researcher-runtime\/node_modules/);
+
+    let hook;
+    installResearcherLocalDiscovery({ on: (event, handler) => { if (event === "before_agent_start") hook = handler; } });
+    assert.ok(hook, "Researcher extension must register before_agent_start context injection");
+    const basePrompt = "researcher base prompt";
+    assert.doesNotMatch(basePrompt, new RegExp(LOCAL_ECOSYSTEM_START));
+    const injected = await hook({ systemPrompt: basePrompt }, { cwd: root });
+    assert.match(injected.systemPrompt, /example-local 1\.0\.0/);
+    assert.equal(injected.systemPrompt.split(LOCAL_ECOSYSTEM_START).length - 1, 1);
+
+    await writeFile(join(root, ".pi", "npm", "node_modules", "example-local", "package.json"), JSON.stringify({ name: "example-local", version: "1.1.0" }), "utf8");
+    const refreshed = await hook({ systemPrompt: injected.systemPrompt }, { cwd: root });
+    assert.match(refreshed.systemPrompt, /example-local 1\.1\.0/);
+    assert.doesNotMatch(refreshed.systemPrompt, /example-local 1\.0\.0/);
+    assert.equal(refreshed.systemPrompt.split(LOCAL_ECOSYSTEM_START).length - 1, 1, "refresh must replace stale snapshot rather than accumulate context");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

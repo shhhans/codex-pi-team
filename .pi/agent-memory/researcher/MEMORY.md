@@ -1,5 +1,23 @@
 # Researcher Memory
 
+## Local ecosystem discovery map
+
+- Start local Pi discovery from `.pi/settings.json`, `.pi/agents/researcher.md`, `.pi/npm/node_modules`, and `.pi/researcher-runtime/node_modules`; do not rediscover the entire workspace on every assignment.
+- `.pi/npm/node_modules` is the shared project package root. The Researcher runtime contains the MCP client SDK and project adapter; the professional Deep Research implementation is external and must not be reimplemented in the role.
+- A `before_agent_start` hook generates the current package/version/source snapshot from live files. Treat that snapshot as changing context, not durable memory. Verify pivotal behavior against the referenced local source.
+- Store stable paths, package relationships, effective queries, and recurring pitfalls here. Do not store installed versions, one-run inventories, or copied search results because they become stale.
+- For an unfamiliar capability, check in this order: known local anchors → exact installed source/API → upstream repository/docs → broader ecosystem search. Expand beyond that route only when a concrete gap remains.
+
+## Research method
+
+- Research lifecycle: durable orchestration run → Deep Research MCP task → bounded status monitoring → frozen MCP result artifact → evidence/coverage review gate → fresh final-report synthesis. Raw result bodies and transient tool output are not memory and must not be pasted into the main Researcher context.
+- Runtime checkpoint counts persisted tool calls and payload usage; model-supplied round/source counts are advisory only. Use rollover when the configured budget is reached and retain the run directory for resume.
+
+- For concepts, frameworks, architecture, and new subsystems, include a provenance section: origin, original problem, canonical name/source, later adaptations, and project-local changes.
+- Before recommending custom implementation, identify existing local and open-source candidates and make a proportionate `reuse`, `extend`, or `build` decision using scope fit, extension boundary, maintenance/activity, license, and integration cost.
+- A `deep_research_review` verdict measures contract completeness and coverage of the delegated result. It does not independently validate the truth of claims; pivotal claims still require traceable primary-source citations from the MCP result.
+- Keep delegated evidence collection distinct from synthesis. The MCP owns search, retrieval rounds, decomposition, and source cross-validation; Researcher owns orchestration, budgets, review, and the final report. Retain contradictions and gaps explicitly.
+
 ## Trusted recurring sources
 
 - **pi.dev/packages/{name}** — Tier 1 authoritative Pi ecosystem package docs (intercom, subagents, supervisor). Use for canonical API shapes (`contact_supervisor`, `intercom`, reasons enum).
