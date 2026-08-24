@@ -35,6 +35,12 @@ audit logs, reply-store JSON, `.env`, secrets.
 | `.pi/legacy/agent-memory/critic/MEMORY.md` | `.pi/agent-memory/critic/MEMORY.md` | Unchanged |
 | `.pi/legacy/agent-memory/engineer/MEMORY.md` | `.pi/agent-memory/engineer/MEMORY.md` | Unchanged |
 
+## Retired Researcher bootstrap extension
+
+| Destination path | Source path | Notes |
+| --- | --- | --- |
+| `.pi/legacy/communication/researcher-local-discovery.mjs` | `.pi/communication/researcher-local-discovery.mjs` | Preserved unchanged; not loaded by the bounded Researcher |
+
 ## Deep Research material moved into `.pi/legacy/deep-research/`
 
 All paths below are inside the canonical repository
