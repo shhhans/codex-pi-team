@@ -67,7 +67,7 @@ Source: `.sidecar/gptr-mcp/` in canonical. Excluded: `.git/`, `.venv/`,
 
 | Destination file | Source file |
 | --- | --- |
-| `__init__.py`, `Dockerfile`, `INSTALL.md`, `LICENSE`, `README.md`, `docker-compose.yml`, `minimax_embeddings.py`, `requirements.lock.txt`, `requirements.txt`, `run.sh`, `server.py`, `utils.py` | same filenames in canonical |
+| `.env.example`, `.gitignore`, `__init__.py`, `Dockerfile`, `INSTALL.md`, `LICENSE`, `README.md`, `docker-compose.yml`, `minimax_embeddings.py`, `requirements.lock.txt`, `requirements.txt`, `run.sh`, `server.py`, `utils.py` | same filenames in canonical |
 | `tests/test_mcp_server.py` | same filename in canonical |
 
 ## Canonical tests preserved under `tests/legacy/`
