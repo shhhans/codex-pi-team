@@ -1,7 +1,9 @@
 # Minimal Development Loop — High-level Architecture
 
 This document is the project-level architecture for the routine
-development path after ADR 0001. It is **not** the agent role file
+development path after
+`ADR/0002-lead-subagent-collaboration-protocol.md`, the sole normative
+collaboration protocol. It is **not** the agent role file
 (`.pi/agents/architect.md`); the active agent surface is
 `.pi/agents/{researcher.md, executor.md, reviewer.md}`.
 
@@ -36,16 +38,20 @@ to Lead via `contact_supervisor` with `reason: "need_decision"`.
 
 ## Executor scope
 
-The Executor operates inside an isolated worktree assigned by Lead and
-emits a stop signal in `implementation_notes/<task-id>.md` before
-returning. Executor does **not** refactor unrelated code, edit tests
-to hide failures, or commit without Lead authorization.
+The Executor operates inside an isolated worktree assigned by Lead,
+maintains `implementation_notes/<task-id>.md`, and remains allocated
+through the complete review/fix cycle. At a slice boundary it reports
+`READY_FOR_REVIEW`, `FIX_READY`, or `READY_FOR_ACCEPTANCE` and becomes
+idle; it does not stop. Executor does **not** refactor unrelated code,
+edit tests to hide failures, or commit without Lead authorization.
 
 ## Reviewer scope
 
-The Reviewer enters the paired worktree only after Executor has
-stopped. Reviewer edits tests and writes failure artifacts only; it
-**never** edits production code.
+The Reviewer is allocated with its paired Executor, registers the task,
+and waits idle until `READY_FOR_REVIEW` or `FIX_READY`. Reviewer edits
+tests and writes failure artifacts only; it **never** edits production
+code or normative documentation. Read-only Git operations are available
+for review.
 
 ## Communication
 
@@ -56,16 +62,17 @@ stopped. Reviewer edits tests and writes failure artifacts only; it
   cannot address each other directly.
 - Executor and Reviewer pairing is assigned by Lead. The role-level
   ACL proves only the allowed role pair, not same-task identity.
+- The pair persists through review/fix cycles. Each completed slice is
+  reported to Lead before the role returns to an event-driven idle state;
+  only Lead acceptance triggers reclamation.
 - Routine peer results can travel directly. Material risk, a changed
   downstream assumption, or a decision request is mirrored to Lead
   with `contact_supervisor` using `need_decision`, `progress_update`,
   or `interview_request`.
 - Runtime-policy tests prove policy behavior and extension wiring.
   They do not, by themselves, prove causal use of the transport.
-- `pi-subagents runs.run` may add reconnaissance or rewrite a narrow
-  brief. Until that orchestration layer is constrained, Lead may run
-  a role directly with its prompt, private skill, and extension when
-  exact task boundaries matter.
+- Agents do not create Scout roles, repeat unbounded discovery, or split
+  unassigned subtasks. Lead supplies and controls the task contract.
 
 ## Legacy
 

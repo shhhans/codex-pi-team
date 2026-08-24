@@ -200,9 +200,62 @@ test("artifact roots exist at the project root with exact contracts", async () =
 
   // Project-level documents must exist at the repo root.
   await expectExists(join(REPO, "ADR/0001-minimal-development-loop.md"));
+  await expectExists(join(REPO, "ADR/0002-lead-subagent-collaboration-protocol.md"));
   await expectExists(join(REPO, "architect.md"));
   await expectExists(join(REPO, "goal.md"));
   await expectExists(join(REPO, "project_state.md"));
+});
+
+test("ADR 0002 is the sole normative Lead-Subagent protocol and active surfaces follow it", async () => {
+  const adr = await readFile(join(REPO, "ADR/0002-lead-subagent-collaboration-protocol.md"), "utf8");
+  assert.match(adr, /sole normative Lead.Subagent collaboration protocol/i);
+  assert.match(adr, /task ID, task name, task description, scope, constraints, and done criteria/i);
+  assert.match(adr, /Architecture and product decisions belong to Lead and User/i);
+  assert.match(adr, /READY_FOR_REVIEW/);
+  assert.match(adr, /REVIEW_PASS/);
+  assert.match(adr, /REVIEW_FAIL/);
+  assert.match(adr, /FIX_READY/);
+  assert.match(adr, /Only after Lead acceptance/i);
+  assert.match(adr, /read-only\s+Git operations/i);
+  assert.match(adr, /do not invoke WSL unless Lead explicitly authorizes it/i);
+
+  const summaryPaths = [
+    "AGENTS.md",
+    "architect.md",
+    "goal.md",
+    "project_state.md",
+    ".pi/communication/README.md",
+  ];
+  for (const path of summaryPaths) {
+    const text = await readFile(join(REPO, path), "utf8");
+    assert.match(text, /ADR\/0002-lead-subagent-collaboration-protocol\.md/,
+      `${path} must defer to ADR 0002`);
+  }
+});
+
+test("Executor and Reviewer use a persistent idle review-fix lifecycle without stop handoffs", async () => {
+  const paths = [
+    ".pi/agents/executor.md",
+    ".pi/agents/reviewer.md",
+    ".pi/skills/execute-delegated-task/SKILL.md",
+    ".pi/skills/review-delegated-task/SKILL.md",
+  ];
+  for (const path of paths) {
+    const text = await readFile(join(REPO, path), "utf8");
+    assert.match(text, /idle|event-driven/i, `${path} must end slices idle/event-driven`);
+    assert.match(text, /Lead accept|Lead acceptance/i, `${path} must retain the pair until Lead acceptance`);
+    assert.doesNotMatch(text, /stop signal|Executor has stopped|after Executor stops|Reviewer enters after/i,
+      `${path} must not encode the obsolete stop handoff`);
+  }
+
+  const executor = await readFile(join(REPO, ".pi/agents/executor.md"), "utf8");
+  assert.match(executor, /READY_FOR_REVIEW/);
+  assert.match(executor, /FIX_READY/);
+  const reviewer = await readFile(join(REPO, ".pi/agents/reviewer.md"), "utf8");
+  assert.match(reviewer, /REVIEW_PASS/);
+  assert.match(reviewer, /REVIEW_FAIL/);
+  assert.match(reviewer, /Read-only Git operations/i);
+  assert.match(reviewer, /stash, reset, checkout, rebase/i);
 });
 
 test("legacy role material is preserved under .pi/legacy/", async () => {

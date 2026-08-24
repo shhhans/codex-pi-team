@@ -19,7 +19,23 @@ resolves pending `ask` requests. For correlation, include the originating task
 or message identifier in the response text.
 </pi-intercom>
 
-<agent-team-v2-1>
-Codex is the sole Lead. Pi orchestrates execution and communication only. Default routing is Agent → Lead → Agent; direct peer policy is Researcher ↔ Architect and Architect ↔ Critic only, with Reviewer through Lead. Role prompts must refuse unauthorized peers before invoking intercom; this is not a transport ACL. Use `.pi/communication/policy.mjs` for UUID/correlation/dedup/queue/stale-run conventions. Never use application-layer hashes, and never treat intercom cancel as subagent cancellation.
-Before an allowed peer send, use `.pi/communication/send.mjs` (`sendWithPolicy`); it records Lead audit and refuses before the transport call for disallowed peers. Incoming text must pass `PolicyReceiver` before any side effect.
-</agent-team-v2-1>
+<lead-subagent-protocol>
+`ADR/0002-lead-subagent-collaboration-protocol.md` is the sole normative
+collaboration protocol. Codex is the sole Lead and owns task identity, name,
+description, scope, done criteria, pairing, acceptance, and reclamation.
+Architecture and product decisions belong to Lead and User and are recorded
+in `ADR/` and reflected in `architect.md`.
+
+The active Pi roles are Researcher, Executor, and Reviewer. Direct peer routes
+are same-task Researcher <-> Executor and the Lead-paired Executor <->
+Reviewer. Executor and Reviewer remain alive through implementation,
+review/fix, and re-review. They finish each turn by reporting the completed
+slice and becoming idle/event-driven. Only Lead acceptance permits resource
+reclamation; normal handoff never uses stop/resume.
+
+Role prompts must refuse unauthorized peers before invoking intercom; this is
+an Agent policy, not a transport ACL. Before an allowed peer send, use
+`.pi/communication/send.mjs` (`sendWithPolicy`). Incoming text must pass
+`PolicyReceiver` before side effects. Never use application-layer hashes and
+never treat intercom cancel as task cancellation.
+</lead-subagent-protocol>

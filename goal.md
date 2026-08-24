@@ -1,5 +1,8 @@
 # Goal
 
+`ADR/0002-lead-subagent-collaboration-protocol.md` is the sole normative
+collaboration protocol; this file states its operational goal.
+
 The routine development path runs as a minimal three-agent loop:
 
 - **Researcher** answers exactly one bounded research question per
@@ -13,19 +16,23 @@ The routine development path runs as a minimal three-agent loop:
 - **Executor** implements exactly one Lead-delegated change inside
   the assigned isolated worktree. It uses the smallest coherent
   change, runs the project's validation commands, and persists
-  `implementation_notes/<task-id>.md` with a stop signal. It does
+  `implementation_notes/<task-id>.md`. It reports each completed slice
+  and becomes idle while remaining allocated through review/fix. It does
   not refactor unrelated code, edit tests to hide failures, or
   commit without Lead authorization.
 
-- **Reviewer** enters the paired worktree only after Executor has
-  stopped. It reproduces validation, verifies scope, and (for real
+- **Reviewer** is allocated one-to-one with Executor and waits idle for
+  `READY_FOR_REVIEW` or `FIX_READY`. It reproduces validation, verifies
+  scope, and (for real
   failures only) writes a failure artifact at
   `failures/<task-id>-<finding-id>.md`. It edits tests only to add
   regression coverage or to capture a real failure. It never edits
   production code.
 
 - **Lead (Codex)** is the user-facing session that owns canonical
-  state, assigns task IDs, and arbitrates decisions.
+  state; owns each task's ID, name, description, scope, done criteria,
+  pairing, acceptance, and reclamation; and arbitrates decisions with
+  the User.
 
 The path is fully traceable: every task has an ID supplied by Lead,
 every artifact lands at a known project-root path, and every peer
@@ -34,5 +41,6 @@ runtime policy enforcement. Application artifacts use human-readable
 Lead task IDs and no content hashes. Transport correlation UUIDs remain
 an internal intercom mechanism and are not application artifact IDs.
 There is no Deep Research MCP, no cross-worktree scope, no
-production-code edits by Reviewer, and no commits without Lead
-authorization.
+production-code edits by Reviewer, no normal stop/resume handoff, and no
+commits without Lead authorization. Executor and Reviewer remain alive
+until Lead accepts the task and reclaims the pair.

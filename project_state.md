@@ -1,4 +1,7 @@
-# Project State (as of BOOTSTRAP-SELF-004A review pass)
+# Project State (as of BOOTSTRAP-SELF-007 protocol alignment)
+
+`ADR/0002-lead-subagent-collaboration-protocol.md` is the sole normative
+Lead–Subagent collaboration protocol. Active summaries defer to it.
 
 ## Active agent surface
 
@@ -39,7 +42,8 @@ MCP tools are **not** wired to the active Researcher.
 - `research/` — Researcher artifacts. Default name pattern
   `<task-id>-<slug>.md`; the slug is a short kebab-case topic label.
 - `implementation_notes/` — Executor notes per task. Required
-  filename pattern `<task-id>.md`; required stop signal.
+  filename pattern `<task-id>.md`; records the current slice state,
+  validation evidence, changed files, and remaining risks.
 - `failures/` — Reviewer failure artifacts. Default name pattern
   `<task-id>-<finding-id>.md`; reserved for real failures only.
 
@@ -77,6 +81,10 @@ The canonical repository `D:\Coding\Harness\Pi-team` is unchanged.
 - Researcher and Reviewer are directly denied in both directions.
 - Lead assigns the concrete Executor/Reviewer pairing; current policy
   enforces role topology, not a task-scoped pair identifier.
+- Executor and Reviewer are persistent for the task. They remain alive
+  through review/fix and finish each turn by reporting the completed
+  slice and becoming idle/event-driven. Only Lead acceptance permits
+  reclamation.
 - Denied inbound messages are filtered before model context and cause
   no reply-store access. Allowed inbound messages are retained.
 - The four BOOTSTRAP-SELF-004A Reviewer findings are resolved.
@@ -88,24 +96,23 @@ The canonical repository `D:\Coding\Harness\Pi-team` is unchanged.
 - `tests/run-tests.ps1` runs both deterministic test files.
 - `node --test tests/team-contract.test.mjs tests/communication-policy.test.mjs`
   is the cross-shell entry point.
-- Current result: 25/25 tests pass; `git diff --check` passes.
+- Current result: 27/27 tests pass; `git diff --check` passes.
 - Skill frontmatter is validated by `quick_validate.py` for all
   three skills.
 
 ## Operational limitation
 
-`pi-subagents runs.run` has expanded narrow review briefs into extra
-reconnaissance, and Pi child shells cannot execute Windows PowerShell
-binaries from WSL. Directly loading the role prompt, private skill, and
-role extension produced the bounded Reviewer PASS.
+The supported collaboration contract does not authorize Agents to add a
+Scout, repeat unbounded discovery, or decompose unassigned subtasks.
+Windows tasks use the native command environment; WSL requires explicit
+Lead authorization.
 
-The live intercom smoke established session discovery and an
-Executor-to-Reviewer `socket_delivered` transport acknowledgement. The
-message was not injected into the Reviewer's active non-interactive
-turn, so Reviewer did not send an acknowledgement and Executor correctly
-reported `NOT SUCCESS`. Bidirectional direct communication is therefore
-configured and unit-tested but not yet operationally proven end to end.
-Unit tests and socket delivery alone are not a causal capability claim.
+The earlier live intercom smoke established session discovery and an
+Executor-to-Reviewer `socket_delivered` acknowledgement, but not causal
+message use. The required operational shape is now persistent interactive
+Executor/Reviewer sessions: slice completion reports to Lead, an injected
+peer event starts the next turn, and the receiver returns to idle without
+stop/resume. This remains to be proven end to end.
 
 ## Completed bootstrap evidence
 
@@ -121,6 +128,7 @@ Unit tests and socket delivery alone are not a causal capability claim.
 
 ## Remaining bootstrap work
 
-- Determine and test the required turn-boundary/resume behavior for a
-  live paired Executor/Reviewer intercom exchange without concurrent
-  editing.
+- Provide and verify a stable Pi role-session entry separately from this
+  protocol task.
+- Prove one complete persistent Executor/Reviewer review/fix exchange with
+  causal message use and Lead acceptance before claiming the live loop.

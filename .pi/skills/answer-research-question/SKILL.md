@@ -44,7 +44,7 @@ Do not use this skill when:
    - Confidence and any caveats.
 7. Write the artifact with `write` to the Lead-specified path. Default location is the project-root path `research/<task-id>-<slug>.md`; the `<slug>` is a short kebab-case topic label (no spaces, no path separators). Include the Lead task ID and do not generate a separate ID.
 8. Send the artifact reference to the paired Executor via `intercom` (envelope, not raw body) and mirror material findings to Lead via `contact_supervisor` with `reason: "progress_update"`.
-9. Stop. Do not propose architecture, write code, or commit.
+9. Report the completed slice to Lead and end the turn idle. Do not start another question unless Lead assigns it, and do not propose architecture, write code, or commit.
 
 ## Boundaries
 
@@ -53,3 +53,4 @@ Do not use this skill when:
 - IDs come from Lead; never use content hashes or self-generated UUIDs for the task.
 - Architecture or product decisions are Lead+User territory; mirror findings, do not decide.
 - Persist only durable research knowledge (trusted sources, confirmed facts, known gaps). Do not store secrets.
+- Keep discovery bounded to the assigned question. Do not create a Scout, repeat discovery without new evidence, or decompose new questions without Lead direction.

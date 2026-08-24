@@ -5,6 +5,10 @@ Date: 2026-08-24
 Supersedes: implicit v2.1 architecture for active development paths
 Lead task: BOOTSTRAP-SELF-002
 
+Lifecycle note: ADR 0002 supersedes this ADR's stop-signal and
+Reviewer-entry wording. ADR 0001 remains authoritative for role topology,
+artifact roots, and legacy preservation only.
+
 ## Context
 
 The project previously carried an embedded five-agent architecture
@@ -27,7 +31,7 @@ surface is not exposed by the harness in the routine path.
 Adopt a minimal three-agent development loop for the routine path:
 
 - Researcher (bounded, single-question, web + local lookup)
-- Executor (single-worktree implementation, stop signal, notes)
+- Executor (single-worktree implementation and notes)
 - Reviewer (paired review, tests + failure artifacts only)
 
 Move the legacy five-agent material (architect, critic, engineer role
@@ -71,8 +75,7 @@ Negative / accepted tradeoffs:
 ## Required artifact roots
 
 - `research/<task-id>-<slug>.md` — Researcher artifacts.
-- `implementation_notes/<task-id>.md` — Executor notes with stop
-  signal.
+- `implementation_notes/<task-id>.md` — Executor notes and slice state.
 - `failures/<task-id>-<finding-id>.md` — Reviewer failure artifacts.
 
 No content hashes are used; IDs come from Lead.
@@ -100,6 +103,7 @@ causal transport capability. The first live smoke established peer
 discovery and Executor-to-Reviewer socket delivery, but did not inject
 the message into the Reviewer's already-running non-interactive turn.
 Bidirectional direct communication remains operationally unproven until
-the turn-boundary/resume behavior is exercised successfully.
+persistent interactive sessions exercise an injected event at a turn
+boundary without stop/resume.
 
 Production deployment remains out of scope.

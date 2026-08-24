@@ -4,6 +4,9 @@ This directory implements the runtime policy for `minimal-loop-v1`.
 Codex is the user-facing Lead. The only active Pi roles are Researcher,
 Executor, and Reviewer.
 
+Lifecycle, authority, and acceptance are normative only in
+`ADR/0002-lead-subagent-collaboration-protocol.md`.
+
 ## Allowed routes
 
 Direct peer messages are asynchronous and restricted to:
@@ -15,6 +18,12 @@ Researcher and Reviewer cannot communicate directly. Lead does not use
 the peer-send route. Lead assigns each Executor/Reviewer pair; the
 role-level ACL does not prove that two allowed sessions belong to the
 same task.
+
+The paired Executor and Reviewer remain alive through implementation,
+review/fix, and re-review. `READY_FOR_REVIEW`, `REVIEW_PASS`,
+`REVIEW_FAIL`, and `FIX_READY` are asynchronous events. After processing
+an event, the role reports its completed slice to Lead and becomes idle;
+normal handoff does not stop or resume the sessions.
 
 `sendWithPolicy` in `send.mjs` applies the outbound gate. Each active
 agent loads its matching extension from `extensions/`. The extension
