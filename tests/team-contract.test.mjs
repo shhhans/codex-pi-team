@@ -13,7 +13,11 @@ const ACTIVE_ROLES = ["researcher", "executor", "reviewer"];
 const LEGACY_ROLES = ["architect", "critic", "engineer"];
 
 function parseFrontmatter(text) {
-  const match = text.match(/^---\n([\s\S]*?)\n---/);
+  // Accept optional carriage returns on the frontmatter delimiters so CRLF
+  // (Windows) and LF (Unix) source files parse identically. The delimiter
+  // itself remains three hyphens on its own line; only the line terminator
+  // is broadened to keep the contract strict.
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) throw new Error("missing frontmatter");
   const body = match[1];
   const out = {};

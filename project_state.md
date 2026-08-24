@@ -80,6 +80,8 @@ The canonical repository `D:\Coding\Harness\Pi-team` is unchanged.
 - Denied inbound messages are filtered before model context and cause
   no reply-store access. Allowed inbound messages are retained.
 - The four BOOTSTRAP-SELF-004A Reviewer findings are resolved.
+- BOOTSTRAP-SELF-006 resolved the Windows CRLF frontmatter-test defect;
+  both deterministic test files now accept LF and CRLF delimiters.
 
 ## Validation
 
@@ -105,7 +107,7 @@ reported `NOT SUCCESS`. Bidirectional direct communication is therefore
 configured and unit-tested but not yet operationally proven end to end.
 Unit tests and socket delivery alone are not a causal capability claim.
 
-## Remaining bootstrap work
+## Completed bootstrap evidence
 
 - Bounded Researcher smoke passed: BOOTSTRAP-SELF-005 answered one
   official-documentation question with ordinary web-access tools and
@@ -113,9 +115,12 @@ Unit tests and socket delivery alone are not a causal capability claim.
   content fetch was blocked by the provider's SSRF/TUN guard, so the
   artifact records that its official-source evidence came through
   search snippets and `source_check`.
+- The reviewed communication cutover is merged on `master`; canonical
+  untracked legacy material was preserved under `.pi/legacy/` and the
+  canonical worktree was cleaned.
+
+## Remaining bootstrap work
+
 - Determine and test the required turn-boundary/resume behavior for a
   live paired Executor/Reviewer intercom exchange without concurrent
   editing.
-- Commit the reviewed communication cutover and merge it into the
-  canonical repository after preserving canonical untracked legacy
-  material.

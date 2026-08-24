@@ -22,7 +22,11 @@ const EXPECTED_SUPERVISOR_REASONS = new Set(["need_decision", "progress_update",
 const SAFE_INTERCOM_ACTIONS = new Set(["list", "list-cwd", "status", "pending"]);
 
 function parseFrontmatter(text) {
-  const match = text.match(/^---\n([\s\S]*?)\n---/);
+  // Accept optional carriage returns on the frontmatter delimiters so CRLF
+  // (Windows) and LF (Unix) source files parse identically. The delimiter
+  // itself remains three hyphens on its own line; only the line terminator
+  // is broadened to keep the contract strict.
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) throw new Error("missing frontmatter");
   const body = match[1];
   const out = {};
