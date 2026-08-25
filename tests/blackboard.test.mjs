@@ -144,7 +144,7 @@ test("watcher returns causally on Agent activity and stays quiet for metadata-on
   }
 });
 
-test("repo-local plugin exposes Lead-only tools, skill, MCP server, and inline/PiP UI", async () => {
+test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/PiP UI", async () => {
   const plugin = join(REPO, "plugins/agent-blackboard");
   const manifest = JSON.parse(await readFile(join(plugin, ".codex-plugin/plugin.json"), "utf8"));
   const mcpConfig = JSON.parse(await readFile(join(plugin, ".mcp.json"), "utf8"));
@@ -157,6 +157,12 @@ test("repo-local plugin exposes Lead-only tools, skill, MCP server, and inline/P
   assert.equal(marketplace.plugins[0].source.path, "./plugins/agent-blackboard");
   await readFile(join(plugin, "server/blackboard-core.mjs"), "utf8");
   assert.match(await readFile(join(plugin, "skills/blackboard-lead/SKILL.md"), "utf8"), /Only the Lead changes/);
+  const piTeamLeadSkill = await readFile(join(plugin, "skills/pi-team-lead/SKILL.md"), "utf8");
+  assert.match(piTeamLeadSkill, /Creating a Blackboard\s+lane does not launch Pi Team/);
+  assert.match(piTeamLeadSkill, /pi-team\.cmd start/);
+  assert.match(piTeamLeadSkill, /blackboard_watch/);
+  assert.match(piTeamLeadSkill, /Do not use\s+WSL, Git Bash, `runs\.run`/);
+  assert.match(piTeamLeadSkill, /stay\s+alive through implementation, review, fixes, and re-review/);
   const appHtml = await readFile(join(plugin, "apps/blackboard.html"), "utf8");
   assert.match(appHtml, /requestDisplayMode/);
   assert.match(appHtml, /new URLSearchParams\(window\.location\.search\)/, "encoded project_root must be decoded by the URL parser");

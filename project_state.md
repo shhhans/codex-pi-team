@@ -43,6 +43,9 @@ cursor-based watching, and rendering. Agents cannot create tasks or edit Lead
 task name/description. The Blackboard is an observation/reminder plane; scope
 correction continues through the existing Lead communication paths. Archived
 tasks remain available through an explicit archived snapshot.
+The plugin's `pi-team-lead` skill carries the full publish, explicit launch,
+watch, acceptance, reclamation, and archival workflow into new Codex sessions,
+including sessions whose working directory is above this repository.
 
 The legacy role files for `architect`, `critic`, and `engineer`
 are present in `.pi/legacy/agents/` but are not loaded.

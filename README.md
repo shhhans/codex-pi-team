@@ -41,6 +41,8 @@ The plugin supplies MCP tools for task management, snapshots, cursor-based
 watching, and a task-lane UI that requests PiP and falls back inline.
 The MCP server and its blackboard core are packaged together inside the plugin;
 the installed cache must not depend on a sibling `.pi/blackboard` path.
+The plugin also supplies `$pi-team-lead`, which carries this complete launch
+and supervision workflow into Codex sessions opened above the repository.
 
 Creating a Blackboard task only publishes the Lead-owned scope; it does not
 start Pi roles. After creating the lane, the Lead explicitly launches the pair:

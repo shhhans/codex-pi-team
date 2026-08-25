@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pi Team Lead"
+  short_description: "Run Pi Team tasks with Blackboard observability"
+  default_prompt: "Use $pi-team-lead to publish and run this task through Pi Team with Blackboard observability."

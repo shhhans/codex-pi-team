@@ -1,6 +1,6 @@
 {
   "name": "agent-blackboard",
-  "version": "0.1.0+codex.20260825070307",
+  "version": "0.1.0+codex.20260825072015",
   "description": "Local Agent Blackboard for Lead task observability, event watching, and a compact task-lane view.",
   "author": {
     "name": "Pi Team",
@@ -16,7 +16,11 @@
     "longDescription": "Lead-owned local task lanes for observing explicit Pi Team activity, blockers, review state, and current scope without turning the Blackboard into a control bus.",
     "developerName": "Pi Team",
     "category": "Productivity",
-    "capabilities": ["Local task observability", "Agent activity events", "Task-lane UI"],
+    "capabilities": [
+      "Local task observability",
+      "Agent activity events",
+      "Task-lane UI"
+    ],
     "defaultPrompt": "Show the Agent Blackboard for the current project and watch for new Pi Agent activity."
   }
 }
