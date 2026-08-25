@@ -3,6 +3,11 @@
 The stable entrypoint implementation is present at `pi-team.cmd` with its
 PowerShell lifecycle under `scripts/pi-team.ps1`. The runtime uses the Git
 common directory `pi-team/v1` state root and direct role sessions.
+The launcher injects `PI_TEAM_TASK_ID`, `PI_TEAM_ROLE`, `PI_TEAM_AGENT_ID`,
+`PI_TEAM_WORKTREE`, `PI_TEAM_STATE_ROOT`, and `PI_TEAM_SCOPE_ID` for every
+role process; `PI_TEAM_STATE_ROOT` resolves to `<git-common-dir>/pi-team/v1`.
+Do not append state paths to a worktree's `.git`, because that entry may be a
+pointer file.
 
 `ADR/0002-lead-subagent-collaboration-protocol.md` is the sole normative
 Lead–Subagent collaboration protocol. Active summaries defer to it.
@@ -104,7 +109,7 @@ The canonical repository `D:\Coding\Harness\Pi-team` is unchanged.
 - `tests/run-tests.ps1` runs both deterministic test files.
 - `node --test tests/team-contract.test.mjs tests/communication-policy.test.mjs`
   is the cross-shell entry point.
-- Current result: 27/27 tests pass; `git diff --check` passes.
+- Current result: 31/31 tests pass; `git diff --check` passes.
 - Skill frontmatter is validated by `quick_validate.py` for all
   three skills.
 

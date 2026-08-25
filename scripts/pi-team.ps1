@@ -9,7 +9,13 @@ $RequiredPackages = [ordered]@{
   'pi-web-access' = '0.24.2'
 }
 function Fail([string]$Message) { throw $Message }
-function Invoke-Native([string]$File, [Parameter(ValueFromRemainingArguments=$true)][string[]]$NativeArgs) { & $File @NativeArgs; if ($LASTEXITCODE -ne 0) { Fail "$File failed ($LASTEXITCODE)" } }
+function Invoke-Native {
+  param([Parameter(Position=0)][string]$File,[Parameter(Position=1,ValueFromRemainingArguments=$true)][object[]]$NativeArgs)
+  $flatArgs = @()
+  foreach ($arg in @($NativeArgs)) { if ($arg -is [array]) { $flatArgs += @($arg) } else { $flatArgs += [string]$arg } }
+  & $File @flatArgs
+  if ($LASTEXITCODE -ne 0) { Fail "$File failed ($LASTEXITCODE)" }
+}
 function Git([string[]]$GitArgs) { $x = & git.exe @GitArgs 2>&1; if ($LASTEXITCODE -ne 0) { Fail (($x -join "`n")) }; return (($x -join "`n").Trim()) }
 function Get-PiAgentDir {
   if ($env:PI_CODING_AGENT_DIR) { return [IO.Path]::GetFullPath($env:PI_CODING_AGENT_DIR) }
@@ -104,8 +110,19 @@ function Setup {
   if ($issues.Count -gt 0) { Fail "setup verification failed: $($issues -join '; ')" }
   Write-Output "SETUP_OK $agentDir"
 }
-function Get-CommonDir { $p = Git @('rev-parse','--git-common-dir'); if (-not [IO.Path]::IsPathRooted($p)) { $p = Join-Path $ProjectRoot $p }; return (Resolve-Path $p).Path }
-function StateRoot { $p = Join-Path (Get-CommonDir) $StateName; New-Item -ItemType Directory -Force -Path $p | Out-Null; return $p }
+function Get-CommonDir {
+  $p = Git @('-C',$ProjectRoot,'rev-parse','--git-common-dir')
+  if (-not [IO.Path]::IsPathRooted($p)) { $p = Join-Path $ProjectRoot $p }
+  if (-not (Test-Path -LiteralPath $p -PathType Container)) { Fail "Git common directory is not a directory: $p" }
+  return (Resolve-Path -LiteralPath $p).Path
+}
+function StateRoot {
+  $p = Join-Path (Get-CommonDir) $StateName
+  if (Test-Path -LiteralPath $p -PathType Leaf) { Fail "Pi Team state root is a file, not a directory: $p" }
+  try { New-Item -ItemType Directory -Force -Path $p | Out-Null } catch { Fail "cannot create Pi Team state root: $p ($($_.Exception.Message))" }
+  if (-not (Test-Path -LiteralPath $p -PathType Container)) { Fail "Pi Team state root is not a directory: $p" }
+  return (Resolve-Path -LiteralPath $p).Path
+}
 function Read-State([string]$TaskId) { $p = Join-Path (StateRoot) "$TaskId.json"; if (-not (Test-Path -LiteralPath $p)) { Fail "unknown task: $TaskId" }; return Get-Content -Raw -LiteralPath $p | ConvertFrom-Json }
 function Write-State($State) { $p = Join-Path (StateRoot) "$($State.task_id).json"; $State | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 -LiteralPath $p }
 function New-Id { [guid]::NewGuid().ToString() }
@@ -146,23 +163,62 @@ function Doctor {
     if ($isolated) { Write-Output "OK role $r isolation" } else { Write-Output "MISSING role $r isolation" }
   }
 }
+function Start-RoleProcess([string]$Executable,[string[]]$ArgumentList,[string]$WorkingDirectory,[string]$TaskId,[string]$Role,[string]$AgentId,[string]$Worktree,[string]$ScopeId) {
+  $stateRoot = StateRoot
+  $identity = [ordered]@{
+    PI_TEAM_TASK_ID = $TaskId
+    PI_TEAM_ROLE = $Role
+    PI_TEAM_AGENT_ID = $AgentId
+    PI_TEAM_WORKTREE = $Worktree
+    PI_TEAM_STATE_ROOT = $stateRoot
+    PI_TEAM_SCOPE_ID = $ScopeId
+  }
+  $previous = @{}
+  foreach ($name in $identity.Keys) {
+    $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    [Environment]::SetEnvironmentVariable($name, [string]$identity[$name], 'Process')
+  }
+  try {
+    return Start-Process $Executable -WorkingDirectory $WorkingDirectory -ArgumentList $ArgumentList -WindowStyle Normal -PassThru
+  } finally {
+    foreach ($name in $identity.Keys) {
+      [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process')
+    }
+  }
+}
 function Start-Task([string]$Path) {
   Assert-Setup; $c = Parse-Contract $Path; $existing = Join-Path (StateRoot) "$($c.task_id).json"; if (Test-Path $existing) { Fail 'task already started' }
   Invoke-Native git.exe @('worktree','add',$c.worktree,$c.branch)
-  $state = [pscustomobject]@{version=1;task_id=$c.task_id;name=$c.name;description=$c.description;status='active';worktree=$c.worktree;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor'};reviewer=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='reviewer'}}}
+  $state = [pscustomobject]@{version=1;task_id=$c.task_id;name=$c.name;description=$c.description;status='active';worktree=$c.worktree;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor';process_id=$null;process_started_at=$null};reviewer=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='reviewer';process_id=$null;process_started_at=$null}}}
   Write-State $state; foreach ($r in @('executor','reviewer')) { Event $state $r 'working' 'task started' '' '' }
   $pi = if ($env:PI_CMD) {$env:PI_CMD} else {'pi.cmd'}; $wt = if ($env:WT_CMD) {$env:WT_CMD} else {'wt.exe'}
   $common = @('-d',$c.worktree,$pi,'--agent','executor'); $review = @('-d',$c.worktree,$pi,'--agent','reviewer')
-  $executorProc = Start-Process $wt -ArgumentList $common -WindowStyle Normal -PassThru
-  $reviewerProc = Start-Process $wt -ArgumentList $review -WindowStyle Normal -PassThru
+  $executorProc = Start-RoleProcess $wt $common $c.worktree $state.task_id 'executor' $state.sessions.executor.agent_id $state.worktree $state.scope_id
+  $reviewerProc = Start-RoleProcess $wt $review $c.worktree $state.task_id 'reviewer' $state.sessions.reviewer.agent_id $state.worktree $state.scope_id
   $state.sessions.executor.process_id=$executorProc.Id; $state.sessions.executor.process_started_at=[DateTime]::UtcNow.ToString('o')
   $state.sessions.reviewer.process_id=$reviewerProc.Id; $state.sessions.reviewer.process_started_at=[DateTime]::UtcNow.ToString('o'); Write-State $state
   Write-Output "STARTED $($c.task_id) scope=$($state.scope_id)"
 }
 function Status([string]$TaskId) { if ($TaskId) { $s=Read-State $TaskId; $s | ConvertTo-Json -Depth 10; foreach ($r in @('executor','reviewer','researcher')) { $p=Join-Path (StateRoot) "$TaskId-$r.jsonl"; if (Test-Path $p) { Get-Content $p | Select-Object -Last 1 } } } else { Get-ChildItem (StateRoot) -Filter '*.json' | Select-Object -ExpandProperty Name } }
 function Sync-Task([string]$Path) { $c=Parse-Contract $Path; $s=Read-State $c.task_id; foreach ($n in @('branch','worktree')) { if ($c.$n -ne $s.$n) { Fail "immutable field changed: $n" } }; $s.name=$c.name; $s.description=$c.description; Write-State $s; Write-Output "SYNCED $($c.task_id)" }
-function Research([string]$TaskId,[string]$QuestionId,[string]$QuestionFile) { Assert-Setup; $s=Read-State $TaskId; if (-not (Test-Path $QuestionFile)) { Fail 'question file not found' }; $out=Join-Path $s.worktree "research/$QuestionId.md"; New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null; $q=Get-Content -Raw -Encoding UTF8 $QuestionFile; $pi=if($env:PI_CMD){$env:PI_CMD}else{'pi.cmd'}; Start-Process $pi -WorkingDirectory $s.worktree -ArgumentList @('--agent','researcher','--prompt',$q) -WindowStyle Normal | Out-Null; Write-Output "RESEARCH_STARTED $QuestionId" }
-function Resume-Task([string]$TaskId) { Assert-Setup; $s=Read-State $TaskId; if ($s.status -ne 'active') { Fail 'task is not active' }; $pi=if($env:PI_CMD){$env:PI_CMD}else{'pi.cmd'}; foreach($r in @('executor','reviewer')) { Start-Process $pi -WorkingDirectory $s.worktree -ArgumentList @('--session',$s.sessions.$r.session_id) -WindowStyle Normal | Out-Null }; Write-Output "RESUMED $TaskId" }
+function Research([string]$TaskId,[string]$QuestionId,[string]$QuestionFile) {
+  Assert-Setup; $s=Read-State $TaskId
+  if (-not (Test-Path $QuestionFile)) { Fail 'question file not found' }
+  $out=Join-Path $s.worktree "research/$QuestionId.md"; New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
+  $q=Get-Content -Raw -Encoding UTF8 $QuestionFile; $pi=if($env:PI_CMD){$env:PI_CMD}else{'pi.cmd'}
+  $researcherId = New-Id
+  Start-RoleProcess $pi @('--agent','researcher','--prompt',$q) $s.worktree $s.task_id 'researcher' $researcherId $s.worktree $s.scope_id | Out-Null
+  Write-Output "RESEARCH_STARTED $QuestionId"
+}
+function Resume-Task([string]$TaskId) {
+  Assert-Setup; $s=Read-State $TaskId
+  if ($s.status -ne 'active') { Fail 'task is not active' }
+  $pi=if($env:PI_CMD){$env:PI_CMD}else{'pi.cmd'}
+  foreach($r in @('executor','reviewer')) {
+    Start-RoleProcess $pi @('--session',$s.sessions.$r.session_id) $s.worktree $s.task_id $r $s.sessions.$r.agent_id $s.worktree $s.scope_id | Out-Null
+  }
+  Write-Output "RESUMED $TaskId"
+}
 function Accept([string]$TaskId) { $s=Read-State $TaskId; $p=Join-Path (StateRoot) "$TaskId-reviewer.jsonl"; if (-not(Test-Path $p) -or -not((Get-Content $p | Select-Object -Last 1) -match '"state":"ready_for_acceptance"')) { Fail 'Reviewer is not ready_for_acceptance' }; $s.status='accepted'; $s.accepted_at=[DateTime]::UtcNow.ToString('o'); Write-State $s; Write-Output "ACCEPTED $TaskId" }
 function Reclaim([string]$TaskId) { $s=Read-State $TaskId; if ($s.status -ne 'accepted') { Fail 'task must be accepted before reclaim' }; $s.status='reclaimed'; $s.reclaimed_at=[DateTime]::UtcNow.ToString('o'); Write-State $s; Write-Output "RECLAIMED $TaskId" }
 function Cleanup([string]$TaskId) { $s=Read-State $TaskId; if ($s.status -ne 'reclaimed') { Fail 'task must be reclaimed before cleanup' }; $dirty=Git @('-C',$s.worktree,'status','--porcelain'); if ($dirty) { Fail 'worktree is not clean' }; if ([IO.Path]::GetFullPath($s.worktree) -ieq [IO.Path]::GetFullPath($ProjectRoot)) { Fail 'cannot remove main worktree' }; Invoke-Native git.exe @('worktree','remove',$s.worktree); $s.status='cleaned'; Write-State $s; Write-Output "CLEANED $TaskId" }

@@ -26,6 +26,21 @@ Check the environment without changing it:
 shared packages are missing, have the wrong version, or Web Access is globally
 autoloaded.
 
+## Runtime identity and state
+
+The launcher injects the complete runtime identity for every Executor,
+Reviewer, and Researcher process: `PI_TEAM_TASK_ID`, `PI_TEAM_ROLE`,
+`PI_TEAM_AGENT_ID`, `PI_TEAM_WORKTREE`, `PI_TEAM_STATE_ROOT`, and
+`PI_TEAM_SCOPE_ID`. `start` uses the persisted Executor/Reviewer identities,
+`resume` reuses those identities and session IDs, and `research` creates a
+temporary Researcher identity for the same task scope.
+
+`PI_TEAM_STATE_ROOT` is always `<git-common-dir>/pi-team/v1`. A worktree's
+`.git` entry may be a pointer file rather than a directory, so callers must
+never construct state paths by appending to `<worktree>/.git`; the launcher
+resolves Git's common directory and validates that the state root is a
+directory before starting a process.
+
 ## Extension isolation
 
 All three role definitions disable ambient extensions and load their required

@@ -4,3 +4,8 @@
 {"at":"2026-08-22T05:52:18.603Z","role":"reviewer","direction":"supervisor","outcome":"allowed","reason":"need_decision"}
 {"at":"2026-08-22T05:53:25.878Z","role":"reviewer","direction":"supervisor","outcome":"allowed","reason":"need_decision"}
 {"at":"2026-08-22T05:55:07.913Z","role":"reviewer","direction":"supervisor","outcome":"allowed","reason":"need_decision"}
+{"at":"2026-08-25T04:13:43.524Z","role":"reviewer","direction":"inbound","sender":"executor","outcome":"accepted","messageId":"95f0be07-6e9f-4d6c-9d87-fee3a6651421","correlationId":"fbcbb4a8-8480-4095-a1d0-39f2edff6d28"}
+{"at":"2026-08-25T04:14:58.482Z","role":"reviewer","direction":"inbound","sender":"executor","outcome":"accepted","messageId":"95f0be07-6e9f-4d6c-9d87-fee3a6651421","correlationId":"fbcbb4a8-8480-4095-a1d0-39f2edff6d28"}
+{"at":"2026-08-25T04:15:31.528Z","role":"reviewer","direction":"outbound","action":"send","outcome":"refused","reason":"unauthorized-peer","trace":[{"event":"refuse-before-intercom","sender":"reviewer","recipient":"01a0371f","action":"send"}]}
+{"at":"2026-08-25T04:16:41.903Z","role":"reviewer","direction":"outbound","action":"send","outcome":"refused","reason":"unauthorized-peer","trace":[{"event":"refuse-before-intercom","sender":"reviewer","recipient":"01a0371f","action":"send"}]}
+{"at":"2026-08-25T04:16:57.532Z","role":"reviewer","direction":"outbound","action":"send","recipient":"executor","outcome":"allowed"}

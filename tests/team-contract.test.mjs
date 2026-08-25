@@ -395,6 +395,161 @@ exit 0
   }
 });
 
+test("role launchers inject common-dir identity and isolate Executor/Reviewer environments", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-team-runtime-"));
+  const agentDir = join(root, "agent");
+  const fakePi = join(root, "fake-pi.cmd");
+  const fakePiScript = join(root, "fake-pi.ps1");
+  const launchLog = join(root, "launches.jsonl");
+  const worktree = join(root, "task-worktree");
+  const questionFile = join(root, "question.md");
+  const contract = join(root, "contract.md");
+  const script = join(REPO, "scripts/pi-team.ps1");
+  const taskId = "ENV-001";
+  const scopeId = "scope-env-001";
+  const executorAgentId = "executor-agent-001";
+  const reviewerAgentId = "reviewer-agent-001";
+  const executorSessionId = "executor-session-001";
+  const reviewerSessionId = "reviewer-session-001";
+  const branch = `pi-team/test-runtime-${process.pid}`;
+  const commonDirResult = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+    cwd: REPO,
+    encoding: "utf8",
+  });
+  assert.equal(commonDirResult.status, 0, commonDirResult.stderr);
+  const commonDir = commonDirResult.stdout.trim().replaceAll("/", "\\");
+  const stateRoot = join(commonDir, "pi-team", "v1");
+  const stateFile = join(stateRoot, `${taskId}.json`);
+  const eventFiles = [join(stateRoot, `${taskId}-executor.jsonl`), join(stateRoot, `${taskId}-reviewer.jsonl`)];
+
+  const run = (command, args = [], extraEnv = {}) => spawnSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, command, ...args,
+  ], { cwd: REPO, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_CMD: fakePi, WT_CMD: fakePi, ...extraEnv }, encoding: "utf8" });
+
+  const waitForRecords = async (count) => {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const text = await readFile(launchLog, "utf8").catch(() => "");
+      const records = text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line.replace(/^\uFEFF/, "")));
+      if (records.length >= count) return records;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.fail(`expected ${count} fake Pi launches; log was not ready`);
+  };
+
+  try {
+    await mkdir(join(agentDir, "npm/node_modules"), { recursive: true });
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [
+      "npm:pi-subagents@0.56.0",
+      "npm:pi-intercom@0.11.0",
+      { source: "npm:pi-web-access@0.24.2", extensions: [] },
+    ] }));
+    for (const [name, version] of [["pi-subagents", "0.56.0"], ["pi-intercom", "0.11.0"], ["pi-web-access", "0.24.2"]]) {
+      const packageDir = join(agentDir, "npm/node_modules", name);
+      await mkdir(packageDir, { recursive: true });
+      await writeFile(join(packageDir, "package.json"), JSON.stringify({ name, version }));
+    }
+    await writeFile(fakePiScript, String.raw`param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)
+$record=[ordered]@{
+  task_id=$env:PI_TEAM_TASK_ID
+  role=$env:PI_TEAM_ROLE
+  agent_id=$env:PI_TEAM_AGENT_ID
+  worktree=$env:PI_TEAM_WORKTREE
+  state_root=$env:PI_TEAM_STATE_ROOT
+  scope_id=$env:PI_TEAM_SCOPE_ID
+  args=@($Args)
+}
+$record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $env:PI_TEAM_TEST_LOG
+`);
+    await writeFile(fakePi, `@echo off\r\npowershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-pi.ps1" %*\r\n`);
+    await writeFile(questionFile, "Determine the runtime identity contract.\n");
+    await writeFile(contract, `# Runtime test\n\n\`\`\`json\n${JSON.stringify({
+      version: 1,
+      task_id: taskId,
+      name: "Runtime identity test",
+      description: "Exercise all role launch paths.",
+      base_ref: "master",
+      branch,
+      worktree,
+      in_scope: ["runtime identity"],
+      out_of_scope: ["production changes"],
+      done_criteria: ["fake processes receive identity"],
+      constraints: ["use the common Git directory"],
+    }, null, 2)}\n\`\`\`\n`);
+
+    const branchCreate = spawnSync("git", ["branch", branch, "master"], { cwd: REPO, encoding: "utf8" });
+    assert.equal(branchCreate.status, 0, branchCreate.stderr);
+    const start = run("start", [contract], { PI_TEAM_TEST_LOG: launchLog });
+    assert.equal(start.status, 0, start.stderr || start.stdout);
+    const startRecords = await waitForRecords(2);
+    assert.deepEqual(startRecords.map((record) => record.role).sort(), ["executor", "reviewer"]);
+    const startState = parseJsonText(await readFile(stateFile, "utf8"));
+    assert.equal(startState.scope_id.length > 0, true);
+    assert.equal(startState.worktree, worktree);
+    for (const record of startRecords) {
+      assert.equal(record.task_id, taskId);
+      assert.equal(record.worktree, worktree);
+      assert.equal(record.state_root, stateRoot);
+      assert.equal(record.scope_id, startState.scope_id);
+      assert.equal(record.agent_id, record.role === "executor" ? startState.sessions.executor.agent_id : startState.sessions.reviewer.agent_id);
+    }
+    const executorRecord = startRecords.find((record) => record.role === "executor");
+    const reviewerRecord = startRecords.find((record) => record.role === "reviewer");
+    assert.notEqual(executorRecord.agent_id, reviewerRecord.agent_id, "Executor and Reviewer must not share an Agent ID");
+    assert.match(executorRecord.state_root, /[\\/]\.git[\\/]pi-team[\\/]v1$/i);
+    assert.doesNotMatch(executorRecord.state_root, /task-worktree[\\/]\.git/i, "state must not be rooted under worktree .git");
+
+    await writeFile(stateFile, JSON.stringify({
+      version: 1, task_id: taskId, name: "Runtime identity test", description: "Exercise all role launch paths.", status: "active",
+      worktree, scope_id: scopeId,
+      sessions: {
+        executor: { agent_id: executorAgentId, session_id: executorSessionId, role: "executor" },
+        reviewer: { agent_id: reviewerAgentId, session_id: reviewerSessionId, role: "reviewer" },
+      },
+    }));
+    await rm(launchLog, { force: true });
+    const research = run("research", [taskId, "Q-001", questionFile], { PI_TEAM_TEST_LOG: launchLog });
+    assert.equal(research.status, 0, research.stderr || research.stdout);
+    const researchRecords = await waitForRecords(1);
+    assert.equal(researchRecords.length, 1);
+    assert.equal(researchRecords[0].task_id, taskId);
+    assert.equal(researchRecords[0].role, "researcher");
+    assert.notEqual(researchRecords[0].agent_id, executorAgentId);
+    assert.notEqual(researchRecords[0].agent_id, reviewerAgentId);
+    assert.equal(researchRecords[0].worktree, worktree);
+    assert.equal(researchRecords[0].scope_id, scopeId);
+    assert.equal(researchRecords[0].state_root, stateRoot);
+
+    await rm(launchLog, { force: true });
+    const resume = run("resume", [taskId], { PI_TEAM_TEST_LOG: launchLog });
+    assert.equal(resume.status, 0, resume.stderr || resume.stdout);
+    const resumeRecords = await waitForRecords(2);
+    assert.deepEqual(resumeRecords.map((record) => record.role).sort(), ["executor", "reviewer"]);
+    const resumedExecutor = resumeRecords.find((record) => record.role === "executor");
+    const resumedReviewer = resumeRecords.find((record) => record.role === "reviewer");
+    assert.equal(resumedExecutor.agent_id, executorAgentId, "resume must reuse Executor Agent ID");
+    assert.equal(resumedReviewer.agent_id, reviewerAgentId, "resume must reuse Reviewer Agent ID");
+    assert.equal(resumedExecutor.task_id, taskId);
+    assert.equal(resumedReviewer.task_id, taskId);
+    assert.equal(resumedExecutor.worktree, worktree);
+    assert.equal(resumedReviewer.worktree, worktree);
+    assert.equal(resumedExecutor.scope_id, scopeId);
+    assert.equal(resumedReviewer.scope_id, scopeId);
+    assert.equal(resumedExecutor.state_root, stateRoot);
+    assert.equal(resumedReviewer.state_root, stateRoot);
+    assert.match(resumeRecords.map((record) => record.args.join(" ")).join("\n"), new RegExp(executorSessionId));
+    assert.match(resumeRecords.map((record) => record.args.join(" ")).join("\n"), new RegExp(reviewerSessionId));
+  } finally {
+    await rm(stateFile, { force: true });
+    for (const path of eventFiles) await rm(path, { force: true });
+    // Start-Process is intentionally asynchronous; let fake role processes
+    // release their worktree working directories before Git removes it.
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: REPO, encoding: "utf8" });
+    spawnSync("git", ["branch", "-D", branch], { cwd: REPO, encoding: "utf8" });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("tests directory contains the deterministic contract and communication-policy tests", async () => {
   const { readdir } = await import("node:fs/promises");
   const entries = (await readdir(join(REPO, "tests"))).filter((name) => !name.startsWith(".")).sort();
