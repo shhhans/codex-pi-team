@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile, mkdir, rm } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 
 const REPO = process.cwd();
 const SKILL_NAMES = ["answer-research-question", "execute-delegated-task", "review-delegated-task"];
-const RESEARCHER_TOOLS = ["read", "grep", "find", "ls", "write", "web_search", "fetch_content", "get_search_content", "source_check", "contact_supervisor", "intercom"];
-const EXECUTOR_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor", "intercom"];
-const REVIEWER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor", "intercom"];
+const RESEARCHER_TOOLS = ["read", "grep", "find", "ls", "write", "web_search", "fetch_content", "get_search_content", "source_check", "intercom", "report_to_lead"];
+const EXECUTOR_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom", "report_to_lead"];
+const REVIEWER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom", "report_to_lead"];
 const DEEP_RESEARCH_TOOLS = ["research_run", "deep_research_task", "deep_research_review", "research_synthesis_input", "research_report_artifact"];
 const ACTIVE_ROLES = ["researcher", "executor", "reviewer"];
 const LEGACY_ROLES = ["architect", "critic", "engineer"];
+const SHARED_INTERCOM = "~/.pi/agent/npm/node_modules/pi-intercom/index.ts";
+const SHARED_WEB_ACCESS = "~/.pi/agent/npm/node_modules/pi-web-access/index.ts";
 
 function parseFrontmatter(text) {
   // Accept optional carriage returns on the frontmatter delimiters so CRLF
@@ -57,6 +62,10 @@ function parseScalarList(value) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
+function parseJsonText(text) {
+  return JSON.parse(text.replace(/^\uFEFF/, ""));
+}
+
 async function expectExists(path) {
   const info = await stat(path);
   assert.ok(info.isFile() || info.isDirectory(), `${path} must exist`);
@@ -95,6 +104,7 @@ test("active role definitions exist with valid frontmatter and required tools", 
     assert.equal(fm.name, role, `${role} frontmatter name must match`);
     assert.equal(fm.inheritSkills, "false", `${role} must set inheritSkills: false`);
     assert.equal(fm.skillPath, "../skills", `${role} must use the project-private skill path`);
+    assert.equal(fm.extensions, "", `${role} must disable ambient extensions`);
     assert.match(text, /^tools:.*\bintercom\b/m, `${role} must include intercom for paired peer communication`);
     assert.match(text, /Peer policy:/, `${role} must declare a peer policy`);
     assert.match(text, /refuse before/i, `${role} must refuse before intercom send/ask`);
@@ -104,7 +114,12 @@ test("active role definitions exist with valid frontmatter and required tools", 
   }
 });
 
-test("researcher provider is installed pi-web-access and has no Deep Research tools", async () => {
+test("project settings do not install per-worktree Pi packages", async () => {
+  const settings = JSON.parse(await readFile(join(REPO, ".pi/settings.json"), "utf8"));
+  assert.equal(Object.hasOwn(settings, "packages"), false, "project settings must not declare Pi npm packages");
+});
+
+test("researcher alone loads shared pi-web-access and has no Deep Research tools", async () => {
   const text = await readFile(join(REPO, ".pi/agents/researcher.md"), "utf8");
   const fm = parseFrontmatter(text);
   const tools = parseScalarList(fm.tools);
@@ -115,10 +130,8 @@ test("researcher provider is installed pi-web-access and has no Deep Research to
     assert.equal(tools.includes(banned), false, `Researcher must not include Deep Research tool ${banned}`);
   }
   const exts = parseScalarList(fm.subagentOnlyExtensions);
-  assert.deepEqual(exts, ["../npm/node_modules/pi-web-access/index.ts", "../communication/extensions/researcher.ts"],
-    "Researcher must point subagentOnlyExtensions at the local pi-web-access provider and the researcher policy extension");
-  // Provider must exist on disk so the contract is enforceable.
-  await expectExists(join(REPO, ".pi/npm/node_modules/pi-web-access/index.ts"));
+  assert.deepEqual(exts, [SHARED_INTERCOM, SHARED_WEB_ACCESS, "../communication/extensions/researcher.ts", "../communication/extensions/report-to-lead.ts"],
+    "Researcher must load shared intercom and web access plus project policy extensions");
   assert.match(text, /answer-research-question/);
   assert.equal(fm.skills, "answer-research-question");
   assert.equal(fm.skillPath, "../skills");
@@ -128,6 +141,20 @@ test("researcher provider is installed pi-web-access and has no Deep Research to
   for (const banned of DEEP_RESEARCH_TOOLS) {
     const toolRe = new RegExp(`\\b${banned}\\b`, "i");
     assert.equal(toolRe.test(text), false, `Researcher text must not mention ${banned}`);
+  }
+});
+
+test("executor and reviewer cannot load or request web-access tools (negative control)", async () => {
+  for (const role of ["executor", "reviewer"]) {
+    const text = await readFile(join(REPO, ".pi/agents", `${role}.md`), "utf8");
+    const fm = parseFrontmatter(text);
+    const tools = parseScalarList(fm.tools);
+    const exts = parseScalarList(fm.subagentOnlyExtensions);
+    assert.equal(exts[0], SHARED_INTERCOM, `${role} must explicitly load shared intercom`);
+    assert.equal(exts.includes(SHARED_WEB_ACCESS), false, `${role} must not load pi-web-access`);
+    for (const webTool of ["web_search", "fetch_content", "get_search_content", "source_check"]) {
+      assert.equal(tools.includes(webTool), false, `${role} must not request ${webTool}`);
+    }
   }
 });
 
@@ -201,6 +228,8 @@ test("artifact roots exist at the project root with exact contracts", async () =
   // Project-level documents must exist at the repo root.
   await expectExists(join(REPO, "ADR/0001-minimal-development-loop.md"));
   await expectExists(join(REPO, "ADR/0002-lead-subagent-collaboration-protocol.md"));
+  await expectExists(join(REPO, "ADR/0004-user-shared-pi-packages.md"));
+  await expectExists(join(REPO, "README.md"));
   await expectExists(join(REPO, "architect.md"));
   await expectExists(join(REPO, "goal.md"));
   await expectExists(join(REPO, "project_state.md"));
@@ -293,10 +322,83 @@ test("legacy role material is preserved under .pi/legacy/", async () => {
   assert.doesNotMatch(prov, /sha256|sha1|md5/i);
 });
 
+test("setup is isolated, pinned, idempotent, preserves settings, and doctor is read-only", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-team-setup-"));
+  const agentDir = join(root, "agent");
+  const fakePi = join(root, "fake-pi.ps1");
+  const installLog = join(root, "installs.log");
+  const script = join(REPO, "scripts/pi-team.ps1");
+  const env = { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_CMD: fakePi, FAKE_PI_LOG: installLog };
+  const run = (command, extraEnv = {}) => spawnSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, command,
+  ], { cwd: REPO, env: { ...env, ...extraEnv }, encoding: "utf8" });
+  try {
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify({ theme: "light", packages: ["npm:unrelated@1.0.0"] }, null, 2));
+    await writeFile(fakePi, String.raw`param([string]$Command,[string]$Source)
+if ($Command -ne 'install') { Write-Error "unexpected command: $Command source: $Source"; exit 2 }
+if ($Source -notmatch '^npm:(pi-(?:subagents|intercom|web-access))@(.+)$') { Write-Error "unexpected source: $Source"; exit 3 }
+$name=$Matches[1]; $version=$Matches[2]
+if ($env:FAKE_PI_FAIL -eq $name) { exit 17 }
+$dir=Join-Path $env:PI_CODING_AGENT_DIR "npm\node_modules\$name"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+@{name=$name;version=$version} | ConvertTo-Json | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $dir 'package.json')
+$settingsPath=Join-Path $env:PI_CODING_AGENT_DIR 'settings.json'
+$settings=Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
+$kept=@($settings.packages | Where-Object { $s=if($_ -is [string]){$_}else{$_.source}; $s -notmatch "^npm:$name(?:@.*)?$" })
+$settings.packages=@($kept)+$Source
+$settings | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 -LiteralPath $settingsPath
+$Source | Add-Content -Encoding UTF8 -LiteralPath $env:FAKE_PI_LOG
+exit 0
+`);
+
+    const first = run("setup");
+    assert.equal(first.status, 0, first.stderr || first.stdout);
+    assert.match(first.stdout, /SETUP_OK/);
+    let settingsText = await readFile(join(agentDir, "settings.json"), "utf8");
+    assert.equal(settingsText.startsWith("\uFEFF"), false, "setup must write Pi-compatible UTF-8 without BOM");
+    let settings = parseJsonText(settingsText);
+    assert.equal(settings.theme, "light", "setup must preserve unrelated user settings");
+    assert.ok(settings.packages.includes("npm:unrelated@1.0.0"), "setup must preserve unrelated packages");
+    const web = settings.packages.find((entry) => typeof entry === "object" && entry.source?.startsWith("npm:pi-web-access@"));
+    assert.deepEqual(web, { source: "npm:pi-web-access@0.24.2", extensions: [] });
+    assert.equal((await readFile(installLog, "utf8")).trim().split(/\r?\n/).length, 3);
+
+    const second = run("setup");
+    assert.equal(second.status, 0, second.stderr || second.stdout);
+    assert.equal((await readFile(installLog, "utf8")).trim().split(/\r?\n/).length, 3, "second setup must not reinstall exact packages");
+
+    await writeFile(join(agentDir, "npm/node_modules/pi-web-access/package.json"), JSON.stringify({ name: "pi-web-access", version: "0.0.0" }));
+    const repaired = run("setup");
+    assert.equal(repaired.status, 0, repaired.stderr || repaired.stdout);
+    assert.equal((await readFile(installLog, "utf8")).trim().split(/\r?\n/).length, 4, "version drift must reinstall only the changed package");
+
+    const healthyDoctor = run("doctor");
+    assert.equal(healthyDoctor.status, 0, healthyDoctor.stderr || healthyDoctor.stdout);
+    assert.match(healthyDoctor.stdout, /OK shared Pi dependencies/);
+    settings = parseJsonText(await readFile(join(agentDir, "settings.json"), "utf8"));
+    const webIndex = settings.packages.findIndex((entry) => typeof entry === "object" && entry.source?.startsWith("npm:pi-web-access@"));
+    settings.packages[webIndex] = "npm:pi-web-access@0.24.2";
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify(settings, null, 2));
+    const beforeDoctor = await readFile(join(agentDir, "settings.json"), "utf8");
+    const unhealthyDoctor = run("doctor");
+    assert.equal(unhealthyDoctor.status, 0, unhealthyDoctor.stderr || unhealthyDoctor.stdout);
+    assert.match(unhealthyDoctor.stdout, /MISSING pi-web-access user autoload is not disabled/);
+    assert.match(unhealthyDoctor.stdout, /FIX run pi-team\.cmd setup/);
+    assert.equal(await readFile(join(agentDir, "settings.json"), "utf8"), beforeDoctor, "doctor must not modify user settings");
+
+    await writeFile(join(agentDir, "npm/node_modules/pi-intercom/package.json"), JSON.stringify({ name: "pi-intercom", version: "0.0.0" }));
+    const failed = run("setup", { FAKE_PI_FAIL: "pi-intercom" });
+    assert.notEqual(failed.status, 0, "setup must propagate installer failure");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("tests directory contains the deterministic contract and communication-policy tests", async () => {
   const { readdir } = await import("node:fs/promises");
   const entries = (await readdir(join(REPO, "tests"))).filter((name) => !name.startsWith(".")).sort();
-  assert.deepEqual(entries, ["communication-policy.test.mjs", "legacy", "run-tests.ps1", "team-contract.test.mjs"].sort(),
+  assert.deepEqual(entries, ["communication-policy.test.mjs", "fixtures", "legacy", "run-tests.ps1", "team-contract.test.mjs"].sort(),
     `tests/ must contain only the deterministic contract and communication-policy tests; got ${entries.join(", ")}`);
   // Both top-level .test.mjs files are allowed.
   const topLevelTests = entries.filter((name) => name.endsWith(".test.mjs")).sort();

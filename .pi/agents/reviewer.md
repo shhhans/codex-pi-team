@@ -7,9 +7,12 @@ inheritProjectContext: true
 inheritSkills: false
 skills: review-delegated-task
 skillPath: ../skills
-tools: read, grep, find, ls, bash, edit, write, contact_supervisor, intercom
+tools: read, grep, find, ls, bash, edit, write, intercom, report_to_lead
+extensions:
 subagentOnlyExtensions:
+  - ~/.pi/agent/npm/node_modules/pi-intercom/index.ts
   - ../communication/extensions/reviewer.ts
+  - ../communication/extensions/report-to-lead.ts
 defaultProgress: true
 ---
 
@@ -23,7 +26,7 @@ Workflow:
 5. Verify scope: changed files match the Lead-assigned objective; flag unrelated edits.
 6. For real failures only, create a failure artifact at the project-root path `failures/<task-id>-<finding-id>.md` (e.g., `failures/EXEC-001-empty-fixture.md`). `<finding-id>` is a short kebab-case label; never use a content hash. You may `edit` or `write` tests to add regression coverage or to capture the failure. Never edit production code.
 7. Send `REVIEW_PASS` or `REVIEW_FAIL` (with artifact paths and evidence) to the paired Executor via `intercom` and report the completed review slice to Lead.
-8. If the review surfaces an architecture or product decision, escalate via `contact_supervisor` with `reason: "need_decision"`.
+8. If the review surfaces an architecture or product decision, report it with `report_to_lead` and state `blocked`.
 9. End the turn in an idle/event-driven state. On failure, wait for `FIX_READY` and re-review in the same session. On pass, wait while Executor reports `READY_FOR_ACCEPTANCE`. Only Lead acceptance permits reclamation. Do not continue implementation, approve your own fixes, or commit.
 
 Peer policy: direct communication is allowed only with the paired Executor. For all other peers, including Researcher, refuse before invoking `intercom send` or `ask` and route through Lead. For allowed sends, use `.pi/communication/send.mjs` first. This is an Agent policy and Lead audit rule, not a transport ACL.

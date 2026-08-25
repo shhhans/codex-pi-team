@@ -1,7 +1,5 @@
 {
-  "packages": [
-    "npm:pi-intercom",
-    "npm:pi-subagents",
-    "npm:pi-web-access"
-  ]
+  "defaultProvider": "minimax-cn",
+  "defaultModel": "MiniMax-M3",
+  "shellPath": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
 }

@@ -1,5 +1,9 @@
 # Project State (as of BOOTSTRAP-SELF-007 protocol alignment)
 
+The stable entrypoint implementation is present at `pi-team.cmd` with its
+PowerShell lifecycle under `scripts/pi-team.ps1`. The runtime uses the Git
+common directory `pi-team/v1` state root and direct role sessions.
+
 `ADR/0002-lead-subagent-collaboration-protocol.md` is the sole normative
 Lead–Subagent collaboration protocol. Active summaries defer to it.
 
@@ -12,7 +16,7 @@ role memory** (no `memory:` frontmatter, no active `.pi/agent-memory/{role}/MEMO
 
 | Agent | Skill | Provider | Memory |
 | --- | --- | --- | --- |
-| `researcher` | `answer-research-question` | `.pi/npm/node_modules/pi-web-access/index.ts` (via `subagentOnlyExtensions`) | none (prompt + private skill only) |
+| `researcher` | `answer-research-question` | `~/.pi/agent/npm/node_modules/pi-web-access/index.ts` (via `subagentOnlyExtensions`) | none (prompt + private skill only) |
 | `executor` | `execute-delegated-task` | n/a | none (prompt + private skill only) |
 | `reviewer` | `review-delegated-task` | n/a | none (prompt + private skill only) |
 
@@ -24,12 +28,16 @@ are present in `.pi/legacy/agents/` but are not loaded.
 
 ## Installed packages
 
-`.pi/settings.json` declares the three installed npm packages:
+`.pi/settings.json` declares no npm packages. Run `pi-team setup` once to
+install these pinned packages in Pi's user package directory:
 
-- `npm:pi-intercom` (peer transport)
-- `npm:pi-subagents` (agent loader)
-- `npm:pi-web-access` 0.24.2 (web-access provider; resolved to
-  `.pi/npm/node_modules/pi-web-access/index.ts`)
+- `npm:pi-intercom@0.11.0` (peer transport)
+- `npm:pi-subagents@0.56.0` (agent loader)
+- `npm:pi-web-access@0.24.2` (Researcher-only web-access provider)
+
+All roles disable ambient extensions. Shared intercom is loaded explicitly by
+each role, while only Researcher loads Web Access. `doctor` checks this state
+without modifying it; role-launching commands fail fast if setup is incomplete.
 
 The Deep Research MCP runtime under `.pi/researcher-runtime/` and
 its installed dependencies (`@modelcontextprotocol/sdk` 1.30.0,

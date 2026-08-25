@@ -1,12 +1,16 @@
 # Goal
 
+The stable Windows-native entrypoint is `pi-team.cmd`; its operational
+contract is recorded in `ADR/0003-stable-pi-team-entrypoint.md` and the
+implementation plan in `plans/pi-team-stable-entry.md`.
+
 `ADR/0002-lead-subagent-collaboration-protocol.md` is the sole normative
 collaboration protocol; this file states its operational goal.
 
 The routine development path runs as a minimal three-agent loop:
 
 - **Researcher** answers exactly one bounded research question per
-  Lead-delegated task. It uses the installed local web-access
+  Lead-delegated task. It uses the user-shared, role-scoped web-access
   provider (`pi-web-access`) for `web_search`, `fetch_content`,
   `get_search_content`, and `source_check`. It does not implement
   code, propose architecture, or chain multiple research questions.
@@ -44,3 +48,7 @@ There is no Deep Research MCP, no cross-worktree scope, no
 production-code edits by Reviewer, no normal stop/resume handoff, and no
 commits without Lead authorization. Executor and Reviewer remain alive
 until Lead accepts the task and reclaims the pair.
+
+Runtime packages are installed once with `pi-team setup`; project worktrees do
+not download their own copies. All Pi roles reject ambient extensions, and
+only Researcher loads `pi-web-access`.

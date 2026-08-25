@@ -366,17 +366,16 @@ test("runtime policy preserves envelope, dedup, reply-store, lifecycle mechanics
   assert.equal(typeof policy.receiveAndReplay, "function", "receiveAndReplay must remain");
 });
 
-test("researcher subagentOnlyExtensions wires both pi-web-access provider and researcher policy", async () => {
+test("researcher subagentOnlyExtensions wires shared intercom, shared web access, and researcher policy", async () => {
   const text = await readFile(join(REPO, ".pi/agents/researcher.md"), "utf8");
   const fm = parseFrontmatter(text);
   const exts = parseScalarList(fm.subagentOnlyExtensions);
   assert.deepEqual(
     exts,
-    ["../npm/node_modules/pi-web-access/index.ts", "../communication/extensions/researcher.ts"],
-    "researcher must load both pi-web-access and the researcher policy extension",
+    ["~/.pi/agent/npm/node_modules/pi-intercom/index.ts", "~/.pi/agent/npm/node_modules/pi-web-access/index.ts", "../communication/extensions/researcher.ts", "../communication/extensions/report-to-lead.ts"],
+    "researcher must explicitly load shared transport, shared web access, and project policy extensions",
   );
-  // Each referenced extension file must exist on disk.
-  await expectExists(join(REPO, ".pi/npm/node_modules/pi-web-access/index.ts"));
+  assert.equal(fm.extensions, "", "researcher must disable ambient extensions");
   await expectExists(join(REPO, ".pi/communication/extensions/researcher.ts"));
   // Provider frontmatter must remain declared.
   assert.match(text, /pi-web-access/);
@@ -394,9 +393,11 @@ test("executor and reviewer each load their own communication policy extension",
     const exts = parseScalarList(fm.subagentOnlyExtensions);
     assert.deepEqual(
       exts,
-      [`../communication/extensions/${role}.ts`],
-      `${role} must load only its own communication policy extension`,
+      ["~/.pi/agent/npm/node_modules/pi-intercom/index.ts", `../communication/extensions/${role}.ts`, "../communication/extensions/report-to-lead.ts"],
+      `${role} must load shared intercom and only its own project policy extensions`,
     );
+    assert.equal(fm.extensions, "", `${role} must disable ambient extensions`);
+    assert.doesNotMatch(text, /pi-web-access/, `${role} must not load pi-web-access`);
     await expectExists(join(REPO, `.pi/communication/extensions/${role}.ts`));
     // Skills/tools/provider/no-memory must be preserved.
     assert.ok(fm.skills && typeof fm.skills === "string", `${role} skills must be preserved`);

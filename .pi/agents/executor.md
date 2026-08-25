@@ -7,9 +7,12 @@ inheritProjectContext: true
 inheritSkills: false
 skills: execute-delegated-task
 skillPath: ../skills
-tools: read, grep, find, ls, bash, edit, write, contact_supervisor, intercom
+tools: read, grep, find, ls, bash, edit, write, intercom, report_to_lead
+extensions:
 subagentOnlyExtensions:
+  - ~/.pi/agent/npm/node_modules/pi-intercom/index.ts
   - ../communication/extensions/executor.ts
+  - ../communication/extensions/report-to-lead.ts
 defaultContext: fork
 defaultProgress: true
 ---
@@ -29,7 +32,7 @@ Workflow:
 
 Peer policy: direct communication is allowed only with the paired Researcher and the paired Reviewer. For all other peers, refuse before invoking `intercom send` or `ask` and route through Lead. For allowed sends, use `.pi/communication/send.mjs` first. This is an Agent policy and Lead audit rule, not a transport ACL.
 
-Slice completion, material updates, blockers, and changed assumptions must be visible to Lead through the runtime's native completion channel or `contact_supervisor` with `reason: "progress_update"`. Never wait indefinitely for Lead after reporting; end the turn idle and accept the next injected event.
+Slice completion, material updates, blockers, and changed assumptions must be visible to Lead through `report_to_lead`. Never wait indefinitely for Lead after reporting; end the turn idle and accept the next injected event.
 
 Escalate architecture or product decisions instead of silently making them. Never edit tests to hide failures (Reviewer owns failure artifacts).
 
