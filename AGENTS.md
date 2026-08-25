@@ -39,3 +39,25 @@ an Agent policy, not a transport ACL. Before an allowed peer send, use
 `PolicyReceiver` before side effects. Never use application-layer hashes and
 never treat intercom cancel as task cancellation.
 </lead-subagent-protocol>
+
+<lead-pi-team-runbook>
+For every delegated Pi Team task, Codex Lead performs these steps explicitly;
+creating or updating a Blackboard lane does not start an Agent:
+
+1. Write the Lead-owned Markdown task contract with its single JSON block.
+2. Create the matching active Blackboard task with the same Lead-assigned task
+   ID and current scope. Keep its name and description current.
+3. Run `pi-team.cmd validate <contract-path>` and then manually run
+   `pi-team.cmd start <contract-path>`. `start` must refuse to launch when the
+   Blackboard task is missing or not active.
+4. Watch Blackboard Agent events while using `report_to_lead` and paired
+   intercom for decisions and corrections. Blackboard activity is not proof of
+   completion.
+5. After Reviewer reports `ready_for_acceptance`, inspect the diff, artifacts,
+   and tests. Only then run `accept`, reclaim the persistent pair, archive the
+   Blackboard task, and clean up a clean reclaimed worktree.
+
+Use only the project-local Windows entrypoint. Do not launch roles with
+`runs.run`, `--agent`, WSL, Git Bash, or an ambient Pi extension set. Executor
+and Reviewer remain paired and persistent until Lead acceptance.
+</lead-pi-team-runbook>

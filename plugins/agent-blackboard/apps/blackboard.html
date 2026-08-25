@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Blackboard</title>
+  <style>
+    :root { color-scheme: dark; font: 14px system-ui, sans-serif; }
+    body { background: #101114; color: #f4f4f5; margin: 0; padding: 14px; }
+    #status { color: #a1a1aa; margin-bottom: 10px; }
+    .lane { border: 1px solid #3f3f46; border-radius: 10px; margin: 10px 0; padding: 12px; background: #18181b; }
+    .head { display: flex; gap: 8px; align-items: center; }
+    .head strong { flex: 1; font-size: 16px; }
+    code, .state { color: #7dd3fc; }
+    p { color: #c4c4cc; white-space: pre-wrap; }
+    .agents { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+    article { background: #27272a; border-radius: 7px; padding: 8px; }
+    article em { color: #facc15; font-style: normal; }
+    article small { color: #fbbf24; display: block; margin-top: 5px; }
+  </style>
+</head>
+<body>
+  <div id="status">正在连接黑板…</div>
+  <main id="lanes"></main>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const root = window.openai?.toolInput?.project_root || window.__BLACKBOARD_PROJECT_ROOT__ || params.get("project_root") || "";
+    let cursor = "";
+    let displayModeRequested = false;
+    const esc = (v) => String(v ?? "").replace(/[&<>\"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+    function draw(snapshot) {
+      document.querySelector("#lanes").innerHTML = snapshot.tasks.map((task) => `<section class="lane"><div class="head"><code>${esc(task.task_id)}</code><strong>${esc(task.name)}</strong><span class="state">${esc(task.status)}</span></div><p>${esc(task.description)}</p><div class="agents">${(task.agents || []).map((agent) => `<article><b>${esc(agent.role)}</b> <em>${esc(agent.state)}</em><div>${esc(agent.activity)}</div>${agent.blocker ? `<small>阻塞：${esc(agent.blocker)}</small>` : ""}${agent.next ? `<small>下一步：${esc(agent.next)}</small>` : ""}</article>`).join("") || "<i>暂无 Agent 活动</i>"}</div></section>`).join("") || "<p>暂无 active task</p>";
+    }
+    async function refresh() {
+      if (!window.openai?.callTool) { document.querySelector("#status").textContent = "inline fallback：等待 Codex MCP bridge"; return; }
+      try {
+        const response = await window.openai.callTool("blackboard_snapshot", { project_root: root });
+        const data = response?.structuredContent || JSON.parse(response?.content?.[0]?.text || "{}");
+        cursor = data.cursor || cursor; draw(data); document.querySelector("#status").textContent = "每 2 秒刷新；Lead watcher 独立运行";
+        if (!displayModeRequested && window.openai.requestDisplayMode) {
+          displayModeRequested = true;
+          await window.openai.requestDisplayMode({ mode: "pip" }).catch(() => {});
+        }
+      } catch (error) { document.querySelector("#status").textContent = `黑板不可用：${error.message}`; }
+    }
+    refresh(); setInterval(refresh, 2000);
+  </script>
+</body>
+</html>

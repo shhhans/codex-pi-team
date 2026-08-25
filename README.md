@@ -26,6 +26,36 @@ Check the environment without changing it:
 shared packages are missing, have the wrong version, or Web Access is globally
 autoloaded.
 
+## Agent Blackboard
+
+The repo-local `agent-blackboard` plugin provides a Lead-owned observability
+plane. Task metadata and append-only Agent activity events live at
+`<git-common-dir>/harness-blackboard/v1/`, shared across the main worktree and
+task worktrees. The Lead creates and updates task IDs, names, descriptions, and
+lifecycle; Pi roles can only append their own injected-identity activity with
+`blackboard_update`.
+
+The Blackboard is not an authorization or communication bus. Use the existing
+`report_to_lead`, supervisor, and intercom paths for decisions and correction.
+The plugin supplies MCP tools for task management, snapshots, cursor-based
+watching, and a task-lane UI that requests PiP and falls back inline.
+The MCP server and its blackboard core are packaged together inside the plugin;
+the installed cache must not depend on a sibling `.pi/blackboard` path.
+
+Creating a Blackboard task only publishes the Lead-owned scope; it does not
+start Pi roles. After creating the lane, the Lead explicitly launches the pair:
+
+```powershell
+.\pi-team.cmd validate .\plans\<task-id>-task.md
+.\pi-team.cmd start .\plans\<task-id>-task.md
+```
+
+`start` checks that the matching Blackboard task already exists and is active.
+It snapshots the formal contract under the shared Pi Team state root, binds
+stable Pi session IDs, disables ambient extensions and skills, and loads only
+the role's explicit tools, private skill, and extensions. The Lead then watches
+Blackboard events; Agent events never replace review or acceptance.
+
 ## Runtime identity and state
 
 The launcher injects the complete runtime identity for every Executor,

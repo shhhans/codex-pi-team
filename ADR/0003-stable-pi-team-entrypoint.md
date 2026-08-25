@@ -24,6 +24,20 @@ temporary Researcher identity while retaining the task, worktree, scope, and
 common-directory state root. `PI_TEAM_STATE_ROOT` is therefore an internal
 launcher-to-extension interface, not a task-contract field.
 
+The direct Pi CLI has no `--agent` option. The launcher translates each role
+definition into explicit CLI arguments: `--no-extensions`, `--no-skills`, one
+strict `--tools` allowlist, one private `--skill`, and only the named role
+extensions. This prevents user-level `pi-subagents` and `runs.run` from entering
+a role session. The first Executor/Reviewer launch binds the persisted identity
+with `--session-id`; later launches select it with `--session`.
+
+Role runtime files are loaded from the canonical project root, not from the
+task branch snapshot. Before work begins, `start` requires the Lead-owned
+Blackboard task to exist and be active, then freezes the formal task contract
+under `<git-common-dir>/pi-team/v1/contracts/` and injects that exact path into
+both roles. Creating a Blackboard task remains separate from manually invoking
+`pi-team.cmd start`; neither action implies the other.
+
 Because a Git worktree's root `.git` can be a pointer file, the launcher must
 resolve `git rev-parse --git-common-dir` before creating or passing the state
 root. Paths under `<worktree>/.git/...` are invalid for this purpose.

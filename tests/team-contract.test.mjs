@@ -8,9 +8,9 @@ import { spawnSync } from "node:child_process";
 
 const REPO = process.cwd();
 const SKILL_NAMES = ["answer-research-question", "execute-delegated-task", "review-delegated-task"];
-const RESEARCHER_TOOLS = ["read", "grep", "find", "ls", "write", "web_search", "fetch_content", "get_search_content", "source_check", "intercom", "report_to_lead"];
-const EXECUTOR_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom", "report_to_lead"];
-const REVIEWER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom", "report_to_lead"];
+const RESEARCHER_TOOLS = ["read", "grep", "find", "ls", "write", "web_search", "fetch_content", "get_search_content", "source_check", "intercom", "report_to_lead", "blackboard_update"];
+const EXECUTOR_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom", "report_to_lead", "blackboard_update"];
+const REVIEWER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom", "report_to_lead", "blackboard_update"];
 const DEEP_RESEARCH_TOOLS = ["research_run", "deep_research_task", "deep_research_review", "research_synthesis_input", "research_report_artifact"];
 const ACTIVE_ROLES = ["researcher", "executor", "reviewer"];
 const LEGACY_ROLES = ["architect", "critic", "engineer"];
@@ -130,8 +130,8 @@ test("researcher alone loads shared pi-web-access and has no Deep Research tools
     assert.equal(tools.includes(banned), false, `Researcher must not include Deep Research tool ${banned}`);
   }
   const exts = parseScalarList(fm.subagentOnlyExtensions);
-  assert.deepEqual(exts, [SHARED_INTERCOM, SHARED_WEB_ACCESS, "../communication/extensions/researcher.ts", "../communication/extensions/report-to-lead.ts"],
-    "Researcher must load shared intercom and web access plus project policy extensions");
+  assert.deepEqual(exts, [SHARED_INTERCOM, SHARED_WEB_ACCESS, "../communication/extensions/researcher.ts", "../communication/extensions/report-to-lead.ts", "../communication/extensions/blackboard-update.ts"],
+    "Researcher must load shared intercom, web access, and project policy extensions");
   assert.match(text, /answer-research-question/);
   assert.equal(fm.skills, "answer-research-question");
   assert.equal(fm.skillPath, "../skills");
@@ -420,6 +420,8 @@ test("role launchers inject common-dir identity and isolate Executor/Reviewer en
   const commonDir = commonDirResult.stdout.trim().replaceAll("/", "\\");
   const stateRoot = join(commonDir, "pi-team", "v1");
   const stateFile = join(stateRoot, `${taskId}.json`);
+  const contractSnapshot = join(stateRoot, "contracts", `${taskId}.md`);
+  const blackboardStateFile = join(commonDir, "harness-blackboard", "v1", `${taskId}.json`);
   const eventFiles = [join(stateRoot, `${taskId}-executor.jsonl`), join(stateRoot, `${taskId}-reviewer.jsonl`)];
 
   const run = (command, args = [], extraEnv = {}) => spawnSync("powershell.exe", [
@@ -478,6 +480,14 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
 
     const branchCreate = spawnSync("git", ["branch", branch, "master"], { cwd: REPO, encoding: "utf8" });
     assert.equal(branchCreate.status, 0, branchCreate.stderr);
+    const missingBlackboard = run("start", [contract], { PI_TEAM_TEST_LOG: launchLog });
+    assert.notEqual(missingBlackboard.status, 0, "start must refuse a task that Lead has not created on the Blackboard");
+    assert.match(missingBlackboard.stderr, /Lead must create Blackboard task/);
+    await mkdir(join(commonDir, "harness-blackboard", "v1"), { recursive: true });
+    await writeFile(blackboardStateFile, JSON.stringify({
+      version: 1, task_id: taskId, name: "Runtime identity test", description: "Current Lead scope", status: "active",
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(), revisions: [],
+    }));
     const start = run("start", [contract], { PI_TEAM_TEST_LOG: launchLog });
     assert.equal(start.status, 0, start.stderr || start.stdout);
     const startRecords = await waitForRecords(2);
@@ -485,12 +495,24 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     const startState = parseJsonText(await readFile(stateFile, "utf8"));
     assert.equal(startState.scope_id.length > 0, true);
     assert.equal(startState.worktree, worktree);
+    assert.equal(startState.contract_path, contractSnapshot);
+    assert.equal(await readFile(contractSnapshot, "utf8"), await readFile(contract, "utf8"), "launcher must freeze the exact task contract outside the worktree");
     for (const record of startRecords) {
       assert.equal(record.task_id, taskId);
       assert.equal(record.worktree, worktree);
       assert.equal(record.state_root, stateRoot);
       assert.equal(record.scope_id, startState.scope_id);
       assert.equal(record.agent_id, record.role === "executor" ? startState.sessions.executor.agent_id : startState.sessions.reviewer.agent_id);
+      const expectedTools = record.role === "executor" ? EXECUTOR_TOOLS : REVIEWER_TOOLS;
+      assert.equal(record.args.includes("--agent"), false, "Pi CLI has no --agent option");
+      assert.equal(record.args.includes("--no-extensions"), true, "ambient extensions including pi-subagents/runs.run must be disabled");
+      assert.equal(record.args.includes("--no-skills"), true, "ambient skills must be disabled");
+      assert.equal(record.args[record.args.indexOf("--tools") + 1], expectedTools.join(","));
+      assert.equal(record.args[record.args.indexOf("--session-id") + 1], startState.sessions[record.role].session_id, "first launch must bind the persisted session ID");
+      assert.equal(record.args[record.args.indexOf("--skill") + 1], join(REPO, ".pi", "skills", record.role === "executor" ? "execute-delegated-task" : "review-delegated-task", "SKILL.md"));
+      assert.equal(record.args.some((arg) => arg.includes(`${worktree}\\.pi\\communication`)), false, "role runtime extensions must not depend on the task branch snapshot");
+      assert.equal(record.args.some((arg) => arg.includes(join(REPO, ".pi", "communication", "extensions"))), true);
+      assert.equal(record.args.some((arg) => arg.includes(contractSnapshot)), true, "initial assignment must name the frozen contract path");
     }
     const executorRecord = startRecords.find((record) => record.role === "executor");
     const reviewerRecord = startRecords.find((record) => record.role === "reviewer");
@@ -518,6 +540,10 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     assert.equal(researchRecords[0].worktree, worktree);
     assert.equal(researchRecords[0].scope_id, scopeId);
     assert.equal(researchRecords[0].state_root, stateRoot);
+    assert.equal(researchRecords[0].args.includes("--no-extensions"), true);
+    assert.equal(researchRecords[0].args.includes("--no-skills"), true);
+    assert.equal(researchRecords[0].args[researchRecords[0].args.indexOf("--tools") + 1], RESEARCHER_TOOLS.join(","));
+    assert.equal(researchRecords[0].args.includes("--session-id"), false, "on-demand Researcher does not claim a persistent pair session");
 
     await rm(launchLog, { force: true });
     const resume = run("resume", [taskId], { PI_TEAM_TEST_LOG: launchLog });
@@ -538,8 +564,15 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     assert.equal(resumedReviewer.state_root, stateRoot);
     assert.match(resumeRecords.map((record) => record.args.join(" ")).join("\n"), new RegExp(executorSessionId));
     assert.match(resumeRecords.map((record) => record.args.join(" ")).join("\n"), new RegExp(reviewerSessionId));
+    for (const record of resumeRecords) {
+      assert.equal(record.args.includes("--session"), true);
+      assert.equal(record.args.includes("--session-id"), false, "resume must select the session created by the first launch, not create another one");
+      assert.equal(record.args.includes("--no-extensions"), true);
+    }
   } finally {
     await rm(stateFile, { force: true });
+    await rm(contractSnapshot, { force: true });
+    await rm(blackboardStateFile, { force: true });
     for (const path of eventFiles) await rm(path, { force: true });
     // Start-Process is intentionally asynchronous; let fake role processes
     // release their worktree working directories before Git removes it.
@@ -553,13 +586,24 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
 test("tests directory contains the deterministic contract and communication-policy tests", async () => {
   const { readdir } = await import("node:fs/promises");
   const entries = (await readdir(join(REPO, "tests"))).filter((name) => !name.startsWith(".")).sort();
-  assert.deepEqual(entries, ["communication-policy.test.mjs", "fixtures", "legacy", "run-tests.ps1", "team-contract.test.mjs"].sort(),
+  assert.deepEqual(entries, ["blackboard.test.mjs", "communication-policy.test.mjs", "fixtures", "legacy", "run-tests.ps1", "team-contract.test.mjs"].sort(),
     `tests/ must contain only the deterministic contract and communication-policy tests; got ${entries.join(", ")}`);
   // Both top-level .test.mjs files are allowed.
   const topLevelTests = entries.filter((name) => name.endsWith(".test.mjs")).sort();
-  assert.deepEqual(topLevelTests, ["communication-policy.test.mjs", "team-contract.test.mjs"]);
+  assert.deepEqual(topLevelTests, ["blackboard.test.mjs", "communication-policy.test.mjs", "team-contract.test.mjs"]);
   // The contract test must be referenced by run-tests.ps1.
   const runner = await readFile(join(REPO, "tests/run-tests.ps1"), "utf8");
   assert.match(runner, /team-contract\.test\.mjs/);
   assert.match(runner, /communication-policy\.test\.mjs/);
+  assert.match(runner, /blackboard\.test\.mjs/);
+});
+
+test("new Lead sessions receive the explicit Blackboard then Pi Team launch runbook", async () => {
+  const agents = await readFile(join(REPO, "AGENTS.md"), "utf8");
+  assert.match(agents, /<lead-pi-team-runbook>/);
+  assert.match(agents, /creating or updating a Blackboard lane does not start an Agent/);
+  assert.match(agents, /pi-team\.cmd start <contract-path>/);
+  assert.match(agents, /Do not launch roles with\s+`runs\.run`, `--agent`, WSL, Git Bash/);
+  const readme = await readFile(join(REPO, "README.md"), "utf8");
+  assert.match(readme, /Creating a Blackboard task only publishes the Lead-owned scope; it does not\s+start Pi roles/);
 });

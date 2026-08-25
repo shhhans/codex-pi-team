@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "agent-blackboard": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/server/blackboard-mcp.mjs"]
+    }
+  }
+}

@@ -89,6 +89,12 @@ function Set-WebAccessAutoloadDisabled {
 function Assert-Setup {
   $issues = @(Get-SetupIssues)
   if ($issues.Count -gt 0) { Fail "Pi shared dependencies are not ready: $($issues -join '; '). Run pi-team.cmd setup." }
+  foreach ($path in @(
+    (Join-Path $ProjectRoot '.pi/communication/extensions/blackboard-update.ts'),
+    (Join-Path $ProjectRoot 'plugins/agent-blackboard/server/blackboard-core.mjs')
+  )) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "Pi Team runtime file is missing: $path" }
+  }
 }
 function Setup {
   $pi = if($env:PI_CMD){$env:PI_CMD}else{'pi.cmd'}
@@ -186,13 +192,59 @@ function Start-RoleProcess([string]$Executable,[string[]]$ArgumentList,[string]$
     }
   }
 }
+function BlackboardRoot { return (Join-Path (Get-CommonDir) 'harness-blackboard/v1') }
+function Assert-BlackboardTask($Contract) {
+  $path = Join-Path (BlackboardRoot) "$($Contract.task_id).json"
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    Fail "Lead must create Blackboard task $($Contract.task_id) before start"
+  }
+  try { $task = Get-Content -Raw -Encoding UTF8 -LiteralPath $path | ConvertFrom-Json }
+  catch { Fail "invalid Blackboard task state: $path ($($_.Exception.Message))" }
+  if ($task.task_id -ne $Contract.task_id) { Fail "Blackboard task identity mismatch: $path" }
+  if ($task.status -ne 'active') { Fail "Blackboard task $($Contract.task_id) is not active" }
+  return $task
+}
+function Snapshot-Contract([string]$Path,[string]$TaskId) {
+  $directory = Join-Path (StateRoot) 'contracts'
+  New-Item -ItemType Directory -Force -Path $directory | Out-Null
+  $snapshot = Join-Path $directory "$TaskId.md"
+  Copy-Item -LiteralPath $Path -Destination $snapshot -Force
+  return $snapshot
+}
+function RoleArguments([string]$Role,[string]$InitialPrompt,[string]$SessionId) {
+  $tools = @{
+    researcher = 'read,grep,find,ls,write,web_search,fetch_content,get_search_content,source_check,intercom,report_to_lead,blackboard_update'
+    executor = 'read,grep,find,ls,bash,edit,write,intercom,report_to_lead,blackboard_update'
+    reviewer = 'read,grep,find,ls,bash,edit,write,intercom,report_to_lead,blackboard_update'
+  }
+  $skills = @{
+    researcher = 'answer-research-question'
+    executor = 'execute-delegated-task'
+    reviewer = 'review-delegated-task'
+  }
+  if (-not $tools.ContainsKey($Role)) { Fail "unknown Pi Team role: $Role" }
+  $roleFile = Join-Path $ProjectRoot ".pi/agents/$Role.md"
+  $intercom = Join-Path (Get-PiAgentDir) 'npm/node_modules/pi-intercom/index.ts'
+  $roleExtension = Join-Path $ProjectRoot ".pi/communication/extensions/$Role.ts"
+  $reportExtension = Join-Path $ProjectRoot '.pi/communication/extensions/report-to-lead.ts'
+  $blackboardExtension = Join-Path $ProjectRoot '.pi/communication/extensions/blackboard-update.ts'
+  $skill = Join-Path $ProjectRoot ".pi/skills/$($skills[$Role])/SKILL.md"
+  $args = @('--approve','--name',$Role,'--no-extensions','--no-skills','--tools',$tools[$Role],'--skill',$skill,'--append-system-prompt',$roleFile,'--extension',$intercom,'--extension',$roleExtension,'--extension',$reportExtension,'--extension',$blackboardExtension)
+  if ($Role -eq 'researcher') { $args += @('--extension',(Join-Path (Get-PiAgentDir) 'npm/node_modules/pi-web-access/index.ts')) }
+  if ($SessionId) { $args += @('--session-id',$SessionId) }
+  if ($InitialPrompt) { $args += $InitialPrompt }
+  return $args
+}
 function Start-Task([string]$Path) {
-  Assert-Setup; $c = Parse-Contract $Path; $existing = Join-Path (StateRoot) "$($c.task_id).json"; if (Test-Path $existing) { Fail 'task already started' }
+  Assert-Setup; $c = Parse-Contract $Path; Assert-BlackboardTask $c | Out-Null; $existing = Join-Path (StateRoot) "$($c.task_id).json"; if (Test-Path $existing) { Fail 'task already started' }
   Invoke-Native git.exe @('worktree','add',$c.worktree,$c.branch)
-  $state = [pscustomobject]@{version=1;task_id=$c.task_id;name=$c.name;description=$c.description;status='active';worktree=$c.worktree;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor';process_id=$null;process_started_at=$null};reviewer=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='reviewer';process_id=$null;process_started_at=$null}}}
+  $contractSnapshot = Snapshot-Contract $Path $c.task_id
+  $state = [pscustomobject]@{version=1;task_id=$c.task_id;name=$c.name;description=$c.description;status='active';worktree=$c.worktree;contract_path=$contractSnapshot;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor';process_id=$null;process_started_at=$null};reviewer=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='reviewer';process_id=$null;process_started_at=$null}}}
   Write-State $state; foreach ($r in @('executor','reviewer')) { Event $state $r 'working' 'task started' '' '' }
   $pi = if ($env:PI_CMD) {$env:PI_CMD} else {'pi.cmd'}; $wt = if ($env:WT_CMD) {$env:WT_CMD} else {'wt.exe'}
-  $common = @('-d',$c.worktree,$pi,'--agent','executor'); $review = @('-d',$c.worktree,$pi,'--agent','reviewer')
+  $assignment = "Lead assignment. Task ID: $($c.task_id). Worktree: $($c.worktree). Frozen task contract: $contractSnapshot. Read that exact contract before acting. Objective: $($c.description) Done criteria: $($c.done_criteria -join '; '). Constraints: $($c.constraints -join '; ')."
+  $common = @('-d',$c.worktree,$pi) + @(RoleArguments 'executor' "$assignment You are Executor. Perform only the assigned slice and report progress through the configured tools." $state.sessions.executor.session_id)
+  $review = @('-d',$c.worktree,$pi) + @(RoleArguments 'reviewer' "$assignment You are Reviewer. Inspect the delegated work as it becomes available and report progress through the configured tools." $state.sessions.reviewer.session_id)
   $executorProc = Start-RoleProcess $wt $common $c.worktree $state.task_id 'executor' $state.sessions.executor.agent_id $state.worktree $state.scope_id
   $reviewerProc = Start-RoleProcess $wt $review $c.worktree $state.task_id 'reviewer' $state.sessions.reviewer.agent_id $state.worktree $state.scope_id
   $state.sessions.executor.process_id=$executorProc.Id; $state.sessions.executor.process_started_at=[DateTime]::UtcNow.ToString('o')
@@ -207,7 +259,8 @@ function Research([string]$TaskId,[string]$QuestionId,[string]$QuestionFile) {
   $out=Join-Path $s.worktree "research/$QuestionId.md"; New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
   $q=Get-Content -Raw -Encoding UTF8 $QuestionFile; $pi=if($env:PI_CMD){$env:PI_CMD}else{'pi.cmd'}
   $researcherId = New-Id
-  Start-RoleProcess $pi @('--agent','researcher','--prompt',$q) $s.worktree $s.task_id 'researcher' $researcherId $s.worktree $s.scope_id | Out-Null
+  $assignment = "Lead assignment. Task ID: $($s.task_id). Worktree: $($s.worktree). Research artifact: research/$QuestionId.md. Objective: $($s.description). Answer exactly this question: $q"
+  Start-RoleProcess $pi (RoleArguments 'researcher' $assignment '') $s.worktree $s.task_id 'researcher' $researcherId $s.worktree $s.scope_id | Out-Null
   Write-Output "RESEARCH_STARTED $QuestionId"
 }
 function Resume-Task([string]$TaskId) {
@@ -215,7 +268,7 @@ function Resume-Task([string]$TaskId) {
   if ($s.status -ne 'active') { Fail 'task is not active' }
   $pi=if($env:PI_CMD){$env:PI_CMD}else{'pi.cmd'}
   foreach($r in @('executor','reviewer')) {
-    Start-RoleProcess $pi @('--session',$s.sessions.$r.session_id) $s.worktree $s.task_id $r $s.sessions.$r.agent_id $s.worktree $s.scope_id | Out-Null
+    Start-RoleProcess $pi (@('--session',$s.sessions.$r.session_id) + @(RoleArguments $r "Resume Lead task $($s.task_id) as $r. Re-read the frozen task contract at $($s.contract_path) and continue the assigned work." '')) $s.worktree $s.task_id $r $s.sessions.$r.agent_id $s.worktree $s.scope_id | Out-Null
   }
   Write-Output "RESUMED $TaskId"
 }

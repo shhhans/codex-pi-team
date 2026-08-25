@@ -1,0 +1,3 @@
+interface:
+  display_name: "Blackboard Lead"
+  short_description: "Observe and manage local Pi Agent task lanes"

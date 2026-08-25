@@ -52,3 +52,9 @@ until Lead accepts the task and reclaims the pair.
 Runtime packages are installed once with `pi-team setup`; project worktrees do
 not download their own copies. All Pi roles reject ambient extensions, and
 only Researcher loads `pi-web-access`.
+
+The Lead also has a local Agent Blackboard observability plane. It keeps task
+metadata under Lead control and appends injected-identity Agent activity under
+`<git-common-dir>/harness-blackboard/v1/`, shared across worktrees. The
+Blackboard helps the Lead notice scope drift and waiting/blocking states; it is
+not an authorization, completion-proof, or communication mechanism.

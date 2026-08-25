@@ -372,7 +372,7 @@ test("researcher subagentOnlyExtensions wires shared intercom, shared web access
   const exts = parseScalarList(fm.subagentOnlyExtensions);
   assert.deepEqual(
     exts,
-    ["~/.pi/agent/npm/node_modules/pi-intercom/index.ts", "~/.pi/agent/npm/node_modules/pi-web-access/index.ts", "../communication/extensions/researcher.ts", "../communication/extensions/report-to-lead.ts"],
+    ["~/.pi/agent/npm/node_modules/pi-intercom/index.ts", "~/.pi/agent/npm/node_modules/pi-web-access/index.ts", "../communication/extensions/researcher.ts", "../communication/extensions/report-to-lead.ts", "../communication/extensions/blackboard-update.ts"],
     "researcher must explicitly load shared transport, shared web access, and project policy extensions",
   );
   assert.equal(fm.extensions, "", "researcher must disable ambient extensions");
@@ -393,7 +393,7 @@ test("executor and reviewer each load their own communication policy extension",
     const exts = parseScalarList(fm.subagentOnlyExtensions);
     assert.deepEqual(
       exts,
-      ["~/.pi/agent/npm/node_modules/pi-intercom/index.ts", `../communication/extensions/${role}.ts`, "../communication/extensions/report-to-lead.ts"],
+      ["~/.pi/agent/npm/node_modules/pi-intercom/index.ts", `../communication/extensions/${role}.ts`, "../communication/extensions/report-to-lead.ts", "../communication/extensions/blackboard-update.ts"],
       `${role} must load shared intercom and only its own project policy extensions`,
     );
     assert.equal(fm.extensions, "", `${role} must disable ambient extensions`);

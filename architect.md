@@ -74,6 +74,17 @@ for review.
 - Agents do not create Scout roles, repeat unbounded discovery, or split
   unassigned subtasks. Lead supplies and controls the task contract.
 
+## Agent Blackboard
+
+The repo-local `plugins/agent-blackboard/` is the Lead's observability
+surface. Its MCP tools manage Lead-owned task metadata and watch append-only
+Agent events stored at `<git-common-dir>/harness-blackboard/v1/`. The active Pi
+roles load `.pi/communication/extensions/blackboard-update.ts`; runtime
+identity, sequence, worktree, and observation time are not agent-controlled.
+The Blackboard displays current task scope and activity but does not authorize
+work, prove completion, or replace `report_to_lead`, supervisor, or intercom.
+The UI requests PiP when available and otherwise renders inline.
+
 ## Legacy
 
 The legacy five-agent material and the Deep Research substrate are

@@ -25,6 +25,10 @@ review/fix, and re-review. `READY_FOR_REVIEW`, `REVIEW_PASS`,
 an event, the role reports its completed slice to Lead and becomes idle;
 normal handoff does not stop or resume the sessions.
 
+Each active role also loads `blackboard-update.ts`. `blackboard_update` records
+explicit Agent activity in the Lead-owned common-dir Blackboard, but it does
+not authorize work, prove completion, or replace this communication path.
+
 `sendWithPolicy` in `send.mjs` applies the outbound gate. Each active
 agent loads its matching extension from `extensions/`. The extension
 blocks disallowed peer sends and blocks peer `ask`, `reply`, and
