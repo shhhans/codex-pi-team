@@ -10,6 +10,7 @@ import {
   appendAgentEvent,
   archiveTask,
   createTask,
+  publishTask,
   resolveGitCommonDir,
   snapshot,
   stateRoot,
@@ -66,6 +67,25 @@ test("blackboard uses one common-dir root across worktrees and preserves Lead me
     assert.deepEqual(metadataOnly.events, [], "Lead metadata changes must not create Agent activity reminders");
     assert.equal(git(fixture.repo, ["status", "--porcelain"]), "", "blackboard state must not pollute the main worktree");
     assert.equal(git(fixture.worktree, ["status", "--porcelain"]), "", "blackboard state must not pollute a task worktree");
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
+test("formal publication creates or aligns only an active Lead-owned task", async () => {
+  const fixture = await makeRepo();
+  try {
+    const created = await publishTask(fixture.repo, { task_id: "BB-005", name: "Initial task", description: "Initial scope" });
+    assert.equal(created.action, "created");
+    const updated = await publishTask(fixture.worktree, { task_id: "BB-005", name: "Aligned task", description: "Aligned scope" });
+    assert.equal(updated.action, "updated");
+    assert.deepEqual(updated.task.revisions.map(({ field }) => field), ["name", "description"]);
+    await acceptTask(fixture.repo, "BB-005");
+    await assert.rejects(
+      publishTask(fixture.repo, { task_id: "BB-005", name: "Too late", description: "Must not reopen" }),
+      /only an active task can be republished/,
+    );
+    await archiveTask(fixture.repo, "BB-005");
   } finally {
     await removeRepo(fixture);
   }
@@ -152,6 +172,8 @@ test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/
   const marketplace = JSON.parse(await readFile(join(REPO, ".agents/plugins/marketplace.json"), "utf8"));
   assert.equal(manifest.name, "agent-blackboard");
   assert.equal(mcpConfig.mcpServers["agent-blackboard"].type, "stdio");
+  assert.equal(mcpConfig.mcpServers["agent-blackboard"].required, true, "MCP failure must not silently degrade to skill-only mode");
+  assert.equal(mcpConfig.mcpServers["agent-blackboard"].startup_timeout_sec, 15);
   assert.equal(appConfig.apps["agent-blackboard"].id, "agent-blackboard");
   assert.equal(appConfig.apps["agent-blackboard"].category, "Productivity");
   assert.equal(marketplace.plugins[0].source.path, "./plugins/agent-blackboard");
@@ -163,6 +185,11 @@ test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/
   assert.match(piTeamLeadSkill, /blackboard_watch/);
   assert.match(piTeamLeadSkill, /Do not use\s+WSL, Git Bash, `runs\.run`/);
   assert.match(piTeamLeadSkill, /stay\s+alive through implementation, review, fixes, and re-review/);
+  for (const skill of ["blackboard-lead", "pi-team-lead"]) {
+    const metadata = await readFile(join(plugin, "skills", skill, "agents/openai.yaml"), "utf8");
+    assert.match(metadata, /value: "agent-blackboard"/, `${skill} must declare its MCP dependency`);
+    assert.match(metadata, /transport: "stdio"/);
+  }
   const appHtml = await readFile(join(plugin, "apps/blackboard.html"), "utf8");
   assert.match(appHtml, /requestDisplayMode/);
   assert.match(appHtml, /new URLSearchParams\(window\.location\.search\)/, "encoded project_root must be decoded by the URL parser");
@@ -176,16 +203,24 @@ test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/
   }
   const server = spawnSync(process.execPath, [join(plugin, "server/blackboard-mcp.mjs")], {
     cwd: REPO,
-    input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })}\n${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} })}\n${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "resources/list", params: {} })}\n`,
+    input: `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "codex-test", version: "1" } } })}\n${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" })}\n${JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} })}\n${JSON.stringify({ jsonrpc: "2.0", id: 4, method: "resources/list", params: {} })}\n`,
     encoding: "utf8",
   });
   assert.equal(server.status, 0, server.stderr);
   const responses = server.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line));
   assert.equal(responses[0].result.serverInfo.name, "agent-blackboard");
-  assert.deepEqual(responses[1].result.tools.map((tool) => tool.name), [
+  assert.equal(responses[0].result.protocolVersion, "2025-06-18");
+  assert.match(responses[0].result.instructions, /observability plane/);
+  assert.deepEqual(responses[1].result, {});
+  assert.deepEqual(responses[2].result.tools.map((tool) => tool.name), [
     "blackboard_create_task", "blackboard_update_task", "blackboard_accept_task", "blackboard_archive_task", "blackboard_snapshot", "blackboard_watch", "blackboard_render",
   ]);
-  assert.equal(responses[2].result.resources[0].uri, "ui://agent-blackboard/blackboard.html");
+  for (const name of ["blackboard_snapshot", "blackboard_watch", "blackboard_render"]) {
+    const tool = responses[2].result.tools.find((candidate) => candidate.name === name);
+    assert.equal(tool.annotations.readOnlyHint, true, `${name} must be declared read-only`);
+    assert.equal(tool.annotations.openWorldHint, false, `${name} must be declared closed-world`);
+  }
+  assert.equal(responses[3].result.resources[0].uri, "ui://agent-blackboard/blackboard.html");
 
   const fixture = await makeRepo();
   try {

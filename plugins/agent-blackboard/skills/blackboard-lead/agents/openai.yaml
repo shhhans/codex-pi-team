@@ -1,3 +1,11 @@
 interface:
   display_name: "Blackboard Lead"
   short_description: "Observe and manage local Pi Agent task lanes"
+  default_prompt: "Use $blackboard-lead to inspect and manage the current Agent Blackboard."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "agent-blackboard"
+      description: "Lead-owned Agent Blackboard tools"
+      transport: "stdio"

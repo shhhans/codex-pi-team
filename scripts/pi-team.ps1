@@ -153,8 +153,28 @@ function Event($State,[string]$Role,[string]$StateName,[string]$Activity,[string
   [ordered]@{version=1;task_id=$State.task_id;role=$Role;agent_id=$State.sessions.$Role.agent_id;worktree=$State.worktree;sequence=$seq;at=[DateTime]::UtcNow.ToString('o');state=$StateName;activity=$Activity;blocker=$Blocker;next=$Next} | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $ep
 }
 function Validate([string]$Path) { $c = Parse-Contract $Path; Write-Output "VALID $($c.task_id)" }
+function Setup-Codex {
+  $codex = if ($env:CODEX_CMD) { $env:CODEX_CMD } else { (Get-Command codex -ErrorAction SilentlyContinue).Source }
+  if (-not $codex) { Fail 'Codex CLI is required to register Agent Blackboard' }
+  $server = Join-Path $ProjectRoot 'plugins/agent-blackboard/server/blackboard-mcp.mjs'
+  if (-not (Test-Path -LiteralPath $server -PathType Leaf)) { Fail "Blackboard MCP server is missing: $server" }
+  $result = & $codex 'mcp' 'add' 'agent-blackboard' '--' 'node' $server 2>&1
+  if ($LASTEXITCODE -ne 0) { Fail (($result -join "`n").Trim()) }
+  Write-Output 'CODEX_MCP_READY agent-blackboard'
+}
+function Publish([string]$Path) {
+  $c = Parse-Contract $Path
+  $node = Get-Command node.exe -ErrorAction SilentlyContinue
+  if (-not $node) { Fail 'node.exe is required to publish a Blackboard task' }
+  $cli = Join-Path $ProjectRoot 'plugins/agent-blackboard/server/blackboard-cli.mjs'
+  if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) { Fail "Blackboard CLI is missing: $cli" }
+  $contractPath = (Resolve-Path -LiteralPath $Path).Path
+  $result = & $node.Source $cli 'publish' $ProjectRoot $contractPath 2>&1
+  if ($LASTEXITCODE -ne 0) { Fail (($result -join "`n").Trim()) }
+  Write-Output "PUBLISHED $($c.task_id)"
+}
 function Doctor {
-  foreach ($x in @('git','pi.cmd','wt.exe','powershell.exe')) { if (-not (Get-Command $x -ErrorAction SilentlyContinue)) { Write-Output "MISSING $x" } else { Write-Output "OK $x" } }
+  foreach ($x in @('git','node.exe','pi.cmd','wt.exe','powershell.exe')) { if (-not (Get-Command $x -ErrorAction SilentlyContinue)) { Write-Output "MISSING $x" } else { Write-Output "OK $x" } }
   $s = Get-Content -Raw (Join-Path $ProjectRoot '.pi/settings.json') | ConvertFrom-Json; if ($s.defaultProvider -ne 'minimax-cn' -or $s.defaultModel -ne 'MiniMax-M3') { Write-Output 'MISSING MiniMax configuration' } else { Write-Output 'OK MiniMax configuration' }
   $setupIssues = @(Get-SetupIssues)
   if ($setupIssues.Count -eq 0) { Write-Output 'OK shared Pi dependencies' }
@@ -275,4 +295,4 @@ function Resume-Task([string]$TaskId) {
 function Accept([string]$TaskId) { $s=Read-State $TaskId; $p=Join-Path (StateRoot) "$TaskId-reviewer.jsonl"; if (-not(Test-Path $p) -or -not((Get-Content $p | Select-Object -Last 1) -match '"state":"ready_for_acceptance"')) { Fail 'Reviewer is not ready_for_acceptance' }; $s.status='accepted'; $s.accepted_at=[DateTime]::UtcNow.ToString('o'); Write-State $s; Write-Output "ACCEPTED $TaskId" }
 function Reclaim([string]$TaskId) { $s=Read-State $TaskId; if ($s.status -ne 'accepted') { Fail 'task must be accepted before reclaim' }; $s.status='reclaimed'; $s.reclaimed_at=[DateTime]::UtcNow.ToString('o'); Write-State $s; Write-Output "RECLAIMED $TaskId" }
 function Cleanup([string]$TaskId) { $s=Read-State $TaskId; if ($s.status -ne 'reclaimed') { Fail 'task must be reclaimed before cleanup' }; $dirty=Git @('-C',$s.worktree,'status','--porcelain'); if ($dirty) { Fail 'worktree is not clean' }; if ([IO.Path]::GetFullPath($s.worktree) -ieq [IO.Path]::GetFullPath($ProjectRoot)) { Fail 'cannot remove main worktree' }; Invoke-Native git.exe @('worktree','remove',$s.worktree); $s.status='cleaned'; Write-State $s; Write-Output "CLEANED $TaskId" }
-switch ($Command.ToLowerInvariant()) { 'setup' {Setup}; 'doctor' {Doctor}; 'validate' {Validate $Arg1}; 'start' {Start-Task $Arg1}; 'sync' {Sync-Task $Arg1}; 'research' {Research $Arg1 $Arg2 $Arg3}; 'status' {Status $Arg1}; 'watch' {Status $Arg1}; 'resume' {Resume-Task $Arg1}; 'accept' {Accept $Arg1}; 'reclaim' {Reclaim $Arg1}; 'cleanup' {Cleanup $Arg1}; default { Fail "unknown command: $Command" } }
+switch ($Command.ToLowerInvariant()) { 'setup' {Setup}; 'codex-setup' {Setup-Codex}; 'doctor' {Doctor}; 'publish' {Publish $Arg1}; 'validate' {Validate $Arg1}; 'start' {Start-Task $Arg1}; 'sync' {Sync-Task $Arg1}; 'research' {Research $Arg1 $Arg2 $Arg3}; 'status' {Status $Arg1}; 'watch' {Status $Arg1}; 'resume' {Resume-Task $Arg1}; 'accept' {Accept $Arg1}; 'reclaim' {Reclaim $Arg1}; 'cleanup' {Cleanup $Arg1}; default { Fail "unknown command: $Command" } }

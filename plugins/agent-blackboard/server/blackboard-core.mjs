@@ -232,6 +232,33 @@ export async function createTask(projectRoot, input) {
   return task;
 }
 
+export async function publishTask(projectRoot, input) {
+  const root = await ensureStateRoot(projectRoot);
+  const taskId = ensureTaskId(input?.task_id);
+  const name = ensureLineField(input?.name, "name", 240, true);
+  const description = ensureDescription(input?.description);
+  const path = taskPath(root, taskId);
+  return withLock(`${path}.lock`, async () => {
+    if (!existsSync(path)) {
+      const now = isoNow();
+      const task = { version: 1, task_id: taskId, name, description, status: "active", created_at: now, updated_at: now, revisions: [] };
+      await writeJsonAtomic(path, task);
+      return { action: "created", task };
+    }
+    const task = await loadTask(root, taskId);
+    if (task.status !== "active") fail(`only an active task can be republished: ${taskId}`);
+    const changedAt = isoNow();
+    task.revisions = [...(task.revisions || [])];
+    if (name !== task.name) task.revisions.push({ field: "name", old: task.name, new: name, at: changedAt });
+    if (description !== task.description) task.revisions.push({ field: "description", old: task.description, new: description, at: changedAt });
+    task.name = name;
+    task.description = description;
+    task.updated_at = changedAt;
+    await writeJsonAtomic(path, task);
+    return { action: "updated", task };
+  });
+}
+
 export async function updateTask(projectRoot, taskId, input) {
   const root = await ensureStateRoot(projectRoot);
   ensureTaskId(taskId);

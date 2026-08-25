@@ -483,11 +483,13 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     const missingBlackboard = run("start", [contract], { PI_TEAM_TEST_LOG: launchLog });
     assert.notEqual(missingBlackboard.status, 0, "start must refuse a task that Lead has not created on the Blackboard");
     assert.match(missingBlackboard.stderr, /Lead must create Blackboard task/);
-    await mkdir(join(commonDir, "harness-blackboard", "v1"), { recursive: true });
-    await writeFile(blackboardStateFile, JSON.stringify({
-      version: 1, task_id: taskId, name: "Runtime identity test", description: "Current Lead scope", status: "active",
-      created_at: new Date().toISOString(), updated_at: new Date().toISOString(), revisions: [],
-    }));
+    const publish = run("publish", [contract]);
+    assert.equal(publish.status, 0, publish.stderr || publish.stdout);
+    assert.match(publish.stdout, /PUBLISHED ENV-001/);
+    const publishedTask = parseJsonText(await readFile(blackboardStateFile, "utf8"));
+    assert.equal(publishedTask.name, "Runtime identity test");
+    assert.equal(publishedTask.description, "Exercise all role launch paths.");
+    assert.equal(publishedTask.status, "active");
     const start = run("start", [contract], { PI_TEAM_TEST_LOG: launchLog });
     assert.equal(start.status, 0, start.stderr || start.stdout);
     const startRecords = await waitForRecords(2);
@@ -602,8 +604,14 @@ test("new Lead sessions receive the explicit Blackboard then Pi Team launch runb
   const agents = await readFile(join(REPO, "AGENTS.md"), "utf8");
   assert.match(agents, /<lead-pi-team-runbook>/);
   assert.match(agents, /creating or updating a Blackboard lane does not start an Agent/);
+  assert.match(agents, /pi-team\.cmd publish <contract-path>/);
+  assert.match(agents, /pi-team\.cmd codex-setup/);
   assert.match(agents, /pi-team\.cmd start <contract-path>/);
   assert.match(agents, /Do not launch roles with\s+`runs\.run`, `--agent`, WSL, Git Bash/);
   const readme = await readFile(join(REPO, "README.md"), "utf8");
-  assert.match(readme, /Creating a Blackboard task only publishes the Lead-owned scope; it does not\s+start Pi roles/);
+  assert.match(readme, /Publishing a Blackboard task only publishes the Lead-owned scope; it does not\s+start Pi roles/);
+  assert.match(readme, /pi-team\.cmd publish/);
+  assert.match(readme, /pi-team\.cmd codex-setup/);
+  const leadSkill = await readFile(join(REPO, "plugins/agent-blackboard/skills/pi-team-lead/SKILL.md"), "utf8");
+  assert.match(leadSkill, /pi-team\.cmd codex-setup/);
 });

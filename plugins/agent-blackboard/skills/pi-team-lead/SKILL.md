@@ -38,8 +38,9 @@ authorization, completion evidence, or a communication channel.
 
 ## Publish and explicitly start
 
-1. Use `blackboard_create_task` to create the matching active task. Use
-   `blackboard_update_task` when Lead-owned scope changes.
+1. Run `<project-root>\pi-team.cmd publish <absolute-contract-path>`. This is
+   the stable, canonical publication path: it creates the matching active task
+   or aligns its Lead-owned name and description with the current contract.
 2. Run `<project-root>\pi-team.cmd validate <absolute-contract-path>`.
 3. Run `<project-root>\pi-team.cmd start <absolute-contract-path>` explicitly.
    This manual command starts the persistent Executor-Reviewer pair; publishing
@@ -48,10 +49,15 @@ authorization, completion evidence, or a communication channel.
    activity. Compare each activity with the current task description. Use
    `report_to_lead`, the supervisor path, or paired intercom for correction.
 
-If the Agent Blackboard MCP tools are unavailable because the plugin was
-installed after this session started, stop before delegation and tell the user
-to open a new session. Never simulate the MCP tools by editing common-dir state
-directly.
+If the Agent Blackboard MCP tools are unavailable, publication and launch may
+still proceed through the canonical `pi-team.cmd` commands. Tell the user that
+the live task-lane UI and update reminders are unavailable in this session,
+inspect `/mcp`, and use the MCP server's Restart control when available. Never
+simulate an MCP call by editing common-dir state directly. For this local stdio
+server, `/mcp` may show authentication as unsupported; that is expected and is
+not a connection error. If the server is absent rather than merely stopped, run
+`<project-root>\pi-team.cmd codex-setup` once to register its stable user-level
+entry, then restart the Codex session.
 
 For a bounded question, write the Researcher question file and run:
 

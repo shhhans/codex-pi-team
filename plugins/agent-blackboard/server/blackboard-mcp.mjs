@@ -35,20 +35,25 @@ const tools = [
     name: "blackboard_snapshot",
     description: "Read current task lanes and latest Agent activity.",
     _meta: { "ui/resourceUri": "ui://agent-blackboard/blackboard.html" },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: { type: "object", required: ["project_root"], properties: { project_root: { type: "string" }, include_archived: { type: "boolean" } }, additionalProperties: false },
   },
   {
     name: "blackboard_watch",
     description: "Wait up to 55 seconds for new Agent events and return an updated cursor and task snapshot.",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: { type: "object", required: ["project_root"], properties: { project_root: { type: "string" }, cursor: { type: "string" }, timeout_ms: { type: "integer", minimum: 0, maximum: 55000 }, include_archived: { type: "boolean" } }, additionalProperties: false },
   },
   {
     name: "blackboard_render",
     description: "Render the current Agent Blackboard task lanes as inline/PiP-compatible HTML.",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: { type: "object", required: ["project_root"], properties: { project_root: { type: "string" }, include_archived: { type: "boolean" } }, additionalProperties: false },
   },
 ];
 const uiResource = { uri: "ui://agent-blackboard/blackboard.html", name: "Agent Blackboard", description: "Task-lane Agent Blackboard UI", mimeType: "text/html;profile=mcp-app" };
+const latestProtocolVersion = "2025-06-18";
+const supportedProtocolVersions = new Set([latestProtocolVersion, "2024-11-05"]);
 
 function result(value) {
   return { content: [{ type: "text", text: JSON.stringify(value) }], structuredContent: value };
@@ -68,9 +73,17 @@ async function callTool(name, args = {}) {
 
 async function handle(message) {
   if (message.method === "initialize") {
-    return { jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2024-11-05", capabilities: { tools: {}, resources: {} }, serverInfo: { name: "agent-blackboard", version: "0.1.0" } } };
+    const requested = message.params?.protocolVersion;
+    const protocolVersion = supportedProtocolVersions.has(requested) ? requested : latestProtocolVersion;
+    return { jsonrpc: "2.0", id: message.id, result: {
+      protocolVersion,
+      capabilities: { tools: { listChanged: false }, resources: { subscribe: false, listChanged: false } },
+      serverInfo: { name: "agent-blackboard", version: "0.1.0" },
+      instructions: "Use Agent Blackboard as a Lead-owned observability plane. Agent events are not authorization or completion proof.",
+    } };
   }
   if (message.method === "notifications/initialized") return null;
+  if (message.method === "ping") return { jsonrpc: "2.0", id: message.id, result: {} };
   if (message.method === "tools/list") return { jsonrpc: "2.0", id: message.id, result: { tools } };
   if (message.method === "resources/list") return { jsonrpc: "2.0", id: message.id, result: { resources: [uiResource] } };
   if (message.method === "resources/read") {
@@ -82,16 +95,17 @@ async function handle(message) {
     try { return { jsonrpc: "2.0", id: message.id, result: result(await callTool(message.params?.name, message.params?.arguments || {})) }; }
     catch (error) { return { jsonrpc: "2.0", id: message.id, result: { isError: true, content: [{ type: "text", text: error.message }] } }; }
   }
+  if (message.id === undefined) return null;
   return { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: `method not found: ${message.method}` } };
 }
 
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-input.on("line", async (line) => {
-  if (!line.trim()) return;
+for await (const line of input) {
+  if (!line.trim()) continue;
   try {
     const response = await handle(JSON.parse(line));
     if (response) process.stdout.write(`${JSON.stringify(response)}\n`);
   } catch (error) {
     process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: error.message } })}\n`);
   }
-});
+}

@@ -22,6 +22,17 @@ Check the environment without changing it:
 .\pi-team.cmd doctor
 ```
 
+Register the Blackboard MCP as a stable user-level Codex stdio server once per
+machine (the plugin continues to provide its skills and UI):
+
+```powershell
+.\pi-team.cmd codex-setup
+```
+
+This command uses the supported `codex mcp add` interface and resolves the
+server's absolute path from this checkout. It can be rerun after moving the
+repository.
+
 `start`, `research`, and `resume` fail before launching a Pi session when the
 shared packages are missing, have the wrong version, or Web Access is globally
 autoloaded.
@@ -44,19 +55,29 @@ the installed cache must not depend on a sibling `.pi/blackboard` path.
 The plugin also supplies `$pi-team-lead`, which carries this complete launch
 and supervision workflow into Codex sessions opened above the repository.
 
-Creating a Blackboard task only publishes the Lead-owned scope; it does not
-start Pi roles. After creating the lane, the Lead explicitly launches the pair:
+Publishing a Blackboard task only publishes the Lead-owned scope; it does not
+start Pi roles. The Lead uses the stable entrypoint for publication and then
+explicitly launches the pair:
 
 ```powershell
+.\pi-team.cmd publish .\plans\<task-id>-task.md
 .\pi-team.cmd validate .\plans\<task-id>-task.md
 .\pi-team.cmd start .\plans\<task-id>-task.md
 ```
 
-`start` checks that the matching Blackboard task already exists and is active.
+`publish` creates the matching active task or aligns its Lead-owned name and
+description with the current contract. `start` checks that the matching
+Blackboard task already exists and is active.
 It snapshots the formal contract under the shared Pi Team state root, binds
 stable Pi session IDs, disables ambient extensions and skills, and loads only
 the role's explicit tools, private skill, and extensions. The Lead then watches
 Blackboard events; Agent events never replace review or acceptance.
+
+The plugin's MCP server is local stdio and has no authentication flow, so
+`/mcp` may label authentication as unsupported. That label is expected. A
+connected server must still become ready and expose its tools; if it does not,
+the stable `publish`, `validate`, and `start` commands remain available while
+live watching and the task-lane UI are unavailable.
 
 ## Runtime identity and state
 

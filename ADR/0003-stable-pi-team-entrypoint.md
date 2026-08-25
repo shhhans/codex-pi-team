@@ -9,6 +9,10 @@ worktrees, lifecycle state, and Windows Terminal process arguments. It starts
 the configured Pi role directly; it does not invoke `pi-subagents`,
 `runs.run`, Scout, or a second planner.
 
+`codex-setup` registers the packaged Blackboard server through the supported
+`codex mcp add` command as a user-level stdio MCP entry. This avoids relying on
+plugin lazy-loading order, and can be rerun if the repository moves.
+
 The active model is fixed in `.pi/settings.json` to `minimax-cn / MiniMax-M3`,
 and Pi's shell is fixed to Windows PowerShell. Executor and Reviewer use one
 task worktree and persistent session IDs; Researcher is a temporary tab in the
@@ -32,10 +36,13 @@ a role session. The first Executor/Reviewer launch binds the persisted identity
 with `--session-id`; later launches select it with `--session`.
 
 Role runtime files are loaded from the canonical project root, not from the
-task branch snapshot. Before work begins, `start` requires the Lead-owned
-Blackboard task to exist and be active, then freezes the formal task contract
+task branch snapshot. `publish` validates the formal task contract and uses the
+packaged Blackboard core to create or align its active Lead-owned task without
+depending on Codex MCP tool discovery. Before work begins, `start` requires the
+Lead-owned Blackboard task to exist and be active, then freezes the formal task
+contract
 under `<git-common-dir>/pi-team/v1/contracts/` and injects that exact path into
-both roles. Creating a Blackboard task remains separate from manually invoking
+both roles. Publishing a Blackboard task remains separate from manually invoking
 `pi-team.cmd start`; neither action implies the other.
 
 Because a Git worktree's root `.git` can be a pointer file, the launcher must

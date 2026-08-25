@@ -3,7 +3,9 @@
     "agent-blackboard": {
       "type": "stdio",
       "command": "node",
-      "args": ["${PLUGIN_ROOT}/server/blackboard-mcp.mjs"]
+      "args": ["${PLUGIN_ROOT}/server/blackboard-mcp.mjs"],
+      "startup_timeout_sec": 15,
+      "required": true
     }
   }
 }

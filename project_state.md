@@ -46,6 +46,13 @@ tasks remain available through an explicit archived snapshot.
 The plugin's `pi-team-lead` skill carries the full publish, explicit launch,
 watch, acceptance, reclamation, and archival workflow into new Codex sessions,
 including sessions whose working directory is above this repository.
+Formal publication uses `pi-team.cmd publish <contract-path>`, which validates
+the contract and calls the plugin's canonical Blackboard core even when MCP
+tool discovery is unavailable. MCP readiness is therefore required for live
+watching and UI reminders, but not for publishing and launching the team.
+`pi-team.cmd codex-setup` reproducibly registers the same server as a stable
+user-level stdio MCP entry through the Codex CLI; the current machine has been
+registered this way.
 
 The legacy role files for `architect`, `critic`, and `engineer`
 are present in `.pi/legacy/agents/` but are not loaded.
@@ -127,7 +134,7 @@ MCP tools are **not** wired to the active Researcher.
 - `tests/run-tests.ps1` runs all three deterministic test files.
 - `node --test tests/team-contract.test.mjs tests/communication-policy.test.mjs tests/blackboard.test.mjs`
   is the cross-shell entry point.
-- Current result: 36/36 deterministic tests pass; canonical plugin and skill
+- Current result: 37/37 deterministic tests pass; canonical plugin and skill
   validation, Node syntax checks, `git diff --check`, and a zero-model-call real
   Pi RPC role-load preflight pass.
 - Skill frontmatter is validated by `quick_validate.py` for all

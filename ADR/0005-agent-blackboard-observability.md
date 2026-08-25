@@ -30,6 +30,15 @@ requests PiP when supported and falls back inline; closing the UI does not
 disable the Lead watcher. Archived tasks remain queryable with
 `include_archived=true` and are hidden from the default snapshot.
 
+Formal task publication also has a canonical non-MCP adapter:
+`pi-team.cmd publish <contract-path>` validates the Lead-owned contract and
+calls the same packaged Blackboard core. This prevents MCP discovery or UI
+readiness from blocking delegation without creating a second state format or
+permitting direct shared-state edits. MCP remains responsible for interactive
+watching, reminders, and the task-lane UI. The local stdio server has no
+authentication flow; an “authentication unsupported” label is expected and is
+separate from connection readiness.
+
 Executor and Reviewer remain persistent through review/fix and re-review until
 Lead acceptance and reclamation. The Blackboard does not introduce a stop
 handoff or infer activity from file operations or model thoughts.

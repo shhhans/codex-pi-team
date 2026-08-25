@@ -45,8 +45,9 @@ For every delegated Pi Team task, Codex Lead performs these steps explicitly;
 creating or updating a Blackboard lane does not start an Agent:
 
 1. Write the Lead-owned Markdown task contract with its single JSON block.
-2. Create the matching active Blackboard task with the same Lead-assigned task
-   ID and current scope. Keep its name and description current.
+2. Run `pi-team.cmd publish <contract-path>` to create the matching active
+   Blackboard task, or align its Lead-owned name and description with the
+   current formal contract.
 3. Run `pi-team.cmd validate <contract-path>` and then manually run
    `pi-team.cmd start <contract-path>`. `start` must refuse to launch when the
    Blackboard task is missing or not active.
@@ -60,4 +61,12 @@ creating or updating a Blackboard lane does not start an Agent:
 Use only the project-local Windows entrypoint. Do not launch roles with
 `runs.run`, `--agent`, WSL, Git Bash, or an ambient Pi extension set. Executor
 and Reviewer remain paired and persistent until Lead acceptance.
+
+The local Blackboard MCP uses stdio and requires no login. `/mcp` reporting
+authentication as unsupported is expected; connection/readiness and tool
+availability are separate. If MCP is unavailable, the canonical `publish`,
+`validate`, and `start` commands remain usable, while live watching and the
+task-lane UI are degraded.
+If the server is absent, run `pi-team.cmd codex-setup` once and restart the
+Codex session; this uses the supported user-level MCP registration command.
 </lead-pi-team-runbook>
