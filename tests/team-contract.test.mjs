@@ -424,6 +424,7 @@ test("role launchers inject common-dir identity and isolate Executor/Reviewer en
   const contractSnapshot = join(stateRoot, "contracts", `${taskId}.md`);
   const blackboardStateFile = join(commonDir, "harness-blackboard", "v1", `${taskId}.json`);
   const eventFiles = [join(stateRoot, `${taskId}-executor.jsonl`), join(stateRoot, `${taskId}-reviewer.jsonl`)];
+  const runtimeFiles = ["executor", "reviewer", "researcher"].map((role) => join(stateRoot, `${taskId}-${role}-runtime.json`));
 
   const run = (command, args = [], extraEnv = {}) => spawnSync("powershell.exe", [
     "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, command, ...args,
@@ -452,6 +453,12 @@ test("role launchers inject common-dir identity and isolate Executor/Reviewer en
       await writeFile(join(packageDir, "package.json"), JSON.stringify({ name, version }));
     }
     await writeFile(fakePiScript, String.raw`param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)
+ $encodedIndex = [Array]::IndexOf($Args, '-EncodedCommand')
+if ($encodedIndex -ge 0) {
+  if ($encodedIndex -ge ($Args.Count - 1)) { Write-Error 'fake Windows Terminal requires an encoded bootstrap'; exit 2 }
+  & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand $Args[$encodedIndex + 1]
+  exit $LASTEXITCODE
+}
 $record=[ordered]@{
   task_id=$env:PI_TEAM_TASK_ID
   role=$env:PI_TEAM_ROLE
@@ -584,6 +591,7 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     await rm(contractSnapshot, { force: true });
     await rm(blackboardStateFile, { force: true });
     for (const path of eventFiles) await rm(path, { force: true });
+    for (const path of runtimeFiles) await rm(path, { force: true });
     // Start-Process is intentionally asynchronous; let fake role processes
     // release their worktree working directories before Git removes it.
     await new Promise((resolve) => setTimeout(resolve, 750));

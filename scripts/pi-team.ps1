@@ -301,23 +301,14 @@ function Start-RoleProcess([string]$Executable,[string[]]$ArgumentList,[string]$
     $paneDirectory = [string]$ArgumentList[1]
     $roleExecutable = [string]$ArgumentList[2]
     $roleArguments = @($ArgumentList | Select-Object -Skip 3)
-    $encode = { param([string]$Value) [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Value)) }
-    $scriptLines = @('$decode = { param([string]$value) [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($value)) }')
-    foreach ($name in $identity.Keys) {
-      $encodedValue = & $encode ([string]$identity[$name])
-      $scriptLines += "Set-Item -Path 'Env:$name' -Value (& `$decode '$encodedValue')"
-    }
-    $encodedDirectory = & $encode $paneDirectory
-    $scriptLines += "Set-Location -LiteralPath (& `$decode '$encodedDirectory')"
-    $scriptLines += '$roleArguments = [System.Collections.Generic.List[string]]::new()'
-    foreach ($arg in $roleArguments) {
-      $encodedArgument = & $encode ([string]$arg)
-      $scriptLines += "`$null = `$roleArguments.Add((& `$decode '$encodedArgument'))"
-    }
-    $encodedExecutable = & $encode $roleExecutable
-    $scriptLines += "& (& `$decode '$encodedExecutable') @roleArguments"
-    $scriptLines += 'exit $LASTEXITCODE'
-    $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes(($scriptLines -join "`n")))
+    $payload = [ordered]@{identity=$identity;directory=$paneDirectory;executable=$roleExecutable;arguments=@($roleArguments)} | ConvertTo-Json -Compress -Depth 5
+    $payloadBytes = [Text.Encoding]::UTF8.GetBytes($payload)
+    $payloadStream = New-Object IO.MemoryStream
+    $gzip = New-Object IO.Compression.GzipStream($payloadStream,[IO.Compression.CompressionMode]::Compress,$true)
+    $gzip.Write($payloadBytes,0,$payloadBytes.Length); $gzip.Dispose()
+    $compressedPayload = [Convert]::ToBase64String($payloadStream.ToArray()); $payloadStream.Dispose()
+    $bootstrap = "`$input=[Convert]::FromBase64String('$compressedPayload');`$source=New-Object IO.MemoryStream(,`$input);`$gzip=New-Object IO.Compression.GzipStream(`$source,[IO.Compression.CompressionMode]::Decompress);`$reader=New-Object IO.StreamReader(`$gzip,[Text.Encoding]::UTF8);`$data=`$reader.ReadToEnd()|ConvertFrom-Json;`$reader.Dispose();`$gzip.Dispose();`$source.Dispose();`$data.identity.psobject.Properties|ForEach-Object { Set-Item -Path ('Env:'+`$_.Name) -Value ([string]`$_.Value) };Set-Location -LiteralPath `$data.directory;& ([string]`$data.executable) @([string[]]`$data.arguments);exit `$LASTEXITCODE"
+    $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
     $terminalArguments = @('-d',$paneDirectory,'powershell.exe','-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encodedScript)
     $commandLine = ($terminalArguments | ForEach-Object { Quote-WindowsArgument ([string]$_) }) -join ' '
     return Start-Process $Executable -WorkingDirectory $WorkingDirectory -ArgumentList $commandLine -WindowStyle Normal -PassThru
