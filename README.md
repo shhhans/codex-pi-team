@@ -73,6 +73,23 @@ stable Pi session IDs, disables ambient extensions and skills, and loads only
 the role's explicit tools, private skill, and extensions. The Lead then watches
 Blackboard events; Agent events never replace review or acceptance.
 
+## Formal contract and closure
+
+New task contracts use JSON `version: 2`. Each `done_criteria` entry has a
+stable `C-###` ID, owner role, description, and worktree-relative artifact
+path. `delegations` name the assigned role, stable delegation ID, objective,
+artifact path, and required capabilities. The launcher validates those
+capabilities before launch; Researcher delegations needing shell or profiler
+access are rejected before a Researcher is started.
+
+`accept <task-id> <acceptance-file>` requires a Reviewer
+`ready_for_acceptance` event and one evidence entry for every frozen criterion
+ID, including its required artifacts. A task that cannot meet every criterion
+uses `close-incomplete <task-id> <closure-file>`; it records a reason and the
+missing criterion IDs, synchronizes the Blackboard as `incomplete`, and may
+then be reclaimed. `reconcile` is limited to legacy state and requires an
+explicit `accepted` or `incomplete` outcome; it never infers historic success.
+
 The plugin's MCP server is local stdio and has no authentication flow, so
 `/mcp` may label authentication as unsupported. That label is expected. A
 connected server must still become ready and expose its tools; if it does not,

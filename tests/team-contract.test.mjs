@@ -5,6 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { appendRoleEvent } from "../.pi/communication/role-events.mjs";
 
 const REPO = process.cwd();
 const SKILL_NAMES = ["answer-research-question", "execute-delegated-task", "review-delegated-task"];
@@ -460,12 +461,14 @@ $record=[ordered]@{
   scope_id=$env:PI_TEAM_SCOPE_ID
   args=@($Args)
 }
+$runtime=[ordered]@{version=1;task_id=$env:PI_TEAM_TASK_ID;role=$env:PI_TEAM_ROLE;agent_id=$env:PI_TEAM_AGENT_ID;launch_id=$env:PI_TEAM_LAUNCH_ID;intercom_id=$env:PI_INTERCOM_STABLE_ID;runtime_pid=$PID;parent_pid=0;ready_at=[DateTime]::UtcNow.ToString('o');worktree=$env:PI_TEAM_WORKTREE}
+$runtime | ConvertTo-Json | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $env:PI_TEAM_STATE_ROOT "$($env:PI_TEAM_TASK_ID)-$($env:PI_TEAM_ROLE)-runtime.json")
 $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $env:PI_TEAM_TEST_LOG
 `);
     await writeFile(fakePi, `@echo off\r\npowershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-pi.ps1" %*\r\n`);
     await writeFile(questionFile, "Determine the runtime identity contract.\n");
     await writeFile(contract, `# Runtime test\n\n\`\`\`json\n${JSON.stringify({
-      version: 1,
+      version: 2,
       task_id: taskId,
       name: "Runtime identity test",
       description: "Exercise all role launch paths.",
@@ -474,7 +477,12 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       worktree,
       in_scope: ["runtime identity"],
       out_of_scope: ["production changes"],
-      done_criteria: ["fake processes receive identity"],
+      done_criteria: [{ id: "C-001", description: "fake processes receive identity", owner: "executor", artifacts: ["implementation_notes/ENV-001.md"] }],
+      delegations: [
+        { id: "EXECUTOR-001", role: "executor", objective: "Exercise the launcher.", artifact_path: "implementation_notes/ENV-001.md", required_capabilities: ["bash", "write"] },
+        { id: "REVIEWER-001", role: "reviewer", objective: "Review the launcher.", artifact_path: "failures/ENV-001-review.md", required_capabilities: ["read", "write"] },
+        { id: "RESEARCH-001", role: "researcher", objective: "Research the runtime identity contract.", artifact_path: "research/ENV-001.md", required_capabilities: ["web_search", "write"] },
+      ],
       constraints: ["use the common Git directory"],
     }, null, 2)}\n\`\`\`\n`);
 
@@ -524,14 +532,14 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
 
     await writeFile(stateFile, JSON.stringify({
       version: 1, task_id: taskId, name: "Runtime identity test", description: "Exercise all role launch paths.", status: "active",
-      worktree, scope_id: scopeId,
+      worktree, contract_path: contractSnapshot, scope_id: scopeId,
       sessions: {
         executor: { agent_id: executorAgentId, session_id: executorSessionId, role: "executor" },
         reviewer: { agent_id: reviewerAgentId, session_id: reviewerSessionId, role: "reviewer" },
       },
     }));
     await rm(launchLog, { force: true });
-    const research = run("research", [taskId, "Q-001", questionFile], { PI_TEAM_TEST_LOG: launchLog });
+    const research = run("research", [taskId, "RESEARCH-001", questionFile], { PI_TEAM_TEST_LOG: launchLog });
     assert.equal(research.status, 0, research.stderr || research.stdout);
     const researchRecords = await waitForRecords(1);
     assert.equal(researchRecords.length, 1);
@@ -581,6 +589,107 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     await new Promise((resolve) => setTimeout(resolve, 750));
     spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: REPO, encoding: "utf8" });
     spawnSync("git", ["branch", "-D", branch], { cwd: REPO, encoding: "utf8" });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("v2 contracts bind stable criteria and reject Researcher work that needs unavailable capabilities", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-team-v2-contract-"));
+  const contract = join(root, "contract.md");
+  const script = join(REPO, "scripts/pi-team.ps1");
+  const base = {
+    version: 2,
+    task_id: "CAP-001",
+    name: "Capability preflight",
+    description: "Reject a Researcher delegation that requires an unavailable capability.",
+    base_ref: "master",
+    branch: `pi-team/test-capabilities-${process.pid}`,
+    worktree: join(root, "worktree"),
+    in_scope: ["contract validation"],
+    out_of_scope: ["live performance measurement"],
+    done_criteria: [{ id: "C-001", description: "The contract validates role capabilities.", owner: "executor", artifacts: ["implementation_notes/CAP-001.md"] }],
+    delegations: [
+      { id: "EXECUTOR-001", role: "executor", objective: "Validate the contract.", artifact_path: "implementation_notes/CAP-001.md", required_capabilities: ["bash", "write"] },
+      { id: "REVIEWER-001", role: "reviewer", objective: "Review the contract.", artifact_path: "failures/CAP-001-review.md", required_capabilities: ["read", "write"] },
+      { id: "RESEARCH-001", role: "researcher", objective: "Collect web evidence.", artifact_path: "research/CAP-001.md", required_capabilities: ["web_search", "write"] },
+    ],
+    constraints: ["no live profiler access for Researcher"],
+  };
+  const run = () => spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "validate", contract], { cwd: root, encoding: "utf8" });
+  try {
+    await writeFile(contract, `# Contract\n\n\`\`\`json\n${JSON.stringify(base, null, 2)}\n\`\`\`\n`);
+    const valid = run();
+    assert.equal(valid.status, 0, valid.stderr || valid.stdout);
+    assert.match(valid.stdout, /VALID CAP-001/);
+
+    base.delegations[2].required_capabilities = ["shell", "profiler"];
+    await writeFile(contract, `# Invalid contract\n\n\`\`\`json\n${JSON.stringify(base, null, 2)}\n\`\`\`\n`);
+    const rejected = run();
+    assert.notEqual(rejected.status, 0, "Researcher must not be launched for a shell/profiler delegation");
+    assert.match(rejected.stderr, /unavailable to role researcher/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("acceptance requires each frozen criterion ID and synchronizes the Blackboard outcome", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-team-acceptance-"));
+  const worktree = join(root, "worktree");
+  const contract = join(root, "contract.md");
+  const evidence = join(root, "acceptance.json");
+  const script = join(REPO, "scripts/pi-team.ps1");
+  const taskId = "ACC-001";
+  const commonDir = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: REPO, encoding: "utf8" }).stdout.trim().replaceAll("/", "\\");
+  const stateRoot = join(commonDir, "pi-team", "v1");
+  const stateFile = join(stateRoot, `${taskId}.json`);
+  const contractSnapshot = join(stateRoot, "contracts", `${taskId}.md`);
+  const reviewerEvents = join(stateRoot, `${taskId}-reviewer.jsonl`);
+  const blackboardFile = join(commonDir, "harness-blackboard", "v1", `${taskId}.json`);
+  const value = {
+    version: 2, task_id: taskId, name: "Strict acceptance", description: "Validate criteria IDs.", base_ref: "master", branch: `pi-team/test-acceptance-${process.pid}`, worktree,
+    in_scope: ["acceptance"], out_of_scope: ["implementation"],
+    done_criteria: [{ id: "C-001", description: "Implementation evidence exists.", owner: "executor", artifacts: ["implementation_notes/ACC-001.md"] }],
+    delegations: [
+      { id: "EXECUTOR-001", role: "executor", objective: "Produce evidence.", artifact_path: "implementation_notes/ACC-001.md", required_capabilities: ["write"] },
+      { id: "REVIEWER-001", role: "reviewer", objective: "Review evidence.", artifact_path: "failures/ACC-001-review.md", required_capabilities: ["read"] },
+    ], constraints: ["Lead acceptance only"],
+  };
+  const run = (command, args = []) => spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, command, ...args], { cwd: REPO, encoding: "utf8" });
+  try {
+    await mkdir(join(worktree, "implementation_notes"), { recursive: true });
+    await writeFile(join(worktree, "implementation_notes", "ACC-001.md"), "evidence\n");
+    await writeFile(contract, `# Acceptance\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n`);
+    assert.equal(run("publish", [contract]).status, 0);
+    await mkdir(join(stateRoot, "contracts"), { recursive: true });
+    await writeFile(contractSnapshot, await readFile(contract));
+    await writeFile(stateFile, JSON.stringify({ version: 2, task_id: taskId, execution_status: "active", outcome: "pending", worktree, contract_path: contractSnapshot, sessions: {} }));
+    await writeFile(reviewerEvents, `${JSON.stringify({ state: "ready_for_acceptance" })}\n`);
+
+    await writeFile(evidence, JSON.stringify({ outcome: "accepted", criteria: [{ criterion_id: "C-999", artifacts: ["implementation_notes/ACC-001.md"] }] }));
+    const rejected = run("accept", [taskId, evidence]);
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /unknown criterion/);
+    assert.equal(parseJsonText(await readFile(stateFile, "utf8")).outcome, "pending");
+
+    await writeFile(evidence, JSON.stringify({ outcome: "accepted", criteria: [{ criterion_id: "C-001", artifacts: ["implementation_notes/ACC-001.md"] }] }));
+    const accepted = run("accept", [taskId, evidence]);
+    assert.equal(accepted.status, 0, accepted.stderr || accepted.stdout);
+    assert.equal(parseJsonText(await readFile(stateFile, "utf8")).outcome, "accepted");
+    assert.equal(parseJsonText(await readFile(blackboardFile, "utf8")).outcome, "accepted");
+  } finally {
+    for (const path of [stateFile, contractSnapshot, reviewerEvents, blackboardFile]) await rm(path, { force: true });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("report_to_lead event storage continues sequences across concurrent appends", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-team-role-events-"));
+  try {
+    const base = { task_id: "EVT-001", role: "reviewer", agent_id: "reviewer-test", worktree: root, state: "reviewing", activity: "checking" };
+    await appendRoleEvent(root, base);
+    const concurrent = await Promise.all(Array.from({ length: 8 }, (_, index) => appendRoleEvent(root, { ...base, activity: `checking ${index}` })));
+    assert.deepEqual(concurrent.map((event) => event.sequence).sort((a, b) => a - b), [2, 3, 4, 5, 6, 7, 8, 9]);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

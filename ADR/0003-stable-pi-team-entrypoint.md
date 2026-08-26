@@ -54,6 +54,9 @@ specified by ADR 0004. `start`, `research`, and `resume` verify that shared
 installation before launching; `doctor` reports the same state without making
 changes. Task worktrees never install project-local Pi packages.
 
-Only Reviewer `ready_for_acceptance` permits acceptance. Reclamation follows
-acceptance, and cleanup additionally requires a clean worktree; cleanup never
-stashes, force-removes, deletes branches, or touches the main worktree.
+Only Reviewer `ready_for_acceptance` permits acceptance. Acceptance evidence
+must cover every frozen v2 criterion ID and its required artifacts. A partial
+task is closed explicitly as `incomplete`, not accepted; legacy state is
+reconciled only with a Lead-selected outcome. Reclamation follows either
+terminal outcome, and cleanup additionally requires a clean worktree; cleanup
+never stashes, force-removes, deletes branches, or touches the main worktree.

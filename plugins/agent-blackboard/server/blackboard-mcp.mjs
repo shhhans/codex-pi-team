@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 import {
   acceptTask,
   archiveTask,
+  closeIncompleteTask,
+  reconcileIncompleteTask,
+  reconcileTask,
   createTask,
   renderSnapshotHtml,
   snapshot,
@@ -27,8 +30,23 @@ const tools = [
     inputSchema: { type: "object", required: ["project_root", "task_id"], properties: { project_root: { type: "string" }, task_id: { type: "string" } }, additionalProperties: false },
   },
   {
+    name: "blackboard_close_incomplete_task",
+    description: "Close an active Lead-owned task as incomplete while preserving its missing completion criteria.",
+    inputSchema: { type: "object", required: ["project_root", "task_id", "reason", "missing_done_criteria"], properties: { project_root: { type: "string" }, task_id: { type: "string" }, reason: { type: "string" }, missing_done_criteria: { type: "array", items: { type: "string" }, minItems: 1 } }, additionalProperties: false },
+  },
+  {
+    name: "blackboard_reconcile_incomplete_task",
+    description: "Correct an accepted or archived legacy task to an incomplete outcome with an explicit reason.",
+    inputSchema: { type: "object", required: ["project_root", "task_id", "reason", "missing_done_criteria"], properties: { project_root: { type: "string" }, task_id: { type: "string" }, reason: { type: "string" }, missing_done_criteria: { type: "array", items: { type: "string" }, minItems: 1 } }, additionalProperties: false },
+  },
+  {
+    name: "blackboard_reconcile_task",
+    description: "Explicitly reconcile a legacy task to an accepted or incomplete outcome without inferring history.",
+    inputSchema: { type: "object", required: ["project_root", "task_id", "outcome"], properties: { project_root: { type: "string" }, task_id: { type: "string" }, outcome: { type: "string", enum: ["accepted", "incomplete"] }, reason: { type: "string" }, missing_done_criteria: { type: "array", items: { type: "string" }, minItems: 1 } }, additionalProperties: false },
+  },
+  {
     name: "blackboard_archive_task",
-    description: "Archive an accepted task without deleting its events or revisions.",
+    description: "Archive an accepted or incomplete task without deleting its events or revisions.",
     inputSchema: { type: "object", required: ["project_root", "task_id"], properties: { project_root: { type: "string" }, task_id: { type: "string" } }, additionalProperties: false },
   },
   {
@@ -64,6 +82,9 @@ async function callTool(name, args = {}) {
   if (name === "blackboard_create_task") return createTask(projectRoot, args);
   if (name === "blackboard_update_task") return updateTask(projectRoot, args.task_id, args);
   if (name === "blackboard_accept_task") return acceptTask(projectRoot, args.task_id);
+  if (name === "blackboard_close_incomplete_task") return closeIncompleteTask(projectRoot, args.task_id, args);
+  if (name === "blackboard_reconcile_incomplete_task") return reconcileIncompleteTask(projectRoot, args.task_id, args);
+  if (name === "blackboard_reconcile_task") return reconcileTask(projectRoot, args.task_id, args);
   if (name === "blackboard_archive_task") return archiveTask(projectRoot, args.task_id);
   if (name === "blackboard_snapshot") return snapshot(projectRoot, Boolean(args.include_archived));
   if (name === "blackboard_watch") return watch(projectRoot, args.cursor, args.timeout_ms ?? 55000, Boolean(args.include_archived));

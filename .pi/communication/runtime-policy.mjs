@@ -1,7 +1,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PolicyReceiver, parseEnvelope, resolvePeerRole } from "./policy.mjs";
+import { PolicyReceiver, parseEnvelope, resolvePeerRole, resolveTeamPeerRole } from "./policy.mjs";
 import { sendWithPolicy } from "./send.mjs";
 import { PersistentReplyStore } from "./persistent-store.mjs";
 import { PersistentRunLifecycle } from "./lifecycle.mjs";
@@ -57,7 +57,9 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
       await auditSafely({ direction: "outbound", action, outcome: "refused", reason: "async-send-only" });
       return { block: true, reason: "Agent peer communication permits asynchronous intercom send only; ask/reply/cancel are not peer-task controls" };
     }
-    const recipient = normalizedRole(event.input?.to) ?? resolvePeerRole(event.input?.to, event.peerSessions ?? knownPeerSessions);
+    const target = event.input?.to;
+    const recipient = resolveTeamPeerRole(target, process.env.PI_TEAM_TASK_ID)
+      ?? resolvePeerRole(target, event.peerSessions ?? knownPeerSessions);
     let outgoingReply;
     if (typeof event.input?.message === "string") {
       try { outgoingReply = parseEnvelope(event.input.message); } catch { /* sendWithPolicy below provides the authoritative refusal */ }

@@ -31,7 +31,11 @@ task ID, name, description, scope, done criteria, Executor-Reviewer pairing,
 acceptance, and resource reclamation. Keep decisions in `ADR/` and align
 `architect.md`, `goal.md`, and `project_state.md` when their content changes.
 
-Write a tracked Markdown task contract with exactly one JSON contract block.
+Write a tracked Markdown v2 task contract with exactly one JSON contract block.
+Each done criterion has a stable `C-###` ID, owner, and artifact path; each
+role delegation declares its stable ID, artifact path, and required
+capabilities. Reject a Researcher delegation needing unavailable capabilities
+(such as shell or profiler access) before launching it.
 Keep the Blackboard task name and description aligned with the current
 Lead-owned contract. Blackboard events are observations and reminders, not
 authorization, completion evidence, or a communication channel.
@@ -85,12 +89,16 @@ inspect evidence; it is never sufficient proof by itself.
 After Reviewer reports `ready_for_acceptance`, inspect the actual diff,
 artifacts, and test results against the contract. If they pass:
 
-1. Run `<project-root>\pi-team.cmd accept <task-id>`.
+1. Write acceptance evidence that covers every frozen criterion ID and its
+   required artifacts, then run `<project-root>\pi-team.cmd accept <task-id>
+   <acceptance-file>`.
 2. Run `<project-root>\pi-team.cmd reclaim <task-id>`.
-3. Use `blackboard_accept_task`, then `blackboard_archive_task` after resources
-   are reclaimed.
+3. Use `blackboard_archive_task` after resources are reclaimed; the entrypoint
+   synchronizes the accepted outcome before reclamation.
 4. Run `<project-root>\pi-team.cmd cleanup <task-id>` only when the reclaimed
    worktree is clean and its committed work has been preserved as intended.
 
-Report any unmet criterion as incomplete. Do not infer live role status solely
-from the most recent Blackboard event.
+For unmet criteria, write a closure with the missing criterion IDs and run
+`<project-root>\pi-team.cmd close-incomplete <task-id> <closure-file>` before
+reclamation. Use `reconcile` only for legacy state and with an explicit outcome.
+Do not infer live role status solely from the most recent Blackboard event.
