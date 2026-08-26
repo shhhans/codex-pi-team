@@ -44,7 +44,9 @@ never treat intercom cancel as task cancellation.
 For every delegated Pi Team task, Codex Lead performs these steps explicitly;
 creating or updating a Blackboard lane does not start an Agent:
 
-1. Write the Lead-owned Markdown task contract with its single JSON block.
+1. Write the Lead-owned Markdown v2 task contract with its single JSON block:
+   stable `C-###` done-criterion IDs, required artifacts, and explicit role
+   delegations with required capabilities.
 2. Run `pi-team.cmd publish <contract-path>` to create the matching active
    Blackboard task, or align its Lead-owned name and description with the
    current formal contract.
@@ -55,8 +57,10 @@ creating or updating a Blackboard lane does not start an Agent:
    intercom for decisions and corrections. Blackboard activity is not proof of
    completion.
 5. After Reviewer reports `ready_for_acceptance`, inspect the diff, artifacts,
-   and tests. Only then run `accept`, reclaim the persistent pair, archive the
-   Blackboard task, and clean up a clean reclaimed worktree.
+   and tests. Only then run `accept <task-id> <acceptance-file>`, reclaim the
+   persistent pair, archive the Blackboard task, and clean up a clean reclaimed
+   worktree. If any criterion is unmet, use `close-incomplete <task-id>
+   <closure-file>`; do not mark a partial slice accepted.
 
 Use only the project-local Windows entrypoint. Do not launch roles with
 `runs.run`, `--agent`, WSL, Git Bash, or an ambient Pi extension set. Executor
