@@ -42,7 +42,15 @@ export async function appendRoleEvent(stateRoot, event) {
 export async function registerRoleRuntime(stateRoot, identity) {
   const file = join(stateRoot, `${identity.task_id}-${identity.role}-runtime.json`);
   await mkdir(dirname(file), { recursive: true });
-  const record = { version: 1, ...identity, runtime_pid: process.pid, parent_pid: process.ppid, ready_at: new Date().toISOString() };
+  const now = Date.now();
+  const record = {
+    version: 1,
+    ...identity,
+    runtime_pid: process.pid,
+    parent_pid: process.ppid,
+    process_started_at: new Date(now - process.uptime() * 1_000).toISOString(),
+    ready_at: new Date(now).toISOString(),
+  };
   await writeFile(file, `${JSON.stringify(record, null, 2)}\n`, "utf8");
   return record;
 }

@@ -9,8 +9,10 @@ import {
   acceptTask,
   appendAgentEvent,
   archiveTask,
+  closeIncompleteTask,
   createTask,
   publishTask,
+  reconcileTask,
   resolveGitCommonDir,
   snapshot,
   stateRoot,
@@ -86,6 +88,33 @@ test("formal publication creates or aligns only an active Lead-owned task", asyn
       /only an active task can be republished/,
     );
     await archiveTask(fixture.repo, "BB-005");
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
+test("Lead can close incomplete work and explicitly reconcile legacy outcomes without erasing archive state", async () => {
+  const fixture = await makeRepo();
+  try {
+    await createTask(fixture.repo, { task_id: "BB-006", name: "Incomplete", description: "Needs a missing criterion record" });
+    const incomplete = await closeIncompleteTask(fixture.repo, "BB-006", {
+      reason: "Research evidence was not produced.",
+      missing_done_criteria: ["C-003"],
+    });
+    assert.equal(incomplete.status, "incomplete");
+    assert.equal(incomplete.outcome, "incomplete");
+    await archiveTask(fixture.repo, "BB-006");
+    const accepted = await reconcileTask(fixture.repo, "BB-006", { outcome: "accepted" });
+    assert.equal(accepted.status, "archived", "reconciliation must preserve archival execution state");
+    assert.equal(accepted.outcome, "accepted");
+    const corrected = await reconcileTask(fixture.repo, "BB-006", {
+      outcome: "incomplete",
+      reason: "Historical completion was not supported by the retained evidence.",
+      missing_done_criteria: ["C-003"],
+    });
+    assert.equal(corrected.status, "archived");
+    assert.equal(corrected.outcome, "incomplete");
+    assert.deepEqual(corrected.missing_done_criteria, ["C-003"]);
   } finally {
     await removeRepo(fixture);
   }
@@ -213,7 +242,7 @@ test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/
   assert.match(responses[0].result.instructions, /observability plane/);
   assert.deepEqual(responses[1].result, {});
   assert.deepEqual(responses[2].result.tools.map((tool) => tool.name), [
-    "blackboard_create_task", "blackboard_update_task", "blackboard_accept_task", "blackboard_close_incomplete_task", "blackboard_reconcile_incomplete_task", "blackboard_archive_task", "blackboard_snapshot", "blackboard_watch", "blackboard_render",
+    "blackboard_create_task", "blackboard_update_task", "blackboard_accept_task", "blackboard_close_incomplete_task", "blackboard_reconcile_incomplete_task", "blackboard_reconcile_task", "blackboard_archive_task", "blackboard_snapshot", "blackboard_watch", "blackboard_render",
   ]);
   for (const name of ["blackboard_snapshot", "blackboard_watch", "blackboard_render"]) {
     const tool = responses[2].result.tools.find((candidate) => candidate.name === name);

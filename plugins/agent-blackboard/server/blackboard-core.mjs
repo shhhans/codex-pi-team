@@ -333,6 +333,33 @@ export async function reconcileIncompleteTask(projectRoot, taskId, input) {
   });
 }
 
+export async function reconcileTask(projectRoot, taskId, input) {
+  const root = await ensureStateRoot(projectRoot);
+  const outcome = input?.outcome;
+  if (outcome !== "accepted" && outcome !== "incomplete") fail("reconcile outcome must be accepted or incomplete");
+  const reason = outcome === "incomplete" ? ensureDescription(input?.reason) : undefined;
+  const missing = outcome === "incomplete"
+    ? (Array.isArray(input?.missing_done_criteria) && input.missing_done_criteria.length
+      ? input.missing_done_criteria.map((item) => ensureLineField(item, "missing_done_criteria", 500, true))
+      : fail("missing_done_criteria is required"))
+    : undefined;
+  return withLock(`${taskPath(root, taskId)}.lock`, async () => {
+    const task = await loadTask(root, taskId);
+    task.outcome = outcome;
+    task.status = task.status === "archived" ? "archived" : outcome;
+    if (outcome === "incomplete") {
+      task.incomplete_reason = reason;
+      task.missing_done_criteria = missing;
+    } else {
+      delete task.incomplete_reason;
+      delete task.missing_done_criteria;
+    }
+    task.updated_at = isoNow();
+    await writeJsonAtomic(taskPath(root, taskId), task);
+    return task;
+  });
+}
+
 export async function archiveTask(projectRoot, taskId) {
   const root = await ensureStateRoot(projectRoot);
   return withLock(`${taskPath(root, taskId)}.lock`, async () => {

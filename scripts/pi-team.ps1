@@ -122,29 +122,67 @@ function Get-CommonDir {
   if (-not (Test-Path -LiteralPath $p -PathType Container)) { Fail "Git common directory is not a directory: $p" }
   return (Resolve-Path -LiteralPath $p).Path
 }
-function StateRoot {
+function StateRoot([bool]$Create=$true) {
   $p = Join-Path (Get-CommonDir) $StateName
   if (Test-Path -LiteralPath $p -PathType Leaf) { Fail "Pi Team state root is a file, not a directory: $p" }
-  try { New-Item -ItemType Directory -Force -Path $p | Out-Null } catch { Fail "cannot create Pi Team state root: $p ($($_.Exception.Message))" }
+  if ($Create) { try { New-Item -ItemType Directory -Force -Path $p | Out-Null } catch { Fail "cannot create Pi Team state root: $p ($($_.Exception.Message))" } }
+  elseif (-not (Test-Path -LiteralPath $p -PathType Container)) { return $p }
   if (-not (Test-Path -LiteralPath $p -PathType Container)) { Fail "Pi Team state root is not a directory: $p" }
   return (Resolve-Path -LiteralPath $p).Path
 }
 function Read-State([string]$TaskId) { $p = Join-Path (StateRoot) "$TaskId.json"; if (-not (Test-Path -LiteralPath $p)) { Fail "unknown task: $TaskId" }; $state=Get-Content -Raw -LiteralPath $p | ConvertFrom-Json; if ($state.version -lt 2) { $legacy=$state.status; $state | Add-Member -NotePropertyName execution_status -NotePropertyValue $(if($legacy -eq 'cleaned'){'cleaned'}elseif($legacy -eq 'reclaimed'){'reclaimed'}else{'active'}) -Force; $state | Add-Member -NotePropertyName outcome -NotePropertyValue 'pending' -Force }; return $state }
 function Write-State($State) { $p = Join-Path (StateRoot) "$($State.task_id).json"; $State | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 -LiteralPath $p }
 function New-Id { [guid]::NewGuid().ToString() }
+function Get-RoleCapabilities([string]$Role) {
+  $capabilities = @{
+    researcher = @('read','grep','find','ls','write','web_search','fetch_content','get_search_content','source_check','intercom','report_to_lead','blackboard_update')
+    executor = @('read','grep','find','ls','bash','edit','write','intercom','report_to_lead','blackboard_update')
+    reviewer = @('read','grep','find','ls','bash','edit','write','intercom','report_to_lead','blackboard_update')
+  }
+  if (-not $capabilities.ContainsKey($Role)) { Fail "unknown Pi Team role: $Role" }
+  return @($capabilities[$Role])
+}
+function Assert-RelativeArtifactPath([string]$Path,[string]$Field) {
+  if ([string]::IsNullOrWhiteSpace($Path) -or [IO.Path]::IsPathRooted($Path) -or $Path -match '(^|[\\/])\.\.([\\/]|$)') { Fail "$Field must be a non-empty worktree-relative path" }
+}
+function Assert-DelegationCapabilities($Delegation) {
+  $role = [string]$Delegation.role; $available = Get-RoleCapabilities $role
+  foreach ($capability in @($Delegation.required_capabilities)) { if ($available -notcontains [string]$capability) { Fail "delegation $($Delegation.id) requires capability '$capability' unavailable to role $role" } }
+}
 function Parse-Contract([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { Fail "contract not found: $Path" }
   $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $Path
   $blocks = [regex]::Matches($text,'(?ms)```json\s*(.*?)\s*```')
   if ($blocks.Count -ne 1) { Fail 'contract must contain exactly one JSON fenced block' }
   try { $c = $blocks[0].Groups[1].Value | ConvertFrom-Json } catch { Fail "invalid contract JSON: $($_.Exception.Message)" }
-  foreach ($n in @('version','task_id','name','description','base_ref','branch','worktree','in_scope','out_of_scope','done_criteria','constraints')) { if ($null -eq $c.$n) { Fail "contract missing field: $n" } }
-  if ($c.version -ne 1) { Fail 'contract version must be 1' }
+  foreach ($n in @('version','task_id','name','description','base_ref','branch','worktree','in_scope','out_of_scope','done_criteria','delegations','constraints')) { if ($null -eq $c.$n) { Fail "contract missing field: $n" } }
+  if ($c.version -ne 2) { Fail 'contract version must be 2' }
   if ($c.task_id -notmatch '^[A-Z][A-Z0-9]*-[0-9]{3,}$') { Fail 'invalid task ID' }
   if ($c.branch -notmatch '^pi-team/[A-Za-z0-9._/-]+$') { Fail 'invalid branch' }
   if (-not ([IO.Path]::IsPathRooted($c.worktree))) { Fail 'worktree must be absolute' }
   $w = [IO.Path]::GetFullPath($c.worktree); $root = [IO.Path]::GetFullPath($ProjectRoot)
   if ($w.TrimEnd('\') -ieq $root.TrimEnd('\') -or $w -like "$root\*" -or $w -like "$(Get-CommonDir)\*") { Fail 'dangerous worktree path' }
+  $criterionIds = @{}
+  foreach ($criterion in @($c.done_criteria)) {
+    if ($null -eq $criterion.id -or [string]$criterion.id -notmatch '^C-[0-9]{3,}$') { Fail 'each done criterion needs a stable C-### id' }
+    if ($criterionIds.ContainsKey([string]$criterion.id)) { Fail "duplicate done criterion id: $($criterion.id)" }; $criterionIds[[string]$criterion.id] = $true
+    if ([string]::IsNullOrWhiteSpace([string]$criterion.description)) { Fail "done criterion $($criterion.id) needs a description" }
+    Get-RoleCapabilities ([string]$criterion.owner) | Out-Null
+    if (@($criterion.artifacts).Count -eq 0) { Fail "done criterion $($criterion.id) needs at least one artifact" }
+    foreach ($artifact in @($criterion.artifacts)) { Assert-RelativeArtifactPath ([string]$artifact) "done criterion $($criterion.id) artifact" }
+  }
+  if ($criterionIds.Count -eq 0) { Fail 'contract needs at least one done criterion' }
+  $delegationIds = @{}; $delegatedRoles = @{}
+  foreach ($delegation in @($c.delegations)) {
+    if ($null -eq $delegation.id -or [string]$delegation.id -notmatch '^[A-Z][A-Z0-9_-]{2,63}$') { Fail 'each delegation needs a stable ID' }
+    if ($delegationIds.ContainsKey([string]$delegation.id)) { Fail "duplicate delegation id: $($delegation.id)" }; $delegationIds[[string]$delegation.id] = $true
+    $role = [string]$delegation.role; Get-RoleCapabilities $role | Out-Null; $delegatedRoles[$role] = $true
+    if ([string]::IsNullOrWhiteSpace([string]$delegation.objective)) { Fail "delegation $($delegation.id) needs an objective" }
+    Assert-RelativeArtifactPath ([string]$delegation.artifact_path) "delegation $($delegation.id) artifact_path"
+    if ($null -eq $delegation.required_capabilities -or @($delegation.required_capabilities).Count -eq 0) { Fail "delegation $($delegation.id) needs required_capabilities" }
+    Assert-DelegationCapabilities $delegation
+  }
+  foreach ($requiredRole in @('executor','reviewer')) { if (-not $delegatedRoles.ContainsKey($requiredRole)) { Fail "contract needs a $requiredRole delegation" } }
   return $c
 }
 function Event($State,[string]$Role,[string]$StateName,[string]$Activity,[string]$Blocker,[string]$Next) {
@@ -173,6 +211,16 @@ function Publish([string]$Path) {
   if ($LASTEXITCODE -ne 0) { Fail (($result -join "`n").Trim()) }
   Write-Output "PUBLISHED $($c.task_id)"
 }
+function Invoke-BlackboardLifecycle([string]$Action,[string]$TaskId,[string]$OutcomePath='') {
+  $node = Get-Command node.exe -ErrorAction SilentlyContinue
+  if (-not $node) { Fail 'node.exe is required to synchronize the Blackboard outcome' }
+  $cli = Join-Path $ProjectRoot 'plugins/agent-blackboard/server/blackboard-cli.mjs'
+  if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) { Fail "Blackboard CLI is missing: $cli" }
+  $arguments = @($cli,$Action,$ProjectRoot,$TaskId)
+  if ($OutcomePath) { $arguments += $OutcomePath }
+  $result = & $node.Source @arguments 2>&1
+  if ($LASTEXITCODE -ne 0) { Fail "Blackboard $Action failed: $(($result -join "`n").Trim())" }
+}
 function Doctor {
   foreach ($x in @('git','node.exe','pi.cmd','wt.exe','powershell.exe')) { if (-not (Get-Command $x -ErrorAction SilentlyContinue)) { Write-Output "MISSING $x" } else { Write-Output "OK $x" } }
   $s = Get-Content -Raw (Join-Path $ProjectRoot '.pi/settings.json') | ConvertFrom-Json; if ($s.defaultProvider -ne 'minimax-cn' -or $s.defaultModel -ne 'MiniMax-M3') { Write-Output 'MISSING MiniMax configuration' } else { Write-Output 'OK MiniMax configuration' }
@@ -188,7 +236,7 @@ function Doctor {
     else { $isolated = $isolated -and $text -notmatch 'pi-web-access' }
     if ($isolated) { Write-Output "OK role $r isolation" } else { Write-Output "MISSING role $r isolation" }
   }
-  foreach ($file in @(Get-ChildItem (StateRoot) -Filter '*.json' -ErrorAction SilentlyContinue)) {
+  foreach ($file in @(Get-ChildItem (StateRoot $false) -Filter '*.json' -ErrorAction SilentlyContinue)) {
     try { $task=Get-Content -Raw -LiteralPath $file.FullName | ConvertFrom-Json } catch { Write-Output "STALE invalid task state $($file.Name)"; continue }
     if (-not $task.task_id -or -not $task.sessions) { continue }
     $execution = if ($task.execution_status) { $task.execution_status } else { $task.status }
@@ -212,7 +260,12 @@ function RuntimePath($State,[string]$Role) { return Join-Path (StateRoot) "$($St
 function Read-Runtime($State,[string]$Role) { $path=RuntimePath $State $Role; if (-not(Test-Path -LiteralPath $path)) { return $null }; try { return Get-Content -Raw -LiteralPath $path | ConvertFrom-Json } catch { return $null } }
 function Test-RuntimeLive($Runtime) {
   if ($null -eq $Runtime -or $null -eq $Runtime.runtime_pid) { return $false }
-  try { $p=Get-Process -Id ([int]$Runtime.runtime_pid) -ErrorAction Stop; return $p.StartTime.ToUniversalTime() -le [DateTime]::UtcNow } catch { return $false }
+  try {
+    $p=Get-Process -Id ([int]$Runtime.runtime_pid) -ErrorAction Stop
+    if (-not $Runtime.process_started_at) { return $false }
+    $recorded=[DateTime]::Parse([string]$Runtime.process_started_at).ToUniversalTime()
+    return [Math]::Abs(($p.StartTime.ToUniversalTime() - $recorded).TotalSeconds) -lt 30
+  } catch { return $false }
 }
 function Wait-RoleReady($State,[string]$Role,[string]$LaunchId) {
   $deadline=[DateTime]::UtcNow.AddSeconds(15)
@@ -307,7 +360,9 @@ function Start-Task([string]$Path) {
   $contractSnapshot = Snapshot-Contract $Path $c.task_id
   $state = [pscustomobject]@{version=2;task_id=$c.task_id;name=$c.name;description=$c.description;execution_status='active';outcome='pending';worktree=$c.worktree;contract_path=$contractSnapshot;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor'};reviewer=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='reviewer'}}}
   Write-State $state; foreach ($r in @('executor','reviewer')) { Event $state $r 'working' 'task started' '' '' }
-  $assignment = "Lead assignment. Task ID: $($c.task_id). Worktree: $($c.worktree). Frozen task contract: $contractSnapshot. Read that exact contract before acting. Objective: $($c.description) Done criteria: $($c.done_criteria -join '; '). Constraints: $($c.constraints -join '; ')."
+  $criteria = @($c.done_criteria | ForEach-Object { "$($_.id): $($_.description) [owner=$($_.owner); artifacts=$($_.artifacts -join ',')]" }) -join '; '
+  $delegations = @($c.delegations | ForEach-Object { "$($_.id): $($_.role) -> $($_.artifact_path) [capabilities=$($_.required_capabilities -join ',')]" }) -join '; '
+  $assignment = "Lead assignment. Task ID: $($c.task_id). Worktree: $($c.worktree). Frozen task contract: $contractSnapshot. Read that exact contract before acting. Objective: $($c.description) Done criteria: $criteria. Role delegations: $delegations. Constraints: $($c.constraints -join '; ')."
   try { Launch-Role $state 'executor' "$assignment You are Executor. Perform only the assigned slice and report progress through the configured tools." $state.sessions.executor.session_id; Launch-Role $state 'reviewer' "$assignment You are Reviewer. Inspect the delegated work as it becomes available and report progress through the configured tools." $state.sessions.reviewer.session_id }
   catch { Stop-RoleTree $state.sessions.executor; Stop-RoleTree $state.sessions.reviewer; $state.execution_status='failed'; $state | Add-Member -NotePropertyName launch_error -NotePropertyValue $_.Exception.Message -Force; Write-State $state; throw }
   Write-Output "STARTED $($c.task_id) scope=$($state.scope_id)"
@@ -319,11 +374,15 @@ function Research([string]$TaskId,[string]$QuestionId,[string]$QuestionFile) {
   if ($s.execution_status -ne 'active') { Fail 'task is not active' }
   if ($s.sessions.PSObject.Properties.Name -contains 'researcher') { $runtime=Read-Runtime $s 'researcher'; if (Test-RuntimeLive $runtime) { Fail 'a Researcher is already active for this task' } }
   if (-not (Test-Path $QuestionFile)) { Fail 'question file not found' }
-  $out=Join-Path $s.worktree "research/$QuestionId.md"; New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
+  $contract=Parse-Contract $s.contract_path
+  $delegation=@($contract.delegations | Where-Object { $_.id -eq $QuestionId -and $_.role -eq 'researcher' })
+  if ($delegation.Count -ne 1) { Fail "unknown Researcher delegation: $QuestionId" }
+  Assert-DelegationCapabilities $delegation[0]
+  $out=Join-Path $s.worktree $delegation[0].artifact_path; New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
   $q=Get-Content -Raw -Encoding UTF8 $QuestionFile
   $researcherId = New-Id
-  $assignment = "Lead assignment. Task ID: $($s.task_id). Worktree: $($s.worktree). Research artifact: research/$QuestionId.md. Objective: $($s.description). Answer exactly this question: $q"
-  if (-not($s.sessions.PSObject.Properties.Name -contains 'researcher')) { $s.sessions | Add-Member -NotePropertyName researcher -NotePropertyValue ([pscustomobject]@{agent_id=$researcherId;session_id='';role='researcher';question_id=$QuestionId}) }
+  $assignment = "Lead assignment. Task ID: $($s.task_id). Worktree: $($s.worktree). Research delegation: $($delegation[0].id). Research artifact: $($delegation[0].artifact_path). Required capabilities: $($delegation[0].required_capabilities -join ', '). Objective: $($delegation[0].objective). Answer exactly this question: $q"
+  if (-not($s.sessions.PSObject.Properties.Name -contains 'researcher')) { $s.sessions | Add-Member -NotePropertyName researcher -NotePropertyValue ([pscustomobject]@{agent_id=$researcherId;session_id='';role='researcher';question_id=$QuestionId;artifact_path=$delegation[0].artifact_path}) }
   Launch-Role $s 'researcher' $assignment ''
   Write-Output "RESEARCH_STARTED $QuestionId"
 }
@@ -336,10 +395,43 @@ function Resume-Task([string]$TaskId) {
   }
   Write-Output "RESUMED $TaskId"
 }
-function Read-OutcomeFile([string]$Path,[string]$Expected) { if (-not(Test-Path -LiteralPath $Path)) { Fail "outcome file not found: $Path" }; try { $x=Get-Content -Raw -Encoding UTF8 -LiteralPath $Path | ConvertFrom-Json } catch { Fail "invalid outcome file: $Path" }; if ($x.outcome -ne $Expected) { Fail "outcome file must declare outcome=$Expected" }; return $x }
-function Accept([string]$TaskId,[string]$EvidencePath) { $s=Read-State $TaskId; if ($s.execution_status -ne 'active' -or $s.outcome -ne 'pending') { Fail 'task is not awaiting acceptance' }; $e=Read-OutcomeFile $EvidencePath 'accepted'; $p=Join-Path (StateRoot) "$TaskId-reviewer.jsonl"; if (-not(Test-Path $p) -or -not((Get-Content $p | Select-Object -Last 1) -match '"state":"ready_for_acceptance"')) { Fail 'Reviewer is not ready_for_acceptance' }; $contract=Parse-Contract $s.contract_path; if (@($e.criteria).Count -ne @($contract.done_criteria).Count) { Fail 'acceptance evidence must cover every done criterion' }; foreach($item in @($e.criteria)) { if (-not $item.artifacts -or @($item.artifacts).Count -eq 0) { Fail 'each accepted criterion requires an artifact' }; foreach($artifact in @($item.artifacts)) { if (-not(Test-Path (Join-Path $s.worktree $artifact))) { Fail "acceptance artifact not found: $artifact" } } }; $s.outcome='accepted'; $s.accepted_at=[DateTime]::UtcNow.ToString('o'); $s.acceptance_path=(Resolve-Path $EvidencePath).Path; Write-State $s; Write-Output "ACCEPTED $TaskId" }
-function Close-Incomplete([string]$TaskId,[string]$ClosurePath) { $s=Read-State $TaskId; $e=Read-OutcomeFile $ClosurePath 'incomplete'; if (-not $e.reason -or @($e.missing_done_criteria).Count -eq 0) { Fail 'incomplete closure requires reason and missing_done_criteria' }; $s.outcome='incomplete'; $s | Add-Member -NotePropertyName incomplete_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; $s | Add-Member -NotePropertyName closure_path -NotePropertyValue ((Resolve-Path $ClosurePath).Path) -Force; Write-State $s; Write-Output "INCOMPLETE $TaskId" }
-function Reconcile([string]$TaskId,[string]$ClosurePath) { $s=Read-State $TaskId; if ($s.version -ge 2 -and $s.outcome -ne 'pending') { Fail 'task is already reconciled' }; $legacy=$s.status; $s.version=2; if (-not($s.PSObject.Properties.Name -contains 'execution_status')) { $s | Add-Member -NotePropertyName execution_status -NotePropertyValue $(if($legacy -eq 'cleaned'){'cleaned'}elseif($legacy -eq 'reclaimed'){'reclaimed'}else{'active'}) }; if (-not($s.PSObject.Properties.Name -contains 'outcome')) { $s | Add-Member -NotePropertyName outcome -NotePropertyValue 'pending' }; Write-State $s; Close-Incomplete $TaskId $ClosurePath }
+function Read-OutcomeFile([string]$Path,[string]$Expected='') { if (-not(Test-Path -LiteralPath $Path)) { Fail "outcome file not found: $Path" }; try { $x=Get-Content -Raw -Encoding UTF8 -LiteralPath $Path | ConvertFrom-Json } catch { Fail "invalid outcome file: $Path" }; if ($Expected -and $x.outcome -ne $Expected) { Fail "outcome file must declare outcome=$Expected" }; return $x }
+function Assert-MissingCriteria($Contract,$Evidence) {
+  if (-not $Evidence.reason -or @($Evidence.missing_done_criteria).Count -eq 0) { Fail 'incomplete closure requires reason and missing_done_criteria' }
+  if ($null -eq $Contract) { return }
+  $known=@{}; foreach($criterion in @($Contract.done_criteria)) { $known[[string]$criterion.id]=$true }
+  foreach($id in @($Evidence.missing_done_criteria)) { if (-not $known.ContainsKey([string]$id)) { Fail "unknown missing done criterion: $id" } }
+}
+function Accept([string]$TaskId,[string]$EvidencePath) {
+  $s=Read-State $TaskId; if ($s.execution_status -ne 'active' -or $s.outcome -ne 'pending') { Fail 'task is not awaiting acceptance' }
+  $e=Read-OutcomeFile $EvidencePath 'accepted'; $p=Join-Path (StateRoot) "$TaskId-reviewer.jsonl"
+  if (-not(Test-Path $p) -or -not((Get-Content $p | Select-Object -Last 1) -match '"state":"ready_for_acceptance"')) { Fail 'Reviewer is not ready_for_acceptance' }
+  $contract=Parse-Contract $s.contract_path; $expected=@{}; foreach($criterion in @($contract.done_criteria)) { $expected[[string]$criterion.id]=$criterion }
+  if (@($e.criteria).Count -ne $expected.Count) { Fail 'acceptance evidence must cover every done criterion exactly once' }
+  $seen=@{}
+  foreach($item in @($e.criteria)) {
+    $id=[string]$item.criterion_id
+    if (-not $expected.ContainsKey($id)) { Fail "acceptance evidence names unknown criterion: $id" }
+    if ($seen.ContainsKey($id)) { Fail "acceptance evidence repeats criterion: $id" }; $seen[$id]=$true
+    if (-not $item.artifacts -or @($item.artifacts).Count -eq 0) { Fail "accepted criterion $id requires an artifact" }
+    $provided=@{}; foreach($artifact in @($item.artifacts)) { Assert-RelativeArtifactPath ([string]$artifact) "acceptance artifact"; if (-not(Test-Path (Join-Path $s.worktree $artifact))) { Fail "acceptance artifact not found: $artifact" }; $provided[[string]$artifact]=$true }
+    foreach($requiredArtifact in @($expected[$id].artifacts)) { if (-not $provided.ContainsKey([string]$requiredArtifact)) { Fail "accepted criterion $id is missing required artifact: $requiredArtifact" } }
+  }
+  if ($seen.Count -ne $expected.Count) { Fail 'acceptance evidence must cover every done criterion exactly once' }
+  Invoke-BlackboardLifecycle 'accept' $TaskId
+  $s.outcome='accepted'; $s | Add-Member -NotePropertyName accepted_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; $s | Add-Member -NotePropertyName acceptance_path -NotePropertyValue ((Resolve-Path $EvidencePath).Path) -Force; Write-State $s; Write-Output "ACCEPTED $TaskId"
+}
+function Close-Incomplete([string]$TaskId,[string]$ClosurePath) {
+  $s=Read-State $TaskId; if ($s.outcome -ne 'pending') { Fail 'task is not awaiting closure' }; $e=Read-OutcomeFile $ClosurePath 'incomplete'
+  $contract=$null; try { $contract=Parse-Contract $s.contract_path } catch { if ($s.version -ge 2) { throw } }; Assert-MissingCriteria $contract $e
+  Invoke-BlackboardLifecycle 'close-incomplete' $TaskId $ClosurePath
+  $s.outcome='incomplete'; $s | Add-Member -NotePropertyName incomplete_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; $s | Add-Member -NotePropertyName closure_path -NotePropertyValue ((Resolve-Path $ClosurePath).Path) -Force; Write-State $s; Write-Output "INCOMPLETE $TaskId"
+}
+function Reconcile([string]$TaskId,[string]$ClosurePath) {
+  $s=Read-State $TaskId; if ($s.version -ge 2 -and $s.outcome -ne 'pending') { Fail 'task is already reconciled' }; $e=Read-OutcomeFile $ClosurePath
+  if ($e.outcome -notin @('accepted','incomplete')) { Fail 'reconcile outcome must be accepted or incomplete' }
+  $legacy=$s.status; $s.version=2; if (-not($s.PSObject.Properties.Name -contains 'execution_status')) { $s | Add-Member -NotePropertyName execution_status -NotePropertyValue $(if($legacy -eq 'cleaned'){'cleaned'}elseif($legacy -eq 'reclaimed'){'reclaimed'}else{'active'}) }; if ($e.outcome -eq 'incomplete') { Assert-MissingCriteria $null $e; $s | Add-Member -NotePropertyName incomplete_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force } else { $s | Add-Member -NotePropertyName accepted_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force }; Invoke-BlackboardLifecycle 'reconcile' $TaskId $ClosurePath; $s.outcome=$e.outcome; $s | Add-Member -NotePropertyName reconciliation_path -NotePropertyValue ((Resolve-Path $ClosurePath).Path) -Force; $s | Add-Member -NotePropertyName reconciled_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; Write-State $s; Write-Output "RECONCILED $TaskId outcome=$($e.outcome)"
+}
 function Reclaim([string]$TaskId) { $s=Read-State $TaskId; if ($s.outcome -notin @('accepted','incomplete')) { Fail 'task must be accepted or closed incomplete before reclaim' }; Assert-NoLiveRoleProcesses $s; $s.execution_status='reclaimed'; $s.reclaimed_at=[DateTime]::UtcNow.ToString('o'); Write-State $s; Write-Output "RECLAIMED $TaskId" }
 function Cleanup([string]$TaskId) { $s=Read-State $TaskId; if ($s.execution_status -ne 'reclaimed') { Fail 'task must be reclaimed before cleanup' }; $dirty=Git @('-C',$s.worktree,'status','--porcelain'); if ($dirty) { Fail 'worktree is not clean' }; if ([IO.Path]::GetFullPath($s.worktree) -ieq [IO.Path]::GetFullPath($ProjectRoot)) { Fail 'cannot remove main worktree' }; Invoke-Native git.exe @('worktree','remove',$s.worktree); $s.execution_status='cleaned'; Write-State $s; Write-Output "CLEANED $TaskId" }
 switch ($Command.ToLowerInvariant()) { 'setup' {Setup}; 'codex-setup' {Setup-Codex}; 'doctor' {Doctor}; 'publish' {Publish $Arg1}; 'validate' {Validate $Arg1}; 'start' {Start-Task $Arg1}; 'sync' {Sync-Task $Arg1}; 'research' {Research $Arg1 $Arg2 $Arg3}; 'status' {Status $Arg1}; 'watch' {Status $Arg1}; 'resume' {Resume-Task $Arg1}; 'accept' {Accept $Arg1 $Arg2}; 'close-incomplete' {Close-Incomplete $Arg1 $Arg2}; 'reconcile' {Reconcile $Arg1 $Arg2}; 'reclaim' {Reclaim $Arg1}; 'cleanup' {Cleanup $Arg1}; default { Fail "unknown command: $Command" } }
