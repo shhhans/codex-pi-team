@@ -13,6 +13,7 @@ import {
   SUPERVISOR_REASONS,
   authorizePeer,
   authorizeSupervisorEscalation,
+  resolveTeamPeerRole,
 } from "../.pi/communication/policy.mjs";
 import { createRoleRuntimePolicy } from "../.pi/communication/runtime-policy.mjs";
 
@@ -109,6 +110,12 @@ test("policy.mjs exposes only the three active runtime roles and legacy role nam
       assert.equal(ACTIVE_ROLES.has(recipient), true, `recipient ${recipient} must be active`);
     }
   }
+});
+
+test("stable Pi Team intercom identities are task-scoped", () => {
+  assert.equal(resolveTeamPeerRole("pi-team--PERF-003--executor--lease-1", "PERF-003"), "executor");
+  assert.equal(resolveTeamPeerRole("pi-team--PERF-004--executor--lease-1", "PERF-003"), undefined);
+  assert.equal(resolveTeamPeerRole("executor", "PERF-003"), undefined);
 });
 
 test("researcher, executor, and reviewer are the only active role names; legacy roles are not accepted", async (t) => {

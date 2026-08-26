@@ -213,7 +213,7 @@ test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/
   assert.match(responses[0].result.instructions, /observability plane/);
   assert.deepEqual(responses[1].result, {});
   assert.deepEqual(responses[2].result.tools.map((tool) => tool.name), [
-    "blackboard_create_task", "blackboard_update_task", "blackboard_accept_task", "blackboard_archive_task", "blackboard_snapshot", "blackboard_watch", "blackboard_render",
+    "blackboard_create_task", "blackboard_update_task", "blackboard_accept_task", "blackboard_close_incomplete_task", "blackboard_reconcile_incomplete_task", "blackboard_archive_task", "blackboard_snapshot", "blackboard_watch", "blackboard_render",
   ]);
   for (const name of ["blackboard_snapshot", "blackboard_watch", "blackboard_render"]) {
     const tool = responses[2].result.tools.find((candidate) => candidate.name === name);

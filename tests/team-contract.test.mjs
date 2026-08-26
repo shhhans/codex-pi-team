@@ -460,6 +460,8 @@ $record=[ordered]@{
   scope_id=$env:PI_TEAM_SCOPE_ID
   args=@($Args)
 }
+$runtime=[ordered]@{version=1;task_id=$env:PI_TEAM_TASK_ID;role=$env:PI_TEAM_ROLE;agent_id=$env:PI_TEAM_AGENT_ID;launch_id=$env:PI_TEAM_LAUNCH_ID;intercom_id=$env:PI_INTERCOM_STABLE_ID;runtime_pid=$PID;parent_pid=0;ready_at=[DateTime]::UtcNow.ToString('o');worktree=$env:PI_TEAM_WORKTREE}
+$runtime | ConvertTo-Json | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $env:PI_TEAM_STATE_ROOT "$($env:PI_TEAM_TASK_ID)-$($env:PI_TEAM_ROLE)-runtime.json")
 $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $env:PI_TEAM_TEST_LOG
 `);
     await writeFile(fakePi, `@echo off\r\npowershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-pi.ps1" %*\r\n`);

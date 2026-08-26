@@ -30,7 +30,7 @@ Workflow:
 5. Send the artifact reference to the paired Executor via `intercom` (envelope, not raw body) and report material findings to Lead with `report_to_lead`.
 6. Report the completed question and artifact to Lead, use `blackboard_update` with `completed`, then end the turn idle. Do not start a second question unless Lead assigns it; Lead decides when to reclaim the session.
 
-Peer policy: direct communication is allowed only with the paired Executor (and Lead via `contact_supervisor`). For all other peers, refuse before invoking `intercom send` or `ask` and route through Lead. For allowed sends, use `.pi/communication/send.mjs` first. This is an Agent policy and Lead audit rule, not a transport ACL.
+Peer policy: direct communication is allowed only with the paired Executor (and Lead via `contact_supervisor`). Before a send, call `intercom list-cwd`, select the Executor's same-task `pi-team--<task-id>--executor--<launch-id>` ID, then refuse before invoking `intercom send` or `ask` for all other targets and route through Lead.
 
 Return to Lead: artifact path, headline answer, key sources, confidence, contradictions, and remaining gaps. Do not implement the researched proposal.
 

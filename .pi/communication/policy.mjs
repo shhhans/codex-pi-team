@@ -86,6 +86,15 @@ export function resolvePeerRole(target, sessions = []) {
   return ROLES.includes(name) ? name : undefined;
 }
 
+export function resolveTeamPeerRole(target, taskId) {
+  if (typeof target !== "string" || typeof taskId !== "string") return undefined;
+  const prefix = `pi-team--${taskId.toLowerCase()}--`;
+  const normalized = target.trim().toLowerCase();
+  if (!normalized.startsWith(prefix)) return undefined;
+  const role = normalized.slice(prefix.length).split("--", 1)[0];
+  return ROLES.includes(role) ? role : undefined;
+}
+
 export class DedupStore {
   constructor(windowMs = 60 * 60 * 1000) { this.windowMs = windowMs; this.seen = new Map(); }
   accept(id, recipient, now = Date.now()) {

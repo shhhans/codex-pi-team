@@ -9,7 +9,7 @@ export const ROLE_STATES = Object.freeze({
   executor: new Set(["working", "waiting", "blocked", "ready_for_review"]),
   reviewer: new Set(["working", "waiting", "blocked", "reviewing", "changes_requested", "ready_for_acceptance"]),
 });
-export const TASK_STATUSES = new Set(["active", "accepted", "archived"]);
+export const TASK_STATUSES = new Set(["active", "accepted", "incomplete", "archived"]);
 const MAX_WATCH_MS = 55_000;
 const LOCK_RETRY_MS = 25;
 const LOCK_TIMEOUT_MS = 5_000;
@@ -132,6 +132,7 @@ function taskSummary(task, latest = {}) {
     name: task.name,
     description: task.description,
     status: task.status,
+    outcome: task.outcome || (task.status === "accepted" ? "accepted" : task.status === "incomplete" ? "incomplete" : undefined),
     created_at: task.created_at,
     updated_at: task.updated_at,
     revisions: task.revisions || [],
@@ -288,6 +289,44 @@ export async function acceptTask(projectRoot, taskId) {
     const task = await loadTask(root, taskId);
     if (task.status !== "active") fail("only active tasks can be accepted");
     task.status = "accepted";
+    task.outcome = "accepted";
+    task.updated_at = isoNow();
+    await writeJsonAtomic(taskPath(root, taskId), task);
+    return task;
+  });
+}
+
+export async function closeIncompleteTask(projectRoot, taskId, input) {
+  const root = await ensureStateRoot(projectRoot);
+  const reason = ensureDescription(input?.reason);
+  const missing = Array.isArray(input?.missing_done_criteria) && input.missing_done_criteria.length
+    ? input.missing_done_criteria.map((item) => ensureLineField(item, "missing_done_criteria", 500, true))
+    : fail("missing_done_criteria is required");
+  return withLock(`${taskPath(root, taskId)}.lock`, async () => {
+    const task = await loadTask(root, taskId);
+    if (task.status !== "active") fail("only active tasks can be closed incomplete");
+    task.status = "incomplete";
+    task.outcome = "incomplete";
+    task.incomplete_reason = reason;
+    task.missing_done_criteria = missing;
+    task.updated_at = isoNow();
+    await writeJsonAtomic(taskPath(root, taskId), task);
+    return task;
+  });
+}
+
+export async function reconcileIncompleteTask(projectRoot, taskId, input) {
+  const root = await ensureStateRoot(projectRoot);
+  const reason = ensureDescription(input?.reason);
+  const missing = Array.isArray(input?.missing_done_criteria) && input.missing_done_criteria.length
+    ? input.missing_done_criteria.map((item) => ensureLineField(item, "missing_done_criteria", 500, true))
+    : fail("missing_done_criteria is required");
+  return withLock(`${taskPath(root, taskId)}.lock`, async () => {
+    const task = await loadTask(root, taskId);
+    if (task.status !== "accepted" && task.status !== "archived") fail("only accepted or archived tasks can be reconciled incomplete");
+    task.outcome = "incomplete";
+    task.incomplete_reason = reason;
+    task.missing_done_criteria = missing;
     task.updated_at = isoNow();
     await writeJsonAtomic(taskPath(root, taskId), task);
     return task;
@@ -298,7 +337,8 @@ export async function archiveTask(projectRoot, taskId) {
   const root = await ensureStateRoot(projectRoot);
   return withLock(`${taskPath(root, taskId)}.lock`, async () => {
     const task = await loadTask(root, taskId);
-    if (task.status !== "accepted") fail("only accepted tasks can be archived");
+    if (task.status !== "accepted" && task.status !== "incomplete") fail("only accepted or incomplete tasks can be archived");
+    task.outcome = task.outcome || task.status;
     task.status = "archived";
     task.updated_at = isoNow();
     await writeJsonAtomic(taskPath(root, taskId), task);
