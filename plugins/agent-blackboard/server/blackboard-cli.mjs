@@ -1,4 +1,4 @@
-import { acceptTask, closeIncompleteTask, publishTask, reconcileTask } from "./blackboard-core.mjs";
+import { acceptTask, archiveTask, closeIncompleteTask, publishTask, reconcileTask } from "./blackboard-core.mjs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -21,6 +21,9 @@ try {
   } else if (command === "accept") {
     if (!inputPath) throw new Error("accept requires project root and task id");
     result = await acceptTask(projectRoot, inputPath);
+  } else if (command === "archive") {
+    if (!inputPath) throw new Error("archive requires project root and task id");
+    result = await archiveTask(projectRoot, inputPath);
   } else if (command === "close-incomplete" || command === "reconcile") {
     const taskId = inputPath;
     const outcomePath = process.argv[5];

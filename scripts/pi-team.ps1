@@ -263,16 +263,21 @@ function Test-RuntimeLive($Runtime) {
   try {
     $p=Get-Process -Id ([int]$Runtime.runtime_pid) -ErrorAction Stop
     if (-not $Runtime.process_started_at) { return $false }
-    $recorded=[DateTime]::Parse([string]$Runtime.process_started_at).ToUniversalTime()
+    $recorded=([DateTime]$Runtime.process_started_at).ToUniversalTime()
     return [Math]::Abs(($p.StartTime.ToUniversalTime() - $recorded).TotalSeconds) -lt 30
   } catch { return $false }
 }
 function Wait-RoleReady($State,[string]$Role,[string]$LaunchId) {
-  $deadline=[DateTime]::UtcNow.AddSeconds(15)
+  $deadline=[DateTime]::UtcNow.AddSeconds(60)
   do { $runtime=Read-Runtime $State $Role; if ($runtime -and $runtime.launch_id -eq $LaunchId) { return $runtime }; Start-Sleep -Milliseconds 100 } while ([DateTime]::UtcNow -lt $deadline)
   Fail "role startup did not register readiness: $Role"
 }
-function Stop-RoleTree($Session) { if ($Session.launcher_pid) { Stop-Process -Id ([int]$Session.launcher_pid) -Force -ErrorAction SilentlyContinue }; if ($Session.runtime_pid) { Stop-Process -Id ([int]$Session.runtime_pid) -Force -ErrorAction SilentlyContinue } }
+function Stop-RoleTree($Session) {
+  foreach ($pid in @($Session.launcher_pid,$Session.runtime_pid) | Where-Object { $_ } | Select-Object -Unique) {
+    if (-not (Get-Process -Id ([int]$pid) -ErrorAction SilentlyContinue)) { continue }
+    & taskkill.exe /PID ([int]$pid) /T /F | Out-Null
+  }
+}
 function Assert-NoLiveRoleProcesses($State) { foreach($role in @('executor','reviewer','researcher')) { if (-not($State.sessions.PSObject.Properties.Name -contains $role)) { continue }; $runtime=Read-Runtime $State $role; if (Test-RuntimeLive $runtime) { Fail "task already has live role process; refusing duplicate resume: ${role}:$($runtime.runtime_pid)" } } }
 function Start-RoleProcess([string]$Executable,[string[]]$ArgumentList,[string]$WorkingDirectory,[string]$TaskId,[string]$Role,[string]$AgentId,[string]$Worktree,[string]$ScopeId,[string]$LaunchId) {
   $stateRoot = StateRoot
@@ -356,7 +361,7 @@ function Launch-Role($State,[string]$Role,[string]$Prompt,[string]$SessionId,[bo
 }
 function Start-Task([string]$Path) {
   Assert-Setup; $c = Parse-Contract $Path; Assert-BlackboardTask $c | Out-Null; $existing = Join-Path (StateRoot) "$($c.task_id).json"; if (Test-Path $existing) { Fail 'task already started' }
-  Invoke-Native git.exe @('worktree','add',$c.worktree,$c.branch)
+  Invoke-Native git.exe @('-C',$ProjectRoot,'worktree','add',$c.worktree,$c.branch)
   $contractSnapshot = Snapshot-Contract $Path $c.task_id
   $state = [pscustomobject]@{version=2;task_id=$c.task_id;name=$c.name;description=$c.description;execution_status='active';outcome='pending';worktree=$c.worktree;contract_path=$contractSnapshot;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor'};reviewer=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='reviewer'}}}
   Write-State $state; foreach ($r in @('executor','reviewer')) { Event $state $r 'working' 'task started' '' '' }
@@ -364,7 +369,7 @@ function Start-Task([string]$Path) {
   $delegations = @($c.delegations | ForEach-Object { "$($_.id): $($_.role) -> $($_.artifact_path) [capabilities=$($_.required_capabilities -join ',')]" }) -join '; '
   $assignment = "Lead assignment. Task ID: $($c.task_id). Worktree: $($c.worktree). Frozen task contract: $contractSnapshot. Read that exact contract before acting. Objective: $($c.description) Done criteria: $criteria. Role delegations: $delegations. Constraints: $($c.constraints -join '; ')."
   try { Launch-Role $state 'executor' "$assignment You are Executor. Perform only the assigned slice and report progress through the configured tools." $state.sessions.executor.session_id; Launch-Role $state 'reviewer' "$assignment You are Reviewer. Inspect the delegated work as it becomes available and report progress through the configured tools." $state.sessions.reviewer.session_id }
-  catch { Stop-RoleTree $state.sessions.executor; Stop-RoleTree $state.sessions.reviewer; $state.execution_status='failed'; $state | Add-Member -NotePropertyName launch_error -NotePropertyValue $_.Exception.Message -Force; Write-State $state; throw }
+  catch { Stop-RoleTree $state.sessions.executor; Stop-RoleTree $state.sessions.reviewer; $state | Add-Member -NotePropertyName launch_error -NotePropertyValue $_.Exception.Message -Force; $state | Add-Member -NotePropertyName launch_failed_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; Write-State $state; throw }
   Write-Output "STARTED $($c.task_id) scope=$($state.scope_id)"
 }
 function Status([string]$TaskId) { if ($TaskId) { $s=Read-State $TaskId; $s | ConvertTo-Json -Depth 10; foreach ($r in @('executor','reviewer','researcher')) { $p=Join-Path (StateRoot) "$TaskId-$r.jsonl"; if (Test-Path $p) { Get-Content $p | Select-Object -Last 1 } } } else { Get-ChildItem (StateRoot) -Filter '*.json' | Select-Object -ExpandProperty Name } }
@@ -432,6 +437,6 @@ function Reconcile([string]$TaskId,[string]$ClosurePath) {
   if ($e.outcome -notin @('accepted','incomplete')) { Fail 'reconcile outcome must be accepted or incomplete' }
   $legacy=$s.status; $s.version=2; if (-not($s.PSObject.Properties.Name -contains 'execution_status')) { $s | Add-Member -NotePropertyName execution_status -NotePropertyValue $(if($legacy -eq 'cleaned'){'cleaned'}elseif($legacy -eq 'reclaimed'){'reclaimed'}else{'active'}) }; if ($e.outcome -eq 'incomplete') { Assert-MissingCriteria $null $e; $s | Add-Member -NotePropertyName incomplete_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force } else { $s | Add-Member -NotePropertyName accepted_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force }; Invoke-BlackboardLifecycle 'reconcile' $TaskId $ClosurePath; $s.outcome=$e.outcome; $s | Add-Member -NotePropertyName reconciliation_path -NotePropertyValue ((Resolve-Path $ClosurePath).Path) -Force; $s | Add-Member -NotePropertyName reconciled_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; Write-State $s; Write-Output "RECONCILED $TaskId outcome=$($e.outcome)"
 }
-function Reclaim([string]$TaskId) { $s=Read-State $TaskId; if ($s.outcome -notin @('accepted','incomplete')) { Fail 'task must be accepted or closed incomplete before reclaim' }; Assert-NoLiveRoleProcesses $s; $s.execution_status='reclaimed'; $s.reclaimed_at=[DateTime]::UtcNow.ToString('o'); Write-State $s; Write-Output "RECLAIMED $TaskId" }
-function Cleanup([string]$TaskId) { $s=Read-State $TaskId; if ($s.execution_status -ne 'reclaimed') { Fail 'task must be reclaimed before cleanup' }; $dirty=Git @('-C',$s.worktree,'status','--porcelain'); if ($dirty) { Fail 'worktree is not clean' }; if ([IO.Path]::GetFullPath($s.worktree) -ieq [IO.Path]::GetFullPath($ProjectRoot)) { Fail 'cannot remove main worktree' }; Invoke-Native git.exe @('worktree','remove',$s.worktree); $s.execution_status='cleaned'; Write-State $s; Write-Output "CLEANED $TaskId" }
+function Reclaim([string]$TaskId) { $s=Read-State $TaskId; if ($s.outcome -notin @('accepted','incomplete')) { Fail 'task must be accepted or closed incomplete before reclaim' }; Assert-NoLiveRoleProcesses $s; $s.execution_status='reclaimed'; $s | Add-Member -NotePropertyName reclaimed_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; Write-State $s; Invoke-BlackboardLifecycle 'archive' $TaskId; Write-Output "RECLAIMED $TaskId" }
+function Cleanup([string]$TaskId) { $s=Read-State $TaskId; if ($s.execution_status -ne 'reclaimed') { Fail 'task must be reclaimed before cleanup' }; $dirty=Git @('-C',$s.worktree,'status','--porcelain'); if ($dirty) { Fail 'worktree is not clean' }; if ([IO.Path]::GetFullPath($s.worktree) -ieq [IO.Path]::GetFullPath($ProjectRoot)) { Fail 'cannot remove main worktree' }; Invoke-Native git.exe @('-C',$ProjectRoot,'worktree','remove',$s.worktree); $s.execution_status='cleaned'; Write-State $s; Write-Output "CLEANED $TaskId" }
 switch ($Command.ToLowerInvariant()) { 'setup' {Setup}; 'codex-setup' {Setup-Codex}; 'doctor' {Doctor}; 'publish' {Publish $Arg1}; 'validate' {Validate $Arg1}; 'start' {Start-Task $Arg1}; 'sync' {Sync-Task $Arg1}; 'research' {Research $Arg1 $Arg2 $Arg3}; 'status' {Status $Arg1}; 'watch' {Status $Arg1}; 'resume' {Resume-Task $Arg1}; 'accept' {Accept $Arg1 $Arg2}; 'close-incomplete' {Close-Incomplete $Arg1 $Arg2}; 'reconcile' {Reconcile $Arg1 $Arg2}; 'reclaim' {Reclaim $Arg1}; 'cleanup' {Cleanup $Arg1}; default { Fail "unknown command: $Command" } }
