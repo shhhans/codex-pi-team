@@ -297,7 +297,29 @@ function Start-RoleProcess([string]$Executable,[string[]]$ArgumentList,[string]$
     [Environment]::SetEnvironmentVariable($name, [string]$identity[$name], 'Process')
   }
   try {
-    $commandLine = ($ArgumentList | ForEach-Object { Quote-WindowsArgument ([string]$_) }) -join ' '
+    if ($ArgumentList.Count -lt 3 -or $ArgumentList[0] -ne '-d') { Fail 'invalid Windows Terminal role command' }
+    $paneDirectory = [string]$ArgumentList[1]
+    $roleExecutable = [string]$ArgumentList[2]
+    $roleArguments = @($ArgumentList | Select-Object -Skip 3)
+    $encode = { param([string]$Value) [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Value)) }
+    $scriptLines = @('$decode = { param([string]$value) [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($value)) }')
+    foreach ($name in $identity.Keys) {
+      $encodedValue = & $encode ([string]$identity[$name])
+      $scriptLines += "Set-Item -Path 'Env:$name' -Value (& `$decode '$encodedValue')"
+    }
+    $encodedDirectory = & $encode $paneDirectory
+    $scriptLines += "Set-Location -LiteralPath (& `$decode '$encodedDirectory')"
+    $scriptLines += '$roleArguments = [System.Collections.Generic.List[string]]::new()'
+    foreach ($arg in $roleArguments) {
+      $encodedArgument = & $encode ([string]$arg)
+      $scriptLines += "`$null = `$roleArguments.Add((& `$decode '$encodedArgument'))"
+    }
+    $encodedExecutable = & $encode $roleExecutable
+    $scriptLines += "& (& `$decode '$encodedExecutable') @roleArguments"
+    $scriptLines += 'exit $LASTEXITCODE'
+    $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes(($scriptLines -join "`n")))
+    $terminalArguments = @('-d',$paneDirectory,'powershell.exe','-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encodedScript)
+    $commandLine = ($terminalArguments | ForEach-Object { Quote-WindowsArgument ([string]$_) }) -join ' '
     return Start-Process $Executable -WorkingDirectory $WorkingDirectory -ArgumentList $commandLine -WindowStyle Normal -PassThru
   } finally {
     foreach ($name in $identity.Keys) {
