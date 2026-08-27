@@ -1,0 +1,30 @@
+{
+  "outcome": "accepted",
+  "criteria": [
+    {
+      "criterion_id": "C-001",
+      "artifacts": [
+        "research/PERF-004-static-survey.md"
+      ]
+    },
+    {
+      "criterion_id": "C-002",
+      "artifacts": [
+        "implementation_notes/PERF-004.md",
+        "reports/PERF-004-performance-options.md"
+      ]
+    },
+    {
+      "criterion_id": "C-003",
+      "artifacts": [
+        "reports/PERF-004-review.md"
+      ]
+    },
+    {
+      "criterion_id": "C-004",
+      "artifacts": [
+        "reports/PERF-004-performance-options.md"
+      ]
+    }
+  ]
+}
