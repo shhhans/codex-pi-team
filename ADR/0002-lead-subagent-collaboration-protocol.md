@@ -41,6 +41,34 @@ development tasks), pairing, and material constraints. A Subagent may not
 rewrite the contract, create a Scout, split off an unassigned task, or widen
 scope. It asks Lead when one of these fields is missing or contradictory.
 
+### Task boundaries, issue tracking, and branch isolation
+
+`master` is the stable integration baseline. Every development task uses one
+focused branch and one worktree created from the contract's explicit,
+validated, clean `base_ref`; the launcher must not infer the base from the
+directory in which it is invoked. Until the launcher enforces `base_ref`, Lead
+must pre-create and verify the task branch from that ref, or stop before
+launching agents. A task branch is not a substitute for an issue record, and a
+worktree is not a second integration baseline.
+
+An Agent reports a newly discovered defect or unrelated improvement to Lead;
+it does not widen the current contract, create a local issue ledger, or change
+the main worktree. Once a configured remote repository and Issue permissions
+have been verified, Lead records the defect in GitHub Issues with a concise,
+sanitized summary and reproducible evidence. If that repository or permission
+is unavailable, Lead reports the blocker to the User rather than inventing a
+GitHub target or silently falling back to untracked local issue files.
+
+Code work for an issue is a new Lead-owned task, normally using a branch named
+`fix/issue-<number>-<slug>` and a separate worktree from the selected clean
+base. The task, branch, worktree, pull request, and Issue remain linked; the
+fix is reviewed and verified independently before merge and Issue closure.
+If it overlaps the active task, Lead records the dependency and chooses the
+merge order explicitly. Raw prompts, envelopes, audit logs, host paths, and
+runtime reports stay outside Git or in an explicitly designated archive;
+GitHub Issues contain only the sanitized summary and evidence needed for
+coordination.
+
 ### Roles and artifact ownership
 
 - Researcher answers one specific question and maintains `research/`.
@@ -78,6 +106,15 @@ The lifecycle is:
    verifies the done criteria and either requests another slice or accepts.
 7. Only after Lead acceptance may Lead reclaim both sessions and clean up the
    worktree according to the worktree policy.
+
+After acceptance, Lead synchronizes the project documentation before treating
+the task as fully documented: update `architect.md` only when architecture
+changes, update `goal.md` only when goals or done criteria change, update
+`project_state.md` after material launcher, lifecycle, integration,
+repository-workflow, or closure changes, and update `README.md` when the
+operator-facing workflow changes. This is a Lead-owned checkpoint, not an
+Agent's substitute for acceptance; Lead checks the resulting diff, tests, and
+acceptance evidence together.
 
 An idle session waits for an injected event; it does not poll indefinitely.
 Every slice-ending report includes the Lead task ID, state/event name,
@@ -118,6 +155,8 @@ Lead accepts only after inspecting the diff, validation evidence, Reviewer
 verdict, unresolved risks, and the task's done criteria. A tool call, audit
 record, or socket-delivery acknowledgement alone does not prove that an
 Agent used a message or that the collaboration loop works causally.
+When a task changes repository workflow or operational state, Lead also checks
+the documentation-alignment checkpoint above before acceptance is finalized.
 
 ## Consequences
 
@@ -125,3 +164,6 @@ The pair retains context across review/fix cycles and can communicate
 directly without making Lead a message relay. Lead remains responsible for
 direction and acceptance. Persistent sessions consume resources until Lead
 reclaims them, so agents must finish turns in an idle, event-driven state.
+Cleaning up a completed task removes its clean worktree; deleting its branch
+is a separate Lead action and is allowed only after the branch is merged or
+explicitly archived and no worktree still references it.

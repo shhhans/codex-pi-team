@@ -1,4 +1,4 @@
-# Project State (as of BOOTSTRAP-SELF-007 protocol alignment)
+# Project State (as of master integration baseline a01d66a)
 
 The stable entrypoint implementation is present at `pi-team.cmd` with its
 PowerShell lifecycle under `scripts/pi-team.ps1`. The runtime uses the Git
@@ -11,6 +11,45 @@ pointer file.
 The Agent Blackboard uses the separate common-dir root
 `<git-common-dir>/harness-blackboard/v1/`; its Lead task metadata and
 append-only Agent events never live in the worktree.
+
+## Current integration state
+
+- `master` is the stable integration baseline. PERF-004 was merged into it;
+  no performance optimization was implemented by that exploration task.
+- The repository is published at `https://github.com/shhhans/codex-pi-team`;
+  local `origin/master` tracks the pushed integration baseline.
+- `fix/pi-team-base-ref` was created from `master` for the launcher contract
+  correction. The correction itself has not yet been implemented.
+- The launcher contract contains `base_ref`, but the current `start` path must
+  still be corrected or guarded so a task branch is created from that exact
+  ref rather than from the invoking worktree's incidental `HEAD`.
+- The main worktree is reserved for the stable branch and Lead-controlled
+  integration. Task worktrees are sibling directories with one focused branch
+  per task; a cleanup removes a clean task worktree but does not delete its
+  branch.
+
+## Defect and runtime artifact policy
+
+Discovered defects do not expand the current task. Agents report them to Lead;
+after the GitHub repository and Issue permissions are configured, Lead records
+them in GitHub Issues. A code fix receives a separate Lead-owned task, branch,
+worktree, review, and merge. The main worktree does not hold an untracked local
+`issues/` ledger.
+
+Runtime reports, temporary prompts, hand-built envelopes, audit records, and
+other execution traces are not source code and are kept outside Git or in the
+configured runtime/archive store. GitHub Issues receive only concise,
+sanitized evidence. Task artifacts required for review remain governed by the
+task contract and are not a substitute for the project defect ledger.
+
+## Lead documentation alignment
+
+`architect.md` and `goal.md` are stable Lead-owned snapshots: update them when
+architecture or project goals change, not for every runtime event.
+`project_state.md` is the operational snapshot and must be synchronized after
+material changes to the launcher, lifecycle, integration baseline, repository
+workflow, or task-closure policy. A task is not fully documented until Lead
+has checked this snapshot alongside the diff, tests, and acceptance evidence.
 
 `ADR/0002-lead-subagent-collaboration-protocol.md` is the sole normative
 Lead–Subagent collaboration protocol. Active summaries defer to it.

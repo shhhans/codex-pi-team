@@ -3,6 +3,32 @@
 This repository runs a three-role Pi team from isolated Git worktrees. Codex is
 the Lead; Pi supplies the Researcher, Executor, and Reviewer sessions.
 
+## Repository workflow
+
+`master` is the stable integration baseline. Each delegated task owns one
+focused branch and one isolated worktree; the task branch is merged back only
+after Lead acceptance and review. A worktree is a checkout location, not a
+separate source of truth, and cleanup removes the worktree but does not delete
+its branch.
+
+When a task discovers an unrelated defect, the Agent reports it to Lead and the
+current task remains within its frozen scope. Once this repository has a
+configured GitHub remote and verified Issue permissions, Lead records the
+defect in GitHub Issues rather than creating an `issues/` ledger in the main
+worktree. A code fix receives a separate `fix/issue-<number>-<slug>` task,
+branch, worktree, review, and merge. Runtime reports, temporary prompts,
+hand-built envelopes, and audit records stay outside Git or in the configured
+runtime/archive store; GitHub Issues receive only concise, sanitized evidence.
+
+Every new task must use an explicit clean `base_ref`. Until the launcher
+enforces that field during branch creation, Lead must pre-create the task
+branch from the exact ref or stop on a mismatch; starting from whichever
+branch happens to be checked out is not a valid substitute.
+
+The project is published at
+[github.com/shhhans/codex-pi-team](https://github.com/shhhans/codex-pi-team).
+The local `master` branch is the current pushed baseline.
+
 ## First-time setup
 
 Install the pinned Pi packages once in Pi's user package directory:
@@ -119,3 +145,12 @@ Reviewer neither load its provider nor allowlist its tools.
 
 See `ADR/0002-lead-subagent-collaboration-protocol.md` for collaboration rules
 and `ADR/0003-stable-pi-team-entrypoint.md` for the lifecycle contract.
+
+## Lead-owned project documents
+
+`ADR/0002-lead-subagent-collaboration-protocol.md` is the normative
+collaboration contract. `architect.md`, `goal.md`, and `project_state.md` are
+Lead-owned summaries and must be realigned when architecture, operational
+goals, or project state changes; they are snapshots, not runtime logs. Task
+findings and defects belong in the task's GitHub Issue or review evidence once
+that repository integration is available.

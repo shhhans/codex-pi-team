@@ -51,7 +51,9 @@ creating or updating a Blackboard lane does not start an Agent:
    Blackboard task, or align its Lead-owned name and description with the
    current formal contract.
 3. Run `pi-team.cmd validate <contract-path>` and then manually run
-   `pi-team.cmd start <contract-path>`. `start` must refuse to launch when the
+   `pi-team.cmd start <contract-path>`. The contract must name an explicit,
+   clean `base_ref`; until the launcher enforces it, Lead must pre-create and
+   verify the task branch from that ref. `start` must refuse to launch when the
    Blackboard task is missing or not active.
 4. Watch Blackboard Agent events while using `report_to_lead` and paired
    intercom for decisions and corrections. Blackboard activity is not proof of
@@ -61,6 +63,24 @@ creating or updating a Blackboard lane does not start an Agent:
    persistent pair, archive the Blackboard task, and clean up a clean reclaimed
    worktree. If any criterion is unmet, use `close-incomplete <task-id>
    <closure-file>`; do not mark a partial slice accepted.
+
+Agents report unrelated defects or improvements to Lead without widening the
+current task. Lead records them in GitHub Issues only after the configured
+remote and Issue permissions are verified; otherwise Lead reports the blocker
+to the User. Do not create a local issues ledger in the main worktree. Issue
+fixes are separate Lead-owned tasks with separate worktrees and branches such
+as `fix/issue-<number>-<slug>`, then receive their own review and merge.
+Keep raw prompts, envelopes, audit logs, host paths, and runtime reports out
+of Git or in an explicit archive; only sanitized coordination evidence belongs
+in an Issue.
+
+Before final acceptance, Lead updates the project snapshot when needed:
+`architect.md` for architecture changes, `goal.md` for goal/done-criteria
+changes, `project_state.md` for material launcher/lifecycle/integration/
+repository-workflow/closure changes, and `README.md` for operator-facing
+workflow changes. Worktree cleanup removes the worktree only; branch deletion
+is a separate action after merge/archive and after confirming no worktree uses
+the branch.
 
 Use only the project-local Windows entrypoint. Do not launch roles with
 `runs.run`, `--agent`, WSL, Git Bash, or an ambient Pi extension set. Executor
