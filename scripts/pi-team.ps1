@@ -431,8 +431,22 @@ function Test-RuntimeLive($Runtime) {
   } catch { return $false }
 }
 function Wait-RoleReady($State,[string]$Role,[string]$LaunchId) {
+  # Adaptive backoff so we react quickly to a fast-ready role, then settle
+  # into a coarser poll once the boot sequence is underway. The 60 s
+  # bounded deadline and the error message that Fail raises on timeout are
+  # unchanged so callers and observers see the same contract.
   $deadline=[DateTime]::UtcNow.AddSeconds(60)
-  do { $runtime=Read-Runtime $State $Role; if ($runtime -and $runtime.launch_id -eq $LaunchId) { return $runtime }; Start-Sleep -Milliseconds 100 } while ([DateTime]::UtcNow -lt $deadline)
+  $startMs=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  while ([DateTime]::UtcNow -lt $deadline) {
+    $runtime=Read-Runtime $State $Role
+    if ($runtime -and $runtime.launch_id -eq $LaunchId) { return $runtime }
+    $elapsedMs=([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) - $startMs
+    if ($elapsedMs -lt 1000) { $sleepMs = 50 }
+    elseif ($elapsedMs -lt 5000) { $sleepMs = 200 }
+    elseif ($elapsedMs -lt 20000) { $sleepMs = 500 }
+    else { $sleepMs = 1000 }
+    Start-Sleep -Milliseconds $sleepMs
+  }
   Fail "role startup did not register readiness: $Role"
 }
 function Test-RecordedProcessLive([int]$ProcessId,[string]$StartedAt) {
@@ -477,13 +491,16 @@ function Start-RoleProcess([string]$Executable,[string[]]$ArgumentList,[string]$
     $paneDirectory = [string]$ArgumentList[1]
     $roleExecutable = [string]$ArgumentList[2]
     $roleArguments = @($ArgumentList | Select-Object -Skip 3)
+    # Identity env vars are already set by the outer PowerShell and
+    # inherited by the child process; the bootstrap only carries the
+    # fields it must forward verbatim (directory, executable, arguments).
     $payload = [ordered]@{identity=$identity;directory=$paneDirectory;executable=$roleExecutable;arguments=@($roleArguments)} | ConvertTo-Json -Compress -Depth 5
     $payloadBytes = [Text.Encoding]::UTF8.GetBytes($payload)
     $payloadStream = New-Object IO.MemoryStream
     $gzip = New-Object IO.Compression.GzipStream($payloadStream,[IO.Compression.CompressionMode]::Compress,$true)
     $gzip.Write($payloadBytes,0,$payloadBytes.Length); $gzip.Dispose()
     $compressedPayload = [Convert]::ToBase64String($payloadStream.ToArray()); $payloadStream.Dispose()
-    $bootstrap = "`$input=[Convert]::FromBase64String('$compressedPayload');`$source=New-Object IO.MemoryStream(,`$input);`$gzip=New-Object IO.Compression.GzipStream(`$source,[IO.Compression.CompressionMode]::Decompress);`$reader=New-Object IO.StreamReader(`$gzip,[Text.Encoding]::UTF8);`$data=`$reader.ReadToEnd()|ConvertFrom-Json;`$reader.Dispose();`$gzip.Dispose();`$source.Dispose();`$data.identity.psobject.Properties|ForEach-Object { Set-Item -Path ('Env:'+`$_.Name) -Value ([string]`$_.Value) };Set-Location -LiteralPath `$data.directory;& ([string]`$data.executable) @([string[]]`$data.arguments);exit `$LASTEXITCODE"
+    $bootstrap = "`$input=[Convert]::FromBase64String('$compressedPayload');`$source=New-Object IO.MemoryStream(,`$input);`$gzip=New-Object IO.Compression.GzipStream(`$source,[IO.Compression.CompressionMode]::Decompress);`$reader=New-Object IO.StreamReader(`$gzip,[Text.Encoding]::UTF8);`$data=`$reader.ReadToEnd()|ConvertFrom-Json;`$reader.Dispose();`$gzip.Dispose();`$source.Dispose();Set-Location -LiteralPath `$data.directory;& ([string]`$data.executable) @([string[]]`$data.arguments);exit `$LASTEXITCODE"
     $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
     $terminalArguments = @('-d',$paneDirectory,'powershell.exe','-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encodedScript)
     $commandLine = ($terminalArguments | ForEach-Object { Quote-WindowsArgument ([string]$_) }) -join ' '

@@ -1067,10 +1067,493 @@ test("inspect returns read-only evidence, supports JSON output, and treats skipp
   }
 });
 
+test("appendRoleEvent seeds a fresh event log with sequence 1 and writes a .seq sidecar", async () => {
+  // First-ever append to a fresh (task, role) pair: the JSONL did not
+  // exist before, the .seq sidecar did not exist before, and the first
+  // event must be sequence 1. The sidecar must reflect the same value so
+  // a fresh process can recover without rescanning.
+  const root = mkdtempSync(join(tmpdir(), "pi-team-role-events-fresh-"));
+  try {
+    const base = { task_id: "FRESH-001", role: "executor", agent_id: "exec-fresh", worktree: root, state: "working", activity: "starting" };
+    const result = await appendRoleEvent(root, base);
+    assert.equal(result.sequence, 1, "first append to a new (task, role) must yield sequence 1");
+    const seqFile = join(root, "FRESH-001-executor.jsonl.seq");
+    assert.equal(await stat(seqFile).then(() => true, () => false), true, "sidecar .seq file must exist after first append");
+    assert.equal((await readFile(seqFile, "utf8")).trim(), "1", "sidecar .seq must record sequence 1");
+    const jsonl = await readFile(join(root, "FRESH-001-executor.jsonl"), "utf8");
+    const lines = jsonl.trim().split(/\r?\n/).filter(Boolean);
+    assert.equal(lines.length, 1, "jsonl must contain exactly one line");
+    assert.equal(JSON.parse(lines[0]).sequence, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("appendRoleEvent recovers from a pre-existing event log without a .seq sidecar", async () => {
+  // Simulates an event log that was written by the previous implementation
+  // (no .seq sidecar). The next append must scan the file, find the
+  // existing max sequence, and continue from there without producing a
+  // duplicate or a gap. The sidecar is then rewritten so subsequent
+  // appends stay O(1).
+  const root = mkdtempSync(join(tmpdir(), "pi-team-role-events-legacy-"));
+  try {
+    const file = join(root, "LEGACY-001-executor.jsonl");
+    const lines = [];
+    for (let i = 1; i <= 5; i++) {
+      lines.push(JSON.stringify({ sequence: i, task_id: "LEGACY-001", role: "executor", activity: `legacy ${i}`, state: "working" }));
+    }
+    await writeFile(file, `${lines.join("\n")}\n`, "utf8");
+    const base = { task_id: "LEGACY-001", role: "executor", agent_id: "exec-legacy", worktree: root, state: "working", activity: "fresh" };
+    const result = await appendRoleEvent(root, base);
+    assert.equal(result.sequence, 6, "must continue from max(legacy) + 1 after cold-start scan");
+    const seqFile = `${file}.seq`;
+    assert.equal((await readFile(seqFile, "utf8")).trim(), "6", "sidecar must be rewritten to the reconciled value");
+    const updatedLines = (await readFile(file, "utf8")).trim().split(/\r?\n/).filter(Boolean);
+    assert.equal(updatedLines.length, 6);
+    assert.deepEqual(updatedLines.map((l) => JSON.parse(l).sequence), [1, 2, 3, 4, 5, 6]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("appendRoleEvent falls back to a full scan if the .seq sidecar is corrupt", async () => {
+  // The .seq sidecar may be truncated or contain non-numeric data after
+  // an interrupted write. The implementation must detect the corruption,
+  // rescan the JSONL, and continue from the correct max sequence without
+  // producing a duplicate or skipping a number.
+  const root = mkdtempSync(join(tmpdir(), "pi-team-role-events-corrupt-"));
+  try {
+    const base = { task_id: "CORRUPT-001", role: "executor", agent_id: "exec-corrupt", worktree: root, state: "working", activity: "x" };
+    await appendRoleEvent(root, base); // sequence 1, sidecar = 1
+    await appendRoleEvent(root, { ...base, activity: "y" }); // sequence 2, sidecar = 2
+    const seqFile = join(root, "CORRUPT-001-executor.jsonl.seq");
+    await writeFile(seqFile, "garbage-not-a-number\n", "utf8");
+    const result = await appendRoleEvent(root, { ...base, activity: "z" });
+    assert.equal(result.sequence, 3, "must reconcile and issue the next sequence after a corrupt .seq");
+    assert.equal((await readFile(seqFile, "utf8")).trim(), "3", "sidecar must be rewritten to the reconciled value");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("appendRoleEvent reads the .seq sidecar on cold start in a fresh Node subprocess", async () => {
+  // Cross-process regression: a fresh Node process must observe the
+  // sidecar's integer and continue from there, not from a fresh scan of
+  // the (possibly empty or stale) JSONL. The same-process sequence tests
+  // above are masked by the in-process cache; only a fresh subprocess
+  // exercises the cold-start read path.
+  //
+  // Phase 1 (parent): two appends → sidecar "2\n", JSONL 2 lines.
+  // Phase 2 (parent): truncate JSONL to 0 bytes (simulate corruption).
+  // Phase 3 (child subprocess): one append → must observe sequence 3 (NOT 1)
+  //                         and rewrite the sidecar to "3\n".
+  const root = mkdtempSync(join(tmpdir(), "pi-team-role-events-cold-start-"));
+  const taskId = "COLD-001";
+  const role = "executor";
+  const base = { task_id: taskId, role, agent_id: "exec-cold", worktree: root, state: "working", activity: "x" };
+
+  try {
+    // Phase 1: parent process — two appends.
+    const r1 = await appendRoleEvent(root, base);
+    const r2 = await appendRoleEvent(root, { ...base, activity: "y" });
+    assert.equal(r1.sequence, 1);
+    assert.equal(r2.sequence, 2);
+    const seqFile = join(root, `${taskId}-${role}.jsonl.seq`);
+    assert.equal((await readFile(seqFile, "utf8")).trim(), "2");
+
+    // Phase 2: parent process — truncate the JSONL but leave the sidecar.
+    const jsonl = join(root, `${taskId}-${role}.jsonl`);
+    await writeFile(jsonl, "", "utf8");
+
+    // Phase 3: child subprocess — fresh Node process, fresh in-process
+    // cache. Must observe sequence 3, not 1.
+    const probePath = join(root, "_probe.mjs");
+    // Windows ESM requires file:// URLs for absolute-path imports; build
+    // the URL once so the same value is usable inside the probe script.
+    const moduleUrl = new URL("../.pi/communication/role-events.mjs", import.meta.url).href;
+    const probeScript = [
+      "import { appendRoleEvent } from " + JSON.stringify(moduleUrl) + ";",
+      "const r = await appendRoleEvent(" + JSON.stringify(root) + ", " + JSON.stringify({ ...base, activity: "z" }) + ");",
+      "import { readFile } from \"node:fs/promises\";",
+      "const sidecar = (await readFile(" + JSON.stringify(seqFile) + ", \"utf8\")).trim();",
+      "process.stdout.write(JSON.stringify({ sequence: r.sequence, sidecar }) + \"\\n\");",
+    ].join("\n");
+    await writeFile(probePath, probeScript, "utf8");
+    const probe = spawnSync(process.execPath, [probePath], { encoding: "utf8" });
+    assert.equal(probe.status, 0, `subprocess failed: ${probe.stderr}`);
+    const result = JSON.parse(probe.stdout.trim());
+    assert.equal(result.sequence, 3, "fresh subprocess must read the sidecar and continue from 2 + 1 = 3, not scan an empty JSONL and emit 1");
+    assert.equal(result.sidecar, "3", "sidecar must be rewritten to the new max");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("appendRoleEvent preserves sequence continuity when two independent Node subprocesses interleave appends", async () => {
+  // Cross-process regression: when two independent Node processes
+  // append to the same (task, role) file, the per-file lock must
+  // serialise the appends and every issued sequence must be unique and
+  // contiguous from 1. The previous PERF-005 fix shipped a process-local
+  // cache inside the lock that could return a stale value when another
+  // Node process had updated the sidecar in between, producing
+  // duplicate sequences (e.g. [1, 2, 2, 3]). This test drives the
+  // reproduction pattern with two fresh subprocesses appending
+  // concurrently via spawnSync.
+  const root = mkdtempSync(join(tmpdir(), "pi-team-role-events-xproc-"));
+  const taskId = "XPROC-001";
+  const role = "executor";
+  const appendsPerProcess = 8;
+  const totalAppends = appendsPerProcess * 2;
+  const moduleUrl = new URL("../.pi/communication/role-events.mjs", import.meta.url).href;
+
+  const probeScriptFor = (workerTag, baseActivity) => [
+    "import { appendRoleEvent } from " + JSON.stringify(moduleUrl) + ";",
+    "const root = " + JSON.stringify(root) + ";",
+    "const base = " + JSON.stringify({ task_id: "XPROC-001", role: "executor", agent_id: workerTag, worktree: root, state: "working", activity: baseActivity }) + ";",
+    "const seqs = [];",
+    "for (let i = 0; i < " + appendsPerProcess + "; i++) {",
+    "  const r = await appendRoleEvent(root, { ...base, activity: base.activity + \":\" + i });",
+    "  seqs.push(r.sequence);",
+    "}",
+    "process.stdout.write(JSON.stringify({ worker: " + JSON.stringify(workerTag) + ", sequences: seqs }) + \"\\n\");",
+  ].join("\n");
+
+  const probeAPath = join(root, "_probeA.mjs");
+  const probeBPath = join(root, "_probeB.mjs");
+  await writeFile(probeAPath, probeScriptFor("worker-A", "alpha"), "utf8");
+  await writeFile(probeBPath, probeScriptFor("worker-B", "beta"), "utf8");
+
+  try {
+    // Run both probes in parallel so their appends interleave behind the
+    // single per-file mkdir-lock. spawnSync is sequential per call, so
+    // we kick off B before awaiting A to maximise the chance of
+    // genuine cross-process interleaving.
+    const probeB = spawnSync(process.execPath, [probeBPath], { encoding: "utf8" });
+    const probeA = spawnSync(process.execPath, [probeAPath], { encoding: "utf8" });
+    assert.equal(probeA.status, 0, `probe A failed: ${probeA.stderr}`);
+    assert.equal(probeB.status, 0, `probe B failed: ${probeB.stderr}`);
+    const resultA = JSON.parse(probeA.stdout.trim());
+    const resultB = JSON.parse(probeB.stdout.trim());
+    const allSeqs = [...resultA.sequences, ...resultB.sequences].sort((a, b) => a - b);
+
+    // No duplicates.
+    assert.equal(new Set(allSeqs).size, totalAppends, `duplicate sequences detected: ${JSON.stringify(allSeqs)}`);
+    // Contiguous from 1 to totalAppends.
+    assert.deepEqual(allSeqs, Array.from({ length: totalAppends }, (_, i) => i + 1), `expected contiguous [1..${totalAppends}], got ${JSON.stringify(allSeqs)}`);
+    // Both workers issued at least one sequence (sanity).
+    assert.equal(resultA.sequences.length, appendsPerProcess);
+    assert.equal(resultB.sequences.length, appendsPerProcess);
+    // The JSONL contains exactly totalAppends lines with the same set of sequences.
+    const jsonlLines = (await readFile(join(root, `${taskId}-${role}.jsonl`), "utf8")).trim().split(/\r?\n/).filter(Boolean);
+    assert.equal(jsonlLines.length, totalAppends);
+    const jsonlSeqs = jsonlLines.map((l) => JSON.parse(l).sequence).sort((a, b) => a - b);
+    assert.deepEqual(jsonlSeqs, allSeqs);
+    // The sidecar agrees.
+    const sidecar = (await readFile(`${join(root, `${taskId}-${role}.jsonl`)}.seq`, "utf8")).trim();
+    assert.equal(Number(sidecar), totalAppends);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("appendRoleEvent re-reads the sidecar under the lock when a stale sidecar is observed (simulates another process)", async () => {
+  // Single-process simulation of the cross-process regression: the parent
+  // appends once (sequence 1, sidecar = "1"), then writes "5" to the
+  // sidecar and a fifth event line directly to the JSONL — mimicking
+  // another Node process that has just issued sequences 2-5. The parent
+  // then appends again. With the per-file lock still held correctly,
+  // and the sequence source re-read from the (now authoritative) sidecar
+  // inside the lock, the parent must issue sequence 6, not sequence 2.
+  // This is the same-process shape of the cross-process bug and
+  // exercises the lock-protected re-read deterministically.
+  const root = mkdtempSync(join(tmpdir(), "pi-team-role-events-stale-sidecar-"));
+  const taskId = "STALE-001";
+  const role = "executor";
+  const jsonlFile = join(root, `${taskId}-${role}.jsonl`);
+  const seqFile = `${jsonlFile}.seq`;
+  const base = { task_id: taskId, role, agent_id: "exec-stale", worktree: root, state: "working", activity: "x" };
+
+  try {
+    const r1 = await appendRoleEvent(root, base);
+    assert.equal(r1.sequence, 1);
+
+    // Simulate "another Node process" by appending four events directly
+    // to the JSONL and bumping the sidecar to 5. This is what a sibling
+    // process would have left behind after our parent call returned.
+    const events = [];
+    for (let i = 2; i <= 5; i++) {
+      events.push(JSON.stringify({ ...base, sequence: i, version: 1, at: "2026-08-28T00:00:00.000Z", activity: `other ${i}` }));
+    }
+    await writeFile(jsonlFile, `${events.join("\n")}\n`, "utf8");
+    await writeFile(seqFile, "5\n", "utf8");
+
+    // The parent process appends again. With the buggy in-process cache
+    // it would read the stale value (1) and emit sequence 2 (a
+    // duplicate of the "other 2" line). With the sidecar-first read
+    // inside the lock it emits sequence 6.
+    const r2 = await appendRoleEvent(root, { ...base, activity: "y" });
+    assert.equal(r2.sequence, 6, "must re-read the sidecar under the lock and continue from 5, not from the stale 1");
+    const sidecar = (await readFile(seqFile, "utf8")).trim();
+    assert.equal(Number(sidecar), 6);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("appendRoleEvent stays sequence-continuous under heavy concurrent fan-out", async () => {
+  // Stress the per-file lock and the in-process cache together. 32
+  // concurrent appends to the same (task, role) must yield exactly
+  // sequences [1..32] with no duplicates and no gaps.
+  const root = mkdtempSync(join(tmpdir(), "pi-team-role-events-heavy-"));
+  try {
+    const base = { task_id: "HEAVY-001", role: "reviewer", agent_id: "reviewer-heavy", worktree: root, state: "reviewing", activity: "checking" };
+    const concurrent = await Promise.all(Array.from({ length: 32 }, (_, index) => appendRoleEvent(root, { ...base, activity: `checking ${index}` })));
+    const sequences = concurrent.map((event) => event.sequence).sort((a, b) => a - b);
+    assert.deepEqual(sequences, Array.from({ length: 32 }, (_, index) => index + 1));
+    const seqFile = join(root, "HEAVY-001-reviewer.jsonl.seq");
+    assert.equal((await readFile(seqFile, "utf8")).trim(), "32", "sidecar must match the last issued sequence under heavy fan-out");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Start-RoleProcess bootstrap transmits identity, directory, executable, and arguments with special characters and long payloads", async () => {
+  // Boundary test for the bootstrap parameter pipeline. The contract
+  // carries a description and constraints with embedded semicolons,
+  // double quotes, backticks, ampersands, parens, and a long ASCII body
+  // (~2 KB) — patterns that historically broke the legacy `runs.run`
+  // path. The fake-Pi captures the assignment that pi.cmd receives; the
+  // captured record must match the concatenated Lead assignment exactly
+  // and every identity env var must round-trip.
+  const root = mkdtempSync(join(tmpdir(), "pi-team-bootstrap-bounds-"));
+  const agentDir = join(root, "agent");
+  const fakePi = join(root, "fake-pi.cmd");
+  const fakePiScript = join(root, "fake-pi.ps1");
+  const launchLog = join(root, "launches.jsonl");
+  const worktree = join(root, "task-worktree");
+  const questionFile = join(root, "question.md");
+  const contract = join(root, "contract.md");
+  const script = join(REPO, "scripts/pi-team.ps1");
+  const taskId = "BND-001";
+  const branch = `pi-team/test-bootstrap-bounds-${process.pid}`;
+  const commonDirResult = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: REPO, encoding: "utf8" });
+  assert.equal(commonDirResult.status, 0, commonDirResult.stderr);
+  const commonDir = commonDirResult.stdout.trim().replaceAll("/", "\\");
+  const stateRoot = join(commonDir, "pi-team", "v1");
+  const stateFile = join(stateRoot, `${taskId}.json`);
+  const contractSnapshot = join(stateRoot, "contracts", `${taskId}.md`);
+  const blackboardStateFile = join(commonDir, "harness-blackboard", "v1", `${taskId}.json`);
+  const eventFiles = [join(stateRoot, `${taskId}-executor.jsonl`), join(stateRoot, `${taskId}-reviewer.jsonl`)];
+  const runtimeFiles = ["executor", "reviewer", "researcher"].map((role) => join(stateRoot, `${taskId}-${role}-runtime.json`));
+  const longPromptBody = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(40); // ~2 KB
+
+  const run = (command, args = [], extraEnv = {}) => spawnSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, command, ...args,
+  ], { cwd: REPO, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_CMD: fakePi, WT_CMD: fakePi, ...extraEnv }, encoding: "utf8" });
+
+  const waitForRecords = async (count) => {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const text = await readFile(launchLog, "utf8").catch(() => "");
+      const records = text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line.replace(/^\uFEFF/, "")));
+      if (records.length >= count) return records;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.fail(`expected ${count} fake Pi launches; log was not ready`);
+  };
+
+  try {
+    await mkdir(join(agentDir, "npm/node_modules"), { recursive: true });
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [
+      "npm:pi-subagents@0.56.0",
+      "npm:pi-intercom@0.11.0",
+      { source: "npm:pi-web-access@0.24.2", extensions: [] },
+    ] }));
+    for (const [name, version] of [["pi-subagents", "0.56.0"], ["pi-intercom", "0.11.0"], ["pi-web-access", "0.24.2"]]) {
+      const packageDir = join(agentDir, "npm/node_modules", name);
+      await mkdir(packageDir, { recursive: true });
+      await writeFile(join(packageDir, "package.json"), JSON.stringify({ name, version }));
+    }
+    await writeFile(fakePiScript, String.raw`param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)
+ $encodedIndex = [Array]::IndexOf($Args, '-EncodedCommand')
+if ($encodedIndex -ge 0) {
+  if ($encodedIndex -ge ($Args.Count - 1)) { Write-Error 'fake Windows Terminal requires an encoded bootstrap'; exit 2 }
+  & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand $Args[$encodedIndex + 1]
+  exit $LASTEXITCODE
+}
+$record=[ordered]@{task_id=$env:PI_TEAM_TASK_ID;role=$env:PI_TEAM_ROLE;agent_id=$env:PI_TEAM_AGENT_ID;worktree=$env:PI_TEAM_WORKTREE;state_root=$env:PI_TEAM_STATE_ROOT;scope_id=$env:PI_TEAM_SCOPE_ID;intercom_id=$env:PI_INTERCOM_STABLE_ID;args=@($Args)}
+$runtime=[ordered]@{version=1;task_id=$env:PI_TEAM_TASK_ID;role=$env:PI_TEAM_ROLE;agent_id=$env:PI_TEAM_AGENT_ID;launch_id=$env:PI_TEAM_LAUNCH_ID;intercom_id=$env:PI_INTERCOM_STABLE_ID;runtime_pid=$PID;parent_pid=0;ready_at=[DateTime]::UtcNow.ToString('o');worktree=$env:PI_TEAM_WORKTREE}
+$runtime | ConvertTo-Json | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $env:PI_TEAM_STATE_ROOT "$($env:PI_TEAM_TASK_ID)-$($env:PI_TEAM_ROLE)-runtime.json")
+$record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $env:PI_TEAM_TEST_LOG
+`);
+    await writeFile(fakePi, `@echo off\r\npowershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-pi.ps1" %*\r\n`);
+    await writeFile(questionFile, "Determine the boundary contract.\n");
+    const branchCreate = spawnSync("git", ["branch", branch, "master"], { cwd: REPO, encoding: "utf8" });
+    assert.equal(branchCreate.status, 0, branchCreate.stderr);
+    await writeFile(contract, `# Bootstrap boundaries\n\n\`\`\`json\n${JSON.stringify({
+      version: 2,
+      task_id: taskId,
+      name: 'Boundary contract with doublequotes and backticks and ampersands',
+      description: `Semicolons; double quotes; $dollar; \`backtick\`; parens (round); a long body follows: ${longPromptBody}`,
+      base_ref: "master",
+      branch,
+      worktree,
+      in_scope: ["bootstrap boundaries"],
+      out_of_scope: ["production deploys"],
+      done_criteria: [{ id: "C-001", description: "Bootstrap transmits all fields.", owner: "executor", artifacts: ["implementation_notes/BND-001.md"] }],
+      delegations: [
+        { id: "EXECUTOR-001", role: "executor", objective: "Exercise the bootstrap.", artifact_path: "implementation_notes/BND-001.md", required_capabilities: ["bash", "write"] },
+        { id: "REVIEWER-001", role: "reviewer", objective: "Review the bootstrap.", artifact_path: "failures/BND-001-review.md", required_capabilities: ["read", "write"] },
+      ],
+      constraints: ["constraint one; with semicolon", "constraint two with doublequotes", "constraint three `with backtick`"],
+    }, null, 2)}\n\`\`\`\n`);
+    const publish = run("publish", [contract]);
+    assert.equal(publish.status, 0, publish.stderr || publish.stdout);
+    assert.match(publish.stdout, /PUBLISHED BND-001/);
+    const start = run("start", [contract], { PI_TEAM_TEST_LOG: launchLog });
+    assert.equal(start.status, 0, start.stderr || start.stdout);
+    const startRecords = await waitForRecords(2);
+    for (const record of startRecords) {
+      assert.equal(record.task_id, taskId);
+      assert.equal(record.worktree, worktree);
+      assert.equal(record.state_root, stateRoot);
+      assert.equal(record.scope_id.length > 0, true, `scope_id must be a UUID for ${record.role}`);
+      assert.match(record.intercom_id, new RegExp(`^pi-team--${taskId}--${record.role}--`));
+    }
+    // The bootstrap forwards verbatim the directory, executable, and arguments
+    // recorded by the role process. The contract's special characters and long
+    // body must survive the gzip+base64+UTF-16LE round-trip. cmd.exe may split
+    // a long quoted argument into multiple argv entries, so we rejoin and
+    // assert against the full string.
+    const executorRecord = startRecords.find((record) => record.role === "executor");
+    const reviewerRecord = startRecords.find((record) => record.role === "reviewer");
+    assert.ok(executorRecord, "executor launch must be recorded");
+    assert.ok(reviewerRecord, "reviewer launch must be recorded");
+    for (const record of [executorRecord, reviewerRecord]) {
+      const argvJoined = record.args.join(" ");
+      assert.match(argvJoined, /Lead assignment\. Task ID: BND-001\./);
+      assert.match(argvJoined, new RegExp(`Frozen task contract: ${contractSnapshot.replace(/\\/g, "\\\\")}`));
+      assert.match(argvJoined, /Semicolons;/);
+      assert.match(argvJoined, /double quotes/);
+      assert.match(argvJoined, /\$dollar/);
+      assert.match(argvJoined, /`backtick`/);
+      assert.match(argvJoined, /parens \(round\)/);
+      assert.ok(argvJoined.length > 2000, "long description body must round-trip through the bootstrap (>2 KB)");
+      assert.match(argvJoined, /Constraints: constraint one; with semicolon; constraint two with doublequotes; constraint three `with backtick`\./);
+      // The role argv must keep the frozen session id and skill path intact.
+      assert.equal(record.args.includes("--session-id"), true);
+      assert.equal(record.args[record.args.indexOf("--skill") + 1].endsWith("SKILL.md"), true);
+    }
+  } finally {
+    await rm(stateFile, { force: true });
+    await rm(contractSnapshot, { force: true });
+    await rm(blackboardStateFile, { force: true });
+    for (const path of eventFiles) await rm(path, { force: true });
+    for (const path of runtimeFiles) await rm(path, { force: true });
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: REPO, encoding: "utf8" });
+    spawnSync("git", ["branch", "-D", branch], { cwd: REPO, encoding: "utf8" });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Wait-RoleReady bounded timeout fires at ~60 s when no runtime.json appears", async () => {
+  // Negative scenario for the readiness wait. A fake Pi that never writes
+  // <task>-<role>-runtime.json must cause Wait-RoleReady to throw the
+  // canonical timeout error after ~60 seconds (not earlier; never busy-
+  // polling past the bounded deadline). The test measures wall-clock
+  // from launch invocation to start-process exit.
+  const root = mkdtempSync(join(tmpdir(), "pi-team-wait-timeout-"));
+  const agentDir = join(root, "agent");
+  const fakePi = join(root, "fake-pi.cmd");
+  const fakePiScript = join(root, "fake-pi.ps1");
+  const launchLog = join(root, "launches.jsonl");
+  const worktree = join(root, "task-worktree");
+  const contract = join(root, "contract.md");
+  const script = join(REPO, "scripts/pi-team.ps1");
+  const taskId = "TMO-001";
+  const branch = `pi-team/test-wait-timeout-${process.pid}`;
+  const commonDirResult = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd: REPO, encoding: "utf8" });
+  assert.equal(commonDirResult.status, 0, commonDirResult.stderr);
+  const commonDir = commonDirResult.stdout.trim().replaceAll("/", "\\");
+  const stateRoot = join(commonDir, "pi-team", "v1");
+  const stateFile = join(stateRoot, `${taskId}.json`);
+  const contractSnapshot = join(stateRoot, "contracts", `${taskId}.md`);
+  const blackboardStateFile = join(commonDir, "harness-blackboard", "v1", `${taskId}.json`);
+  const eventFiles = [join(stateRoot, `${taskId}-executor.jsonl`), join(stateRoot, `${taskId}-reviewer.jsonl`)];
+  const runtimeFiles = ["executor", "reviewer", "researcher"].map((role) => join(stateRoot, `${taskId}-${role}-runtime.json`));
+
+  const run = (command, args = [], extraEnv = {}) => spawnSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, command, ...args,
+  ], { cwd: REPO, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_CMD: fakePi, WT_CMD: fakePi, ...extraEnv }, encoding: "utf8" });
+
+  try {
+    await mkdir(join(agentDir, "npm/node_modules"), { recursive: true });
+    await writeFile(join(agentDir, "settings.json"), JSON.stringify({ packages: [
+      "npm:pi-subagents@0.56.0",
+      "npm:pi-intercom@0.11.0",
+      { source: "npm:pi-web-access@0.24.2", extensions: [] },
+    ] }));
+    for (const [name, version] of [["pi-subagents", "0.56.0"], ["pi-intercom", "0.11.0"], ["pi-web-access", "0.24.2"]]) {
+      const packageDir = join(agentDir, "npm/node_modules", name);
+      await mkdir(packageDir, { recursive: true });
+      await writeFile(join(packageDir, "package.json"), JSON.stringify({ name, version }));
+    }
+    // fake Pi: drops the inner bootstrap on the floor (no runtime.json ever written).
+    await writeFile(fakePiScript, String.raw`param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)
+ $encodedIndex = [Array]::IndexOf($Args, '-EncodedCommand')
+if ($encodedIndex -ge 0) {
+  if ($encodedIndex -ge ($Args.Count - 1)) { Write-Error 'fake Windows Terminal requires an encoded bootstrap'; exit 2 }
+  & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -EncodedCommand $Args[$encodedIndex + 1]
+  exit $LASTEXITCODE
+}
+# Intentionally do NOT write the runtime.json — Wait-RoleReady must time out.
+exit 0
+`);
+    await writeFile(fakePi, `@echo off\r\npowershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-pi.ps1" %*\r\n`);
+    await writeFile(contract, `# Wait timeout\n\n\`\`\`json\n${JSON.stringify({
+      version: 2,
+      task_id: taskId,
+      name: "Wait timeout test",
+      description: "Verify bounded timeout.",
+      base_ref: "master",
+      branch,
+      worktree,
+      in_scope: ["wait timeout"],
+      out_of_scope: ["happy path"],
+      done_criteria: [{ id: "C-001", description: "Timeout fires.", owner: "executor", artifacts: ["implementation_notes/TMO-001.md"] }],
+      delegations: [
+        { id: "EXECUTOR-001", role: "executor", objective: "Verify timeout.", artifact_path: "implementation_notes/TMO-001.md", required_capabilities: ["bash", "write"] },
+        { id: "REVIEWER-001", role: "reviewer", objective: "Verify timeout.", artifact_path: "failures/TMO-001-review.md", required_capabilities: ["read"] },
+      ],
+      constraints: ["bounded timeout"],
+    }, null, 2)}\n\`\`\`\n`);
+    const branchCreate = spawnSync("git", ["branch", branch, "master"], { cwd: REPO, encoding: "utf8" });
+    assert.equal(branchCreate.status, 0, branchCreate.stderr);
+    const publish = run("publish", [contract]);
+    assert.equal(publish.status, 0, publish.stderr || publish.stdout);
+    const t0 = Date.now();
+    const start = run("start", [contract], { PI_TEAM_TEST_LOG: launchLog });
+    const elapsedMs = Date.now() - t0;
+    assert.notEqual(start.status, 0, "start must fail when Wait-RoleReady times out");
+    assert.match(start.stderr, /role startup did not register readiness/);
+    assert.ok(elapsedMs >= 58_000 && elapsedMs <= 75_000, `bounded timeout must fire between 58 s and 75 s (got ${elapsedMs} ms)`);
+  } finally {
+    await rm(stateFile, { force: true });
+    await rm(contractSnapshot, { force: true });
+    await rm(blackboardStateFile, { force: true });
+    for (const path of eventFiles) await rm(path, { force: true });
+    for (const path of runtimeFiles) await rm(path, { force: true });
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: REPO, encoding: "utf8" });
+    spawnSync("git", ["branch", "-D", branch], { cwd: REPO, encoding: "utf8" });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("tests directory contains the deterministic contract and communication-policy tests", async () => {
   const { readdir } = await import("node:fs/promises");
   const entries = (await readdir(join(REPO, "tests"))).filter((name) => !name.startsWith(".")).sort();
-  assert.deepEqual(entries, ["blackboard.test.mjs", "communication-policy.test.mjs", "fixtures", "legacy", "run-tests.ps1", "team-contract.test.mjs"].sort(),
+  assert.deepEqual(entries, ["blackboard.test.mjs", "cleanup.mjs", "communication-policy.test.mjs", "fixtures", "legacy", "run-tests.ps1", "team-contract.test.mjs"].sort(),
     `tests/ must contain only the deterministic contract and communication-policy tests; got ${entries.join(", ")}`);
   // Both top-level .test.mjs files are allowed.
   const topLevelTests = entries.filter((name) => name.endsWith(".test.mjs")).sort();
