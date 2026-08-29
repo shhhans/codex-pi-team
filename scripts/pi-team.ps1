@@ -372,16 +372,21 @@ function Launch-Role($State,[string]$Role,[string]$Prompt,[string]$SessionId,[bo
   $runtime=Wait-RoleReady $State $Role $launchId
   $State.sessions.$Role | Add-Member -NotePropertyName runtime_pid -NotePropertyValue $runtime.runtime_pid -Force; $State.sessions.$Role | Add-Member -NotePropertyName runtime_started_at -NotePropertyValue $runtime.ready_at -Force; $State.sessions.$Role | Add-Member -NotePropertyName intercom_id -NotePropertyValue $runtime.intercom_id -Force; Write-State $State
 }
+function New-RoleAssignment($Contract,[string]$Role) {
+  $delegation = @($Contract.delegations | Where-Object { $_.role -eq $Role })
+  if ($delegation.Count -ne 1) { Fail "contract must declare exactly one delegation for role $Role" }
+  $criteria = @($Contract.done_criteria | Where-Object { $_.owner -eq $Role } | ForEach-Object { "$($_.id): $($_.description) [artifacts=$($_.artifacts -join ',')]" }) -join '; '
+  return "Lead assignment. Task ID: $($Contract.task_id). Worktree: $($Contract.worktree). Role: $Role. Delegation: $($delegation[0].id). Artifact: $($delegation[0].artifact_path). Required capabilities: $($delegation[0].required_capabilities -join ', '). Objective: $($delegation[0].objective). Done criteria: $criteria."
+}
 function Start-Task([string]$Path) {
   Assert-Setup; $c = Parse-Contract $Path; Assert-BlackboardTask $c | Out-Null; $existing = Join-Path (StateRoot) "$($c.task_id).json"; if (Test-Path $existing) { Fail 'task already started' }
   Invoke-Native git.exe @('-C',$ProjectRoot,'worktree','add',$c.worktree,$c.branch)
   $contractSnapshot = Snapshot-Contract $Path $c.task_id
   $state = [pscustomobject]@{version=2;task_id=$c.task_id;name=$c.name;description=$c.description;execution_status='active';outcome='pending';worktree=$c.worktree;contract_path=$contractSnapshot;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor'};reviewer=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='reviewer'}}}
   Write-State $state; foreach ($r in @('executor','reviewer')) { Event $state $r 'working' 'task started' '' '' }
-  $criteria = @($c.done_criteria | ForEach-Object { "$($_.id): $($_.description) [owner=$($_.owner); artifacts=$($_.artifacts -join ',')]" }) -join '; '
-  $delegations = @($c.delegations | ForEach-Object { "$($_.id): $($_.role) -> $($_.artifact_path) [capabilities=$($_.required_capabilities -join ',')]" }) -join '; '
-  $assignment = "Lead assignment. Task ID: $($c.task_id). Worktree: $($c.worktree). Frozen task contract: $contractSnapshot. Read that exact contract before acting. Objective: $($c.description) Done criteria: $criteria. Role delegations: $delegations. Constraints: $($c.constraints -join '; ')."
-  try { Launch-Role $state 'executor' "$assignment You are Executor. Perform only the assigned slice and report progress through the configured tools." $state.sessions.executor.session_id; Launch-Role $state 'reviewer' "$assignment You are Reviewer. Inspect the delegated work as it becomes available and report progress through the configured tools." $state.sessions.reviewer.session_id }
+  $executorAssignment = New-RoleAssignment $c 'executor'
+  $reviewerAssignment = New-RoleAssignment $c 'reviewer'
+  try { Launch-Role $state 'executor' "$executorAssignment You are Executor. Perform only the assigned slice and report progress through the configured tools." $state.sessions.executor.session_id; Launch-Role $state 'reviewer' "$reviewerAssignment You are Reviewer. Inspect the delegated work as it becomes available and report progress through the configured tools." $state.sessions.reviewer.session_id }
   catch { Stop-RoleTree $state.sessions.executor; Stop-RoleTree $state.sessions.reviewer; $state | Add-Member -NotePropertyName launch_error -NotePropertyValue $_.Exception.Message -Force; $state | Add-Member -NotePropertyName launch_failed_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; Write-State $state; throw }
   Write-Output "STARTED $($c.task_id) scope=$($state.scope_id)"
 }

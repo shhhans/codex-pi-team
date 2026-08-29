@@ -529,7 +529,36 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       assert.equal(record.args[record.args.indexOf("--skill") + 1], join(REPO, ".pi", "skills", record.role === "executor" ? "execute-delegated-task" : "review-delegated-task", "SKILL.md"));
       assert.equal(record.args.some((arg) => arg.includes(`${worktree}\\.pi\\communication`)), false, "role runtime extensions must not depend on the task branch snapshot");
       assert.equal(record.args.some((arg) => arg.includes(join(REPO, ".pi", "communication", "extensions"))), true);
-      assert.equal(record.args.some((arg) => arg.includes(contractSnapshot)), true, "initial assignment must name the frozen contract path");
+      assert.equal(record.args.some((arg) => arg.includes(contractSnapshot)), false, "initial assignment must not name the frozen contract path; state.contract_path remains the Lead-side pointer");
+    }
+    // Issue #1 — role-scoped assignment must include only role-critical content and exclude Lead-only text.
+    const roleDelegations = {
+      executor: "EXECUTOR-001",
+      reviewer: "REVIEWER-001",
+    };
+    const initialPrompts = new Map(startRecords.map((record) => [record.role, record.args[record.args.length - 1]]));
+    for (const record of startRecords) {
+      const prompt = initialPrompts.get(record.role);
+      const delegationId = roleDelegations[record.role];
+      assert.match(prompt, new RegExp(`Role: ${record.role}\\b`), `${record.role} prompt must declare its role identity`);
+      assert.match(prompt, new RegExp(`Delegation: ${delegationId}\\b`), `${record.role} prompt must declare its own delegation id`);
+      assert.match(prompt, /Artifact: /, `${record.role} prompt must declare its artifact path`);
+      assert.match(prompt, /Required capabilities: /, `${record.role} prompt must declare its required capabilities`);
+      assert.match(prompt, /Objective: /, `${record.role} prompt must declare its objective`);
+      assert.match(prompt, /Done criteria: /, `${record.role} prompt must declare its own done criteria`);
+      // Lead-only tokens that must never appear in role-scoped prompts.
+      assert.doesNotMatch(prompt, /Frozen task contract:/, `${record.role} prompt must not name the frozen contract`);
+      assert.doesNotMatch(prompt, /Read that exact contract before acting/, `${record.role} prompt must not instruct reading the contract from prompt`);
+      assert.doesNotMatch(prompt, /\bConstraints: /, `${record.role} prompt must not include the Lead-only Constraints field`);
+      assert.doesNotMatch(prompt, /\[owner=/, `${record.role} prompt must not leak other roles' owner= annotations`);
+      // Cross-role delegation ids must never appear.
+      const otherDelegations = Object.entries(roleDelegations).filter(([, id]) => id !== delegationId).map(([, id]) => id);
+      for (const otherId of otherDelegations) {
+        assert.equal(prompt.includes(`Delegation: ${otherId}`), false, `${record.role} prompt must not include other role delegation ${otherId}`);
+        assert.equal(prompt.includes(otherId), false, `${record.role} prompt must not leak other role delegation id ${otherId}`);
+      }
+      // RESEARCH-001 is the Researcher delegation in this contract; it must never appear in Executor/Reviewer prompts.
+      assert.equal(prompt.includes("RESEARCH-001"), false, `${record.role} prompt must not include the Researcher delegation id`);
     }
     const executorRecord = startRecords.find((record) => record.role === "executor");
     const reviewerRecord = startRecords.find((record) => record.role === "reviewer");
