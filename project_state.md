@@ -222,3 +222,17 @@ stop/resume. This remains to be proven end to end.
 
 - Prove one complete persistent Executor/Reviewer review/fix exchange with
   causal message use and Lead acceptance before claiming the live loop.
+
+## Issue #2 delivery on develop
+
+- Issue #2 was researched, implemented, independently reviewed, and Lead
+  accepted after a reproducible 42/42 test run. The delivery commit is
+  `1eeceed` and its merge is on `develop`; `master` remains untouched.
+- The implementation isolates non-wt test launchers from visible consoles,
+  records process chains, and performs deterministic fake-launcher cleanup;
+  the real `wt.exe` visibility path remains unchanged.
+- During acceptance, the Reviewer readiness projection required a
+  user-authorized Lead manual reconciliation because the canonical role event
+  and Blackboard state diverged. This protocol defect was recorded as GitHub
+  Issue #8. The manual intervention is explicitly retained in the local
+  lifecycle record and is not represented as a new Reviewer result.
