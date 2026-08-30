@@ -1,7 +1,15 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PolicyReceiver, parseEnvelope, resolvePeerRole, resolveTeamPeerRole } from "./policy.mjs";
+import {
+  PolicyReceiver,
+  parseEnvelope,
+  resolvePeerRole,
+  resolveTeamPeerRole,
+  validateResearchBody,
+  authorizeResearchDelegation,
+  RESEARCH_MESSAGE_TYPES,
+} from "./policy.mjs";
 import { sendWithPolicy } from "./send.mjs";
 import { PersistentReplyStore } from "./persistent-store.mjs";
 import { PersistentRunLifecycle } from "./lifecycle.mjs";
@@ -64,6 +72,15 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
     if (typeof event.input?.message === "string") {
       try { outgoingReply = parseEnvelope(event.input.message); } catch { /* sendWithPolicy below provides the authoritative refusal */ }
     }
+    // Issue #3 — body-level gate for RESEARCH_* messages. The validator runs
+    // after parseEnvelope and only when the body decodes to a JSON object whose
+    // `type` is in RESEARCH_MESSAGE_TYPES. Non-research messages pass through
+    // untouched, so the existing communication-policy tests continue to pass.
+    const researchGate = researchBodyGate(outgoingReply, { sender: normalized, recipient });
+    if (researchGate && !researchGate.ok) {
+      await auditSafely({ direction: "outbound", action, recipient, outcome: "refused", reason: researchGate.reason });
+      return { block: true, reason: `Agent communication policy refused ${normalized} -> ${event.input?.to ?? "unknown"}: ${researchGate.reason}` };
+    }
     const trace = [];
     const leadAudit = { record(entry) { this.entry = entry; return entry; } };
     let result;
@@ -90,6 +107,41 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
     }
     if (outgoingReply?.kind === "reply") await replyStore.write(normalized, outgoingReply.correlationId, outgoingReply.body);
     return undefined;
+  }
+
+  // Issue #3 — body-level gate. Returns { ok: true } when the envelope is not
+  // a RESEARCH_* message (pass-through) or when the body validates cleanly.
+  // Returns { ok: false, reason: "<audit-reason>" } when a RESEARCH_* body
+  // fails authorizeResearchDelegation or validateResearchBody. Non-research
+  // messages always pass through (they are governed by the existing
+  // authorizePeer + sendWithPolicy envelope checks).
+  function researchBodyGate(envelope, { sender, recipient }) {
+    if (!envelope || typeof envelope.body !== "string") return { ok: true };
+    let body;
+    try { body = JSON.parse(envelope.body); }
+    catch { return { ok: true }; }
+    if (!body || typeof body !== "object" || typeof body.type !== "string") return { ok: true };
+    if (!RESEARCH_MESSAGE_TYPES.has(body.type)) return { ok: true };
+    if (!recipient) return { ok: false, reason: `research-recipient-unresolved:${body.type}` };
+    if (sender === "executor" && recipient !== "researcher") {
+      return { ok: false, reason: `research-recipient-mismatch:${body.type}:executor-must-target-researcher` };
+    }
+    if (sender === "researcher" && recipient !== "executor") {
+      return { ok: false, reason: `research-recipient-mismatch:${body.type}:researcher-must-target-executor` };
+    }
+    const delegation = authorizeResearchDelegation(body, {
+      taskId: process.env.PI_TEAM_TASK_ID,
+      allowedDelegations: parseAllowedDelegations(process.env.PI_TEAM_ALLOWED_DELEGATIONS),
+    });
+    if (!delegation.ok) return { ok: false, reason: delegation.reason };
+    const schema = validateResearchBody(body.type, body);
+    if (!schema.ok) return { ok: false, reason: `research-schema-invalid:${body.type}:${schema.reason_code}:${schema.detail}` };
+    return { ok: true };
+  }
+
+  function parseAllowedDelegations(raw) {
+    if (typeof raw !== "string" || raw.length === 0) return [];
+    return raw.split(",").map((entry) => entry.trim()).filter(Boolean);
   }
 
   function onToolResult(event) {
@@ -124,12 +176,14 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
       const transportId = message.details?.message?.id;
       const decisionKey = typeof transportId === "string" ? transportId : message;
       let accepted = inboundDecisions.get(decisionKey);
+      let inboundReason;
       if (accepted === undefined) {
         const sender = normalizedRole(message.details?.from?.name);
         const text = message.details?.bodyText;
         if (!sender || typeof text !== "string") {
           accepted = false;
-          await auditSafely({ direction: "inbound", outcome: "refused", reason: !sender ? "unknown-sender" : "missing-message-body" });
+          inboundReason = !sender ? "unknown-sender" : "missing-message-body";
+          await auditSafely({ direction: "inbound", outcome: "refused", reason: inboundReason });
         } else {
           let parsed;
           try { parsed = parseEnvelope(text); } catch { parsed = undefined; }
@@ -140,6 +194,7 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
           const authorization = receiver.receive({ sender, text });
           if (!authorization.accepted) {
             accepted = false;
+            inboundReason = authorization.reason ?? "duplicate-or-pending";
           } else {
             // Authorized: look up any prior completed reply for replay only.
             // No "pending" reservation is written on accept; duplicates within
@@ -150,14 +205,23 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
               changed = true;
               continue;
             }
-            accepted = true;
+            // Issue #3 — body-level gate for inbound RESEARCH_* messages. A
+            // structurally invalid RESEARCH_RESULT or RESEARCH_BLOCKED arriving
+            // from the paired Researcher must be filtered without affecting the
+            // legitimate in-flight request. Non-research messages pass through.
+            const inboundGate = researchBodyGate(parsed, { sender, recipient: normalized });
+            if (!inboundGate.ok) {
+              accepted = false;
+              inboundReason = inboundGate.reason;
+            } else {
+              accepted = true;
+            }
           }
-          const result = parsed && accepted ? { accepted, envelope: parsed } : { accepted };
           const audited = await auditSafely({
             direction: "inbound",
             sender,
             outcome: accepted ? "accepted" : "refused",
-            ...(accepted ? { messageId: result.envelope.id, correlationId: result.envelope.correlationId } : { reason: result.reason ?? "duplicate-or-pending" }),
+            ...(accepted && parsed ? { messageId: parsed.id, correlationId: parsed.correlationId } : { reason: inboundReason ?? "duplicate-or-pending" }),
           });
           if (!audited) accepted = false;
         }

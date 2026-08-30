@@ -11,6 +11,41 @@ export const ACTIVE_ROLES = new Set(["researcher", "executor", "reviewer"]);
 export const LEGACY_ROLES = new Set(["architect", "critic", "engineer"]);
 export const KINDS = new Set(["request", "reply", "error", "progress"]);
 export const SUPERVISOR_REASONS = new Set(["need_decision", "progress_update", "interview_request"]);
+
+// Issue #3 — bounded Executor→paired-Researcher delegation.
+// Same-task research bodies are typed and validated; the bounded peer topology
+// above is unchanged. Lead authority over frozen contract, scope, acceptance,
+// and reclamation is preserved.
+export const RESEARCH_MESSAGE_TYPES = new Set(["RESEARCH_REQUEST", "RESEARCH_RESULT", "RESEARCH_BLOCKED"]);
+export const RESEARCH_BLOCK_REASON_CODES = new Set([
+  "out_of_scope",
+  "architectural",
+  "under_specified",
+  "capability_blocked",
+  "in_flight_busy",
+  "scope_change_invalidated",
+  "deadline_unmet",
+  "duplicate",
+  "no_response_within_window",
+]);
+// Mirrors tests/team-contract.test.mjs RESEARCHER_TOOLS exactly.
+export const RESEARCHER_CAPABILITIES = new Set([
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "write",
+  "web_search",
+  "fetch_content",
+  "get_search_content",
+  "source_check",
+  "intercom",
+  "report_to_lead",
+  "blackboard_update",
+]);
+// Architectural verbs used by the pre-flight heuristic in validateResearchBody.
+const ARCHITECTURAL_VERB_RE = /^(?:should\s+we|decide\s+between|what\s+convention|naming\s+convention|choose\s+between|pick\s+between|migrate\s+to|replace\s+\w+\s+with|adopt\s+\w+)/i;
+const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function newRequestId() { return randomUUID(); }
@@ -159,4 +194,200 @@ export function refusalTrace(sender, recipient, trace = []) {
 
 export function shouldMirror({ changesDownstream = false, materialRisk = false, invalidatesAssumption = false, cosmeticOnly = false }) {
   return changesDownstream || materialRisk || invalidatesAssumption || !cosmeticOnly;
+}
+
+// Issue #3 — Executor→paired-Researcher bounded research schema (Issue #3 §3).
+// The schema is enforced at the runtime gate (see runtime-policy.mjs onToolCall)
+// before the envelope reaches the transport. The validator never touches the
+// transport; it only inspects the already-decoded body the sender composed.
+//
+// Return shape: { ok: true } on success; { ok: false, reason_code, detail }
+// on failure. reason_code is always one of RESEARCH_BLOCK_REASON_CODES or
+// "schema_invalid" (a structural refusal, not a research-domain refusal).
+// detail is a ≤1024 char human-readable explanation.
+
+function stringOrUndefined(value) {
+  return typeof value === "string" ? value : undefined;
+}
+
+function stringArrayOrUndefined(value) {
+  if (!Array.isArray(value)) return undefined;
+  if (!value.every((entry) => typeof entry === "string")) return undefined;
+  return value;
+}
+
+function validateRequestBody(body) {
+  if (!body || typeof body !== "object") {
+    return { ok: false, reason_code: "schema_invalid", detail: "body must be a JSON object" };
+  }
+  if (body.type !== "RESEARCH_REQUEST") {
+    return { ok: false, reason_code: "schema_invalid", detail: `type must equal "RESEARCH_REQUEST" (got ${JSON.stringify(body.type)})` };
+  }
+  const required = ["task_id", "delegation_id", "request_id", "decision_supported", "objective", "allowed_paths", "artifact_path", "required_capabilities", "frozen_contract_version"];
+  for (const field of required) {
+    if (body[field] === undefined || body[field] === null || body[field] === "") {
+      return { ok: false, reason_code: "under_specified", detail: `missing required field: ${field}` };
+    }
+  }
+  if (!UUID.test(body.request_id)) {
+    return { ok: false, reason_code: "schema_invalid", detail: "request_id must be a UUID v4" };
+  }
+  if (typeof body.objective !== "string" || body.objective.length === 0 || body.objective.length > 240) {
+    return { ok: false, reason_code: "under_specified", detail: "objective must be a non-empty string ≤240 chars" };
+  }
+  if (ARCHITECTURAL_VERB_RE.test(body.objective.trim())) {
+    return { ok: false, reason_code: "architectural", detail: `objective triggers architectural heuristic: ${body.objective.slice(0, 80)}` };
+  }
+  if (typeof body.decision_supported !== "string" || body.decision_supported.length === 0) {
+    return { ok: false, reason_code: "under_specified", detail: "decision_supported must be a non-empty string" };
+  }
+  if (!Array.isArray(body.allowed_paths) || body.allowed_paths.length === 0) {
+    return { ok: false, reason_code: "under_specified", detail: "allowed_paths must be a non-empty array of strings" };
+  }
+  if (!body.allowed_paths.every((entry) => typeof entry === "string")) {
+    return { ok: false, reason_code: "schema_invalid", detail: "allowed_paths entries must be strings" };
+  }
+  if (!Array.isArray(body.required_capabilities) || body.required_capabilities.length === 0) {
+    return { ok: false, reason_code: "under_specified", detail: "required_capabilities must be a non-empty array of strings" };
+  }
+  if (!body.required_capabilities.every((entry) => typeof entry === "string")) {
+    return { ok: false, reason_code: "schema_invalid", detail: "required_capabilities entries must be strings" };
+  }
+  for (const cap of body.required_capabilities) {
+    if (!RESEARCHER_CAPABILITIES.has(cap)) {
+      return { ok: false, reason_code: "capability_blocked", detail: `required_capability ${cap} is outside RESEARCHER_CAPABILITIES` };
+    }
+  }
+  if (typeof body.frozen_contract_version !== "number" || !Number.isInteger(body.frozen_contract_version) || body.frozen_contract_version <= 0) {
+    return { ok: false, reason_code: "schema_invalid", detail: "frozen_contract_version must be a positive integer" };
+  }
+  if (body.deadline_hint !== undefined && typeof body.deadline_hint !== "string") {
+    return { ok: false, reason_code: "schema_invalid", detail: "deadline_hint must be a string (ISO 8601) when present" };
+  }
+  if (body.context_refs !== undefined && !Array.isArray(body.context_refs)) {
+    return { ok: false, reason_code: "schema_invalid", detail: "context_refs must be a string[] when present" };
+  }
+  return { ok: true };
+}
+
+function validateResultBody(body) {
+  if (!body || typeof body !== "object") {
+    return { ok: false, reason_code: "schema_invalid", detail: "body must be a JSON object" };
+  }
+  if (body.type !== "RESEARCH_RESULT") {
+    return { ok: false, reason_code: "schema_invalid", detail: `type must equal "RESEARCH_RESULT" (got ${JSON.stringify(body.type)})` };
+  }
+  const required = ["task_id", "delegation_id", "request_id", "artifact_path", "headline", "findings", "confidence", "decision_impact"];
+  for (const field of required) {
+    if (body[field] === undefined || body[field] === null || body[field] === "") {
+      return { ok: false, reason_code: "schema_invalid", detail: `missing required field: ${field}` };
+    }
+  }
+  if (!UUID.test(body.request_id)) {
+    return { ok: false, reason_code: "schema_invalid", detail: "request_id must be a UUID v4" };
+  }
+  if (typeof body.headline !== "string" || body.headline.length === 0 || body.headline.length > 240) {
+    return { ok: false, reason_code: "schema_invalid", detail: "headline must be a non-empty string ≤240 chars" };
+  }
+  if (!Array.isArray(body.findings) || body.findings.length === 0) {
+    return { ok: false, reason_code: "schema_invalid", detail: "findings must be a non-empty array" };
+  }
+  for (const entry of body.findings) {
+    if (!entry || typeof entry !== "object") return { ok: false, reason_code: "schema_invalid", detail: "findings entries must be objects" };
+    if (typeof entry.claim !== "string" || entry.claim.length === 0) return { ok: false, reason_code: "schema_invalid", detail: "findings[*].claim must be a non-empty string" };
+    if (!Array.isArray(entry.sources) || !entry.sources.every((source) => typeof source === "string")) return { ok: false, reason_code: "schema_invalid", detail: "findings[*].sources must be a string[]" };
+    if (!["high", "medium", "low"].includes(entry.confidence)) return { ok: false, reason_code: "schema_invalid", detail: "findings[*].confidence must be one of high|medium|low" };
+  }
+  if (!["high", "medium", "low"].includes(body.confidence)) {
+    return { ok: false, reason_code: "schema_invalid", detail: "confidence must be one of high|medium|low" };
+  }
+  if (typeof body.decision_impact !== "string" || body.decision_impact.length === 0) {
+    return { ok: false, reason_code: "schema_invalid", detail: "decision_impact must be a non-empty string" };
+  }
+  if (body.blocked_reason !== undefined) {
+    return { ok: false, reason_code: "schema_invalid", detail: "RESEARCH_RESULT must not carry blocked_reason; use RESEARCH_BLOCKED" };
+  }
+  if (body.gaps !== undefined && !Array.isArray(body.gaps)) {
+    return { ok: false, reason_code: "schema_invalid", detail: "gaps must be a string[] when present" };
+  }
+  return { ok: true };
+}
+
+function validateBlockedBody(body) {
+  if (!body || typeof body !== "object") {
+    return { ok: false, reason_code: "schema_invalid", detail: "body must be a JSON object" };
+  }
+  if (body.type !== "RESEARCH_BLOCKED") {
+    return { ok: false, reason_code: "schema_invalid", detail: `type must equal "RESEARCH_BLOCKED" (got ${JSON.stringify(body.type)})` };
+  }
+  for (const field of ["task_id", "delegation_id", "request_id", "reason_code", "detail"]) {
+    if (body[field] === undefined || body[field] === null || body[field] === "") {
+      return { ok: false, reason_code: "schema_invalid", detail: `missing required field: ${field}` };
+    }
+  }
+  if (!UUID.test(body.request_id)) {
+    return { ok: false, reason_code: "schema_invalid", detail: "request_id must be a UUID v4" };
+  }
+  if (!RESEARCH_BLOCK_REASON_CODES.has(body.reason_code)) {
+    return { ok: false, reason_code: "schema_invalid", detail: `reason_code must be one of ${[...RESEARCH_BLOCK_REASON_CODES].join("|")}` };
+  }
+  if (typeof body.detail !== "string" || body.detail.length === 0 || body.detail.length > 1024) {
+    return { ok: false, reason_code: "schema_invalid", detail: "detail must be a non-empty string ≤1024 chars" };
+  }
+  if (["architectural", "out_of_scope", "under_specified"].includes(body.reason_code)) {
+    if (body.next_decision_needed === undefined || typeof body.next_decision_needed !== "string" || body.next_decision_needed.length === 0 || body.next_decision_needed.length > 240) {
+      return { ok: false, reason_code: "schema_invalid", detail: `next_decision_needed is required and must be ≤240 chars when reason_code=${body.reason_code}` };
+    }
+  }
+  if (body.headline !== undefined) {
+    return { ok: false, reason_code: "schema_invalid", detail: "RESEARCH_BLOCKED must not carry headline; use detail" };
+  }
+  return { ok: true };
+}
+
+export function validateResearchBody(type, body) {
+  if (!RESEARCH_MESSAGE_TYPES.has(type)) {
+    return { ok: false, reason_code: "schema_invalid", detail: `unknown research message type ${JSON.stringify(type)}` };
+  }
+  if (type === "RESEARCH_REQUEST") return validateRequestBody(body);
+  if (type === "RESEARCH_RESULT") return validateResultBody(body);
+  return validateBlockedBody(body);
+}
+
+// Issue #3 §4 — task / scope / pairing identity binding.
+// authorizeResearchDelegation runs after the existing authorizePeer +
+// resolveTeamPeerRole check. It enforces:
+//   1. body.task_id === taskId (cross-task refusal)
+//   2. body.delegation_id ∈ allowedDelegations (cross-task refusal)
+//   3. artifact_path matches research/<task-id>-<slug>.md; slug is kebab-case
+//   4. required_capabilities is a non-empty subset of RESEARCHER_CAPABILITIES
+//      (researcher must not request bash/edit/Deep Research tools)
+// Returns { ok: true } or { ok: false, reason } where reason is a ≤512 char
+// string suitable for an audit row.
+export function authorizeResearchDelegation(body, { taskId, allowedDelegations = [] } = {}) {
+  const detail = stringOrUndefined(body?.task_id);
+  if (!detail) return { ok: false, reason: "research-task-id-missing" };
+  if (detail !== taskId) return { ok: false, reason: `research-task-id-mismatch:body=${detail}:expected=${taskId}` };
+  const delegationId = stringOrUndefined(body?.delegation_id);
+  if (!delegationId) return { ok: false, reason: "research-delegation-id-missing" };
+  if (!allowedDelegations.includes(delegationId)) return { ok: false, reason: `research-delegation-id-unknown:${delegationId}` };
+  const capabilities = stringArrayOrUndefined(body?.required_capabilities);
+  if (!capabilities || capabilities.length === 0) return { ok: false, reason: "research-required-capabilities-missing" };
+  for (const cap of capabilities) {
+    if (!RESEARCHER_CAPABILITIES.has(cap)) return { ok: false, reason: `research-capability-blocked:${cap}` };
+  }
+  const artifactPath = stringOrUndefined(body?.artifact_path);
+  if (!artifactPath) return { ok: false, reason: "research-artifact-path-missing" };
+  const expectedPrefix = `research/${taskId}-`;
+  if (!artifactPath.startsWith(expectedPrefix) || !artifactPath.endsWith(".md")) {
+    return { ok: false, reason: `research-artifact-path-malformed:${artifactPath}` };
+  }
+  const slug = artifactPath.slice(expectedPrefix.length, -".md".length);
+  if (!SLUG_RE.test(slug)) {
+    return { ok: false, reason: `research-artifact-slug-invalid:${slug}` };
+  }
+  if (/[a-f0-9]{32,}/i.test(slug)) {
+    return { ok: false, reason: `research-artifact-slug-hash:${slug}` };
+  }
+  return { ok: true };
 }
