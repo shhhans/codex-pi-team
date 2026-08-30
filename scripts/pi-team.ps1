@@ -311,7 +311,13 @@ function Start-RoleProcess([string]$Executable,[string[]]$ArgumentList,[string]$
     $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($bootstrap))
     $terminalArguments = @('-d',$paneDirectory,'powershell.exe','-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encodedScript)
     $commandLine = ($terminalArguments | ForEach-Object { Quote-WindowsArgument ([string]$_) }) -join ' '
-    return Start-Process $Executable -WorkingDirectory $WorkingDirectory -ArgumentList $commandLine -WindowStyle Normal -PassThru
+    # Test-only isolation: when WT_CMD points at a non-wt test stub (a console-subsystem
+    # binary such as fake-pi.cmd) Start-Process -WindowStyle Normal would allocate a
+    # visible console window for every role launch. Use -WindowStyle Hidden so the test
+    # stub spawns headlessly. The real `wt.exe` (GUI subsystem) is unaffected because the
+    # conditional only fires when the executable path is NOT the real Windows Terminal.
+    $windowStyle = if ($env:WT_CMD -and -not ($Executable -match '(?i)(^|[\\/])wt(\.exe)?$')) { 'Hidden' } else { 'Normal' }
+    return Start-Process $Executable -WorkingDirectory $WorkingDirectory -ArgumentList $commandLine -WindowStyle $windowStyle -PassThru
   } finally {
     foreach ($name in $identity.Keys) {
       [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process')

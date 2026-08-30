@@ -453,6 +453,19 @@ test("role launchers inject common-dir identity and isolate Executor/Reviewer en
       await writeFile(join(packageDir, "package.json"), JSON.stringify({ name, version }));
     }
     await writeFile(fakePiScript, String.raw`param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)
+# Defense in depth: a watchdog kills this fake if a parent test forgot to clean it up.
+# Production real wt.exe does not honor this env var.
+$watchdogRaw=[Environment]::GetEnvironmentVariable('PI_TEAM_FAKE_TIMEOUT_SEC')
+if ([string]::IsNullOrEmpty($watchdogRaw)) { $watchdogRaw='15' }
+$watchdog=0
+if (-not [int]::TryParse($watchdogRaw,[ref]$null)) { $watchdog=0 } else { $watchdog=[int]$watchdogRaw }
+if ($watchdog -gt 0) {
+  $timer=New-Object System.Timers.Timer
+  $timer.Interval=$watchdog*1000
+  $timer.AutoReset=$false
+  Register-ObjectEvent -InputObject $timer -EventName Elapsed -Action { Stop-Process -Id $PID -Force; exit 124 } | Out-Null
+  $timer.Start() | Out-Null
+}
  $encodedIndex = [Array]::IndexOf($Args, '-EncodedCommand')
 if ($encodedIndex -ge 0) {
   if ($encodedIndex -ge ($Args.Count - 1)) { Write-Error 'fake Windows Terminal requires an encoded bootstrap'; exit 2 }
@@ -468,11 +481,27 @@ $record=[ordered]@{
   scope_id=$env:PI_TEAM_SCOPE_ID
   args=@($Args)
 }
-$runtime=[ordered]@{version=1;task_id=$env:PI_TEAM_TASK_ID;role=$env:PI_TEAM_ROLE;agent_id=$env:PI_TEAM_AGENT_ID;launch_id=$env:PI_TEAM_LAUNCH_ID;intercom_id=$env:PI_INTERCOM_STABLE_ID;runtime_pid=$PID;parent_pid=0;ready_at=[DateTime]::UtcNow.ToString('o');worktree=$env:PI_TEAM_WORKTREE}
+# Walk the parent chain so the test cleanup can taskkill every node, even if the
+# intermediate cmd.exe / powershell.exe decoders detach from the recorded launcher.
+$chain=New-Object System.Collections.Generic.List[int]
+$chain.Add($PID)
+try {
+  $current=$PID
+  for ($depth=0; $depth -lt 16; $depth++) {
+    $parent=(Get-CimInstance Win32_Process -Filter "ProcessId=$current" -ErrorAction SilentlyContinue).ParentProcessId
+    if (-not $parent -or $parent -le 0 -or $chain.Contains($parent)) { break }
+    $chain.Add($parent); $current=$parent
+  }
+} catch { }
+$runtime=[ordered]@{version=1;task_id=$env:PI_TEAM_TASK_ID;role=$env:PI_TEAM_ROLE;agent_id=$env:PI_TEAM_AGENT_ID;launch_id=$env:PI_TEAM_LAUNCH_ID;intercom_id=$env:PI_INTERCOM_STABLE_ID;runtime_pid=$PID;parent_pid=(Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction SilentlyContinue).ParentProcessId;process_chain=@($chain | Select-Object -Unique);ready_at=[DateTime]::UtcNow.ToString('o');worktree=$env:PI_TEAM_WORKTREE}
 $runtime | ConvertTo-Json | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $env:PI_TEAM_STATE_ROOT "$($env:PI_TEAM_TASK_ID)-$($env:PI_TEAM_ROLE)-runtime.json")
 $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $env:PI_TEAM_TEST_LOG
 `);
-    await writeFile(fakePi, `@echo off\r\npowershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-pi.ps1" %*\r\n`);
+    // Detach powershell.exe and exit the cmd.exe wrapper immediately so the
+    // Start-Process -WindowStyle Hidden window closes within a single frame and
+    // the test never holds a visible console-subsystem Terminal open. The
+    // `start /b` shares the parent console without allocating a new one.
+    await writeFile(fakePi, `@echo off\r\nstart \"\" /b powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File \"%~dp0fake-pi.ps1\" %* >nul 2>&1\r\nexit /b 0\r\n`);
     await writeFile(questionFile, "Determine the runtime identity contract.\n");
     await writeFile(contract, `# Runtime test\n\n\`\`\`json\n${JSON.stringify({
       version: 2,
@@ -615,15 +644,52 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       assert.equal(record.args.includes("--session-id"), false, "resume must select the session created by the first launch, not create another one");
       assert.equal(record.args.includes("--no-extensions"), true);
     }
+
+    // Issue #2 — verify the runtime JSON recorded every role's process chain so
+    // cleanup can taskkill /T /F the entire tree without an empirical sleep.
+    for (const role of ["executor", "reviewer", "researcher"]) {
+      const runtimePath = join(stateRoot, `${taskId}-${role}-runtime.json`);
+      const runtimeText = await readFile(runtimePath, "utf8").catch(() => null);
+      if (!runtimeText) continue;
+      const runtime = parseJsonText(runtimeText);
+      assert.ok(Array.isArray(runtime.process_chain) && runtime.process_chain.length >= 1,
+        `${role} runtime JSON must record a process_chain that contains at least the runtime_pid`);
+      assert.ok(runtime.process_chain.includes(runtime.runtime_pid),
+        `${role} process_chain must contain the recorded runtime_pid=${runtime.runtime_pid}; got ${JSON.stringify(runtime.process_chain)}`);
+    }
   } finally {
+    // Issue #2 — deterministically reap every recorded role-process tree before
+    // removing the worktree. Replaces an empirical 750 ms sleep with synchronous
+    // `taskkill /T /F` on the recorded launcher_pid (from state JSON) and
+    // process_chain (from runtime JSON). The test never relies on timing and the
+    // test never leaves an orphan cmd.exe / powershell.exe attached to the
+    // sandboxed worktree path.
+    const killedPids = new Set();
+    for (const role of ["executor", "reviewer", "researcher"]) {
+      const runtimePath = join(stateRoot, `${taskId}-${role}-runtime.json`);
+      const runtimeText = await readFile(runtimePath, "utf8").catch(() => null);
+      if (!runtimeText) continue;
+      const runtime = parseJsonText(runtimeText);
+      const pids = [
+        ...(Array.isArray(runtime.process_chain) ? runtime.process_chain : []),
+        runtime.runtime_pid,
+      ].filter((pid) => Number.isInteger(pid) && pid > 0);
+      for (const pid of pids) {
+        if (killedPids.has(pid)) continue;
+        killedPids.add(pid);
+        spawnSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { encoding: "utf8" });
+      }
+    }
+    if (killedPids.size > 0) {
+      // Give the kernel a single short tick to deliver the kill to the entire
+      // process tree before git tries to release the worktree directory.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     await rm(stateFile, { force: true });
     await rm(contractSnapshot, { force: true });
     await rm(blackboardStateFile, { force: true });
     for (const path of eventFiles) await rm(path, { force: true });
     for (const path of runtimeFiles) await rm(path, { force: true });
-    // Start-Process is intentionally asynchronous; let fake role processes
-    // release their worktree working directories before Git removes it.
-    await new Promise((resolve) => setTimeout(resolve, 750));
     spawnSync("git", ["worktree", "remove", "--force", worktree], { cwd: REPO, encoding: "utf8" });
     spawnSync("git", ["branch", "-D", branch], { cwd: REPO, encoding: "utf8" });
     await rm(root, { recursive: true, force: true });
