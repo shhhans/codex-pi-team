@@ -59,13 +59,49 @@ Do not use this skill when:
 - Read-only Git operations (`status`, `diff`, `log`, `show`, `blame`, and equivalent) are allowed. Worktree-changing Git operations require explicit Lead authorization.
 - Use native worktree commands. On Windows, do not invoke WSL without Lead authorization. Do not create a Scout or unassigned subtasks.
 
-## Issue #11 audit-row redaction checks
+## Dual acceptance gate
 
-When reviewing changes that touched `.pi/communication/` for Issue #11, verify the audit-row redaction contract by reading the `<auditDir>/<role>.jsonl` rows produced by `tests/communication-policy.test.mjs` and asserting:
+Every delegated slice has two independent gates. The Reviewer performs the
+technical and scope acceptance; the Lead performs the contract and delivery
+acceptance. A Reviewer `REVIEW_PASS` or `ready_for_acceptance` event is evidence
+that the first gate passed, not a substitute for the Lead's `accept` decision.
 
-1. Every allowed outbound (`direction: "outbound", outcome: "allowed"`) carries the structured envelope fields `kind`, `subject`, `body_summary`, `body_fingerprint`, `body_length`. The base64 wire form never appears.
-2. Every allowed inbound (`direction: "inbound", outcome: "accepted"`) carries the same structured fields. The base64 wire form never appears.
-3. Every refused inbound / outbound (`outcome: "refused"`) carries NO `body_summary`, `body_fingerprint`, `body_length`, or `kind` / `subject` from the envelope. The refused row must carry only `direction`, `action`, `recipient`, `outcome`, `reason`, `sender`, `messageId` (when known), `correlationId` (when known), and `trace` (when applicable).
-4. The audit JSON never includes the strings `"base64"`, `"body_encoding"`, or the `agent-team/v1` envelope header.
+### Reviewer gate
 
-When reviewing the typed-failure surface, verify the runtime's `classifyDeliveryFailure` returns one of `stale-session`, `peer_wrong_role`, `peer_wrong_task`, or `undefined` (for opaque failures). Cross-task and cross-role rediscovery must always be refused; the runtime never silently redelivers to a different task or a different role. The `parseSameTaskTeamPeer` parser preserves the original case of the agent's typed task-id and launch-id so the audit row's reason field is greppable against the agent's input.
+Before sending `REVIEW_PASS`, the Reviewer verifies:
+
+1. The actual diff is limited to the explicit task scope and base reference;
+   no unrelated production, test, protocol, permission, or repository-workflow
+   changes are hidden behind a passing test result.
+2. The implementation and tests satisfy every applicable done criterion, with
+   negative cases covering identity, task binding, peer authorization,
+   artifact ownership, and lifecycle boundaries where relevant.
+3. The validation commands are reproducible and their results are recorded;
+   passing tests do not override a scope or security failure.
+4. Required artifacts are present, non-empty, and consistent with the actual
+   diff and reported test results.
+5. Runtime traces, raw prompts, transport envelopes, audit records, temporary
+   probes, and other non-deliverable data are not presented as delivery
+   evidence unless the contract explicitly requires a sanitized artifact.
+
+If any Reviewer check fails, send `REVIEW_FAIL`, create a failure artifact only
+for a real failure, and keep the paired fix/re-review loop active. The Reviewer
+does not invoke `accept`, reclaim resources, merge, or clean up.
+
+### Lead gate
+
+After the canonical Reviewer event is `ready_for_acceptance` in the append-only
+role event stream, the Lead independently verifies:
+
+1. Every frozen criterion ID is covered exactly once in the acceptance evidence
+   and every required artifact exists at the contract path.
+2. The complete project validation and task-specific validation both pass from
+   the intended base and worktree.
+3. The final diff still matches the frozen scope and contains no raw runtime
+   traces, prompts, envelopes, audit records, or temporary probes.
+4. The Lead authority, task/scope binding, role and peer authorization,
+   artifact ownership, and lifecycle rules remain intact.
+5. Only after these checks does the Lead run `accept`, reclaim the persistent
+   pair, archive the observability lane, and stage the reviewed delivery.
+   Merge, cleanup, branch deletion, and external issue updates remain
+   Lead-owned actions and require their stated authorization.
