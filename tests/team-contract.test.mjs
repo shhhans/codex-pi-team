@@ -103,6 +103,7 @@ test("active role definitions exist with valid frontmatter and required tools", 
     const text = await readFile(path, "utf8");
     const fm = parseFrontmatter(text);
     assert.equal(fm.name, role, `${role} frontmatter name must match`);
+    assert.equal(fm.inheritProjectContext, "true", `${role} must inherit the shared AGENTS.md context`);
     assert.equal(fm.inheritSkills, "false", `${role} must set inheritSkills: false`);
     assert.equal(fm.skillPath, "../skills", `${role} must use the project-private skill path`);
     assert.equal(fm.extensions, "", `${role} must disable ambient extensions`);
@@ -112,6 +113,24 @@ test("active role definitions exist with valid frontmatter and required tools", 
     // Active roles must not bind persistent memory; they use role prompt + private skills only.
     assert.ok(!("memory" in fm), `${role} frontmatter must not declare a memory binding`);
     assert.doesNotMatch(text, /^memory:\s*$/m, `${role} must not contain a memory: frontmatter block`);
+    assert.doesNotMatch(text, /Issue\s*#\s*\d+/i, `${role} prompt must not contain issue-specific instructions`);
+    assert.doesNotMatch(text, /\b(?:ISSUE|BOOTSTRAP|PERF)-\d{3,}\b/, `${role} prompt must not contain concrete task identifiers`);
+    assert.doesNotMatch(text, /[A-Za-z]:[\\/][^\r\n]*\\(?:Pi-team|Coding)/i, `${role} prompt must not contain host paths`);
+  }
+});
+
+test("shared context and active skills remain task-agnostic", async () => {
+  const paths = [
+    join(REPO, "AGENTS.md"),
+    ...ACTIVE_ROLES.map((role) => join(REPO, ".pi/agents", `${role}.md`)),
+    ...SKILL_NAMES.map((name) => join(REPO, ".pi/skills", name, "SKILL.md")),
+  ];
+  for (const path of paths) {
+    const text = await readFile(path, "utf8");
+    assert.doesNotMatch(text, /Issue\s*#\s*\d+/i, `${path} must not contain a concrete issue reference`);
+    assert.doesNotMatch(text, /\b(?:ISSUE|BOOTSTRAP|PERF)-\d{3,}\b/, `${path} must not contain a concrete task identifier`);
+    assert.doesNotMatch(text, /[A-Za-z]:[\\/][^\r\n]*(?:Pi-team|Harness|Coding)/i, `${path} must not contain a host path`);
+    assert.doesNotMatch(text, /body:\s*[A-Za-z0-9_-]{40,}/i, `${path} must not contain a raw encoded envelope`);
   }
 });
 
@@ -575,6 +594,11 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       assert.match(prompt, /Required capabilities: /, `${record.role} prompt must declare its required capabilities`);
       assert.match(prompt, /Objective: /, `${record.role} prompt must declare its objective`);
       assert.match(prompt, /Done criteria: /, `${record.role} prompt must declare its own done criteria`);
+      assert.match(prompt, /--- PI TEAM TASK CONTEXT v1 ---/, `${record.role} prompt must include the dynamic task context marker`);
+      assert.match(prompt, /Stable project context: AGENTS\.md/, `${record.role} prompt must point to inherited AGENTS.md context`);
+      assert.match(prompt, /Visible scope: /, `${record.role} prompt must include its visible scope`);
+      assert.match(prompt, /Recommended role reads: /, `${record.role} prompt must include bounded navigation hints`);
+      assert.match(prompt, /--- END PI TEAM TASK CONTEXT ---/, `${record.role} prompt must close the dynamic task context`);
       // Lead-only tokens that must never appear in role-scoped prompts.
       assert.doesNotMatch(prompt, /Frozen task contract:/, `${record.role} prompt must not name the frozen contract`);
       assert.doesNotMatch(prompt, /Read that exact contract before acting/, `${record.role} prompt must not instruct reading the contract from prompt`);
@@ -619,6 +643,10 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     assert.equal(researchRecords[0].args.includes("--no-skills"), true);
     assert.equal(researchRecords[0].args[researchRecords[0].args.indexOf("--tools") + 1], RESEARCHER_TOOLS.join(","));
     assert.equal(researchRecords[0].args.includes("--session-id"), false, "on-demand Researcher does not claim a persistent pair session");
+    const researchPrompt = researchRecords[0].args[researchRecords[0].args.length - 1];
+    assert.match(researchPrompt, /Context mode: research/);
+    assert.match(researchPrompt, /Research question: /);
+    assert.match(researchPrompt, /Recommended role reads: .*answer-research-question/);
 
     await rm(launchLog, { force: true });
     const resume = run("resume", [taskId], { PI_TEAM_TEST_LOG: launchLog });
@@ -643,6 +671,11 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       assert.equal(record.args.includes("--session"), true);
       assert.equal(record.args.includes("--session-id"), false, "resume must select the session created by the first launch, not create another one");
       assert.equal(record.args.includes("--no-extensions"), true);
+      const prompt = record.args[record.args.length - 1];
+      assert.match(prompt, /Context mode: resume/);
+      assert.match(prompt, /Resume rule: preserve the existing task scope/);
+      assert.doesNotMatch(prompt, /Recommended common reads:/, "resume must not repeat the shared context map");
+      assert.doesNotMatch(prompt, /Recommended role reads:/, "resume must not repeat role navigation");
     }
 
     // Issue #2 — verify the runtime JSON recorded every role's process chain so
@@ -812,18 +845,19 @@ test("tests directory contains the deterministic contract and communication-poli
   assert.match(runner, /blackboard\.test\.mjs/);
 });
 
-test("new Lead sessions receive the explicit Blackboard then Pi Team launch runbook", async () => {
+test("shared AGENTS context and Lead skill keep separate responsibilities", async () => {
   const agents = await readFile(join(REPO, "AGENTS.md"), "utf8");
-  assert.match(agents, /<lead-pi-team-runbook>/);
-  assert.match(agents, /creating or updating a Blackboard lane does not start an Agent/);
-  assert.match(agents, /pi-team\.cmd publish <contract-path>/);
-  assert.match(agents, /pi-team\.cmd codex-setup/);
-  assert.match(agents, /pi-team\.cmd start <contract-path>/);
-  assert.match(agents, /Do not launch roles with\s+`runs\.run`, `--agent`, WSL, Git Bash/);
+  assert.match(agents, /# Pi Team Shared Agent Context/);
+  assert.match(agents, /## Repository map and validation/);
+  assert.match(agents, /## Context boundary/);
+  assert.doesNotMatch(agents, /<lead-pi-team-runbook>/);
+  assert.doesNotMatch(agents, /pi-team\.cmd publish <contract-path>/);
   const readme = await readFile(join(REPO, "README.md"), "utf8");
   assert.match(readme, /Publishing a Blackboard task only publishes the Lead-owned scope; it does not\s+start Pi roles/);
   assert.match(readme, /pi-team\.cmd publish/);
   assert.match(readme, /pi-team\.cmd codex-setup/);
   const leadSkill = await readFile(join(REPO, "plugins/agent-blackboard/skills/pi-team-lead/SKILL.md"), "utf8");
   assert.match(leadSkill, /pi-team\.cmd codex-setup/);
+  assert.match(leadSkill, /pi-team\.cmd publish <absolute-contract-path>/);
+  assert.match(leadSkill, /task-specific contamination/i);
 });

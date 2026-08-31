@@ -89,6 +89,11 @@ function Set-WebAccessAutoloadDisabled {
 function Assert-Setup {
   $issues = @(Get-SetupIssues)
   if ($issues.Count -gt 0) { Fail "Pi shared dependencies are not ready: $($issues -join '; '). Run pi-team.cmd setup." }
+  $sharedContext = Join-Path $ProjectRoot 'AGENTS.md'
+  if (-not (Test-Path -LiteralPath $sharedContext -PathType Leaf)) { Fail "shared agent context is missing: $sharedContext" }
+  $sharedText = Get-Content -Raw -Encoding UTF8 -LiteralPath $sharedContext
+  if ($sharedText -match '<lead-pi-team-runbook>') { Fail 'AGENTS.md must not contain the Lead-only Pi Team runbook' }
+  if ($sharedText -match '(?i)Issue\s*#\s*\d+|[A-Z][A-Z0-9]+-\d{3,}|[A-Za-z]:[\\/]') { Fail 'AGENTS.md must remain task-agnostic and free of host paths' }
   foreach ($path in @(
     (Join-Path $ProjectRoot '.pi/communication/extensions/blackboard-update.ts'),
     (Join-Path $ProjectRoot 'plugins/agent-blackboard/server/blackboard-core.mjs')
@@ -382,7 +387,67 @@ function New-RoleAssignment($Contract,[string]$Role) {
   $delegation = @($Contract.delegations | Where-Object { $_.role -eq $Role })
   if ($delegation.Count -ne 1) { Fail "contract must declare exactly one delegation for role $Role" }
   $criteria = @($Contract.done_criteria | Where-Object { $_.owner -eq $Role } | ForEach-Object { "$($_.id): $($_.description) [artifacts=$($_.artifacts -join ',')]" }) -join '; '
-  return "Lead assignment. Task ID: $($Contract.task_id). Worktree: $($Contract.worktree). Role: $Role. Delegation: $($delegation[0].id). Artifact: $($delegation[0].artifact_path). Required capabilities: $($delegation[0].required_capabilities -join ', '). Objective: $($delegation[0].objective). Done criteria: $criteria."
+  $context = New-RoleContext $Contract $Role 'start'
+  return "$context Lead assignment. Task ID: $($Contract.task_id). Worktree: $($Contract.worktree). Role: $Role. Delegation: $($delegation[0].id). Artifact: $($delegation[0].artifact_path). Required capabilities: $($delegation[0].required_capabilities -join ', '). Objective: $($delegation[0].objective). Done criteria: $criteria."
+}
+function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question='') {
+  $delegation = @($Contract.delegations | Where-Object { $_.role -eq $Role })
+  if ($delegation.Count -ne 1) { Fail "contract must declare exactly one delegation for role $Role" }
+  $ownedCriteria = @($Contract.done_criteria | Where-Object { $_.owner -eq $Role } | ForEach-Object { "$($_.id): $($_.description)" })
+  $scope = @($Contract.in_scope | ForEach-Object { [string]$_ }) -join '; '
+  $outOfScope = @($Contract.out_of_scope | ForEach-Object { [string]$_ }) -join '; '
+  if ($Mode -eq 'resume') {
+    return (@(
+      '--- PI TEAM TASK CONTEXT v1 ---',
+      'Context mode: resume',
+      'Stable project context: AGENTS.md is already present in the existing session; do not reload or rediscover it.',
+      "Task ID: $($Contract.task_id)",
+      "Role: $Role",
+      "Branch: $($Contract.branch)",
+      "Worktree: $($Contract.worktree)",
+      "Delegation: $($delegation[0].id)",
+      "Owned artifact: $($delegation[0].artifact_path)",
+      "Visible scope: $scope",
+      'Resume rule: preserve the existing task scope and session history; continue from the next uncompleted slice without rediscovering the whole repository.',
+      '--- END PI TEAM TASK CONTEXT ---'
+    ) -join ' ')
+  }
+  $lines = @(
+    '--- PI TEAM TASK CONTEXT v1 ---',
+    "Context mode: $Mode",
+    'Stable project context: AGENTS.md is inherited; use it as the shared repository map.',
+    'Context boundary: this is orientation only. The launcher, runtime policy, and Lead still enforce authorization and acceptance.',
+    "Task ID: $($Contract.task_id)",
+    "Role: $Role",
+    "Branch: $($Contract.branch)",
+    "Worktree: $($Contract.worktree)",
+    "Delegation: $($delegation[0].id)",
+    "Owned artifact: $($delegation[0].artifact_path)",
+    "Required capabilities: $($delegation[0].required_capabilities -join ', ')",
+    "Objective: $($delegation[0].objective)",
+    "Visible scope: $scope",
+    "Out of scope: $outOfScope",
+    "Owned done criteria: $($ownedCriteria -join '; ')",
+    'Normative protocol: ADR/0002-lead-subagent-collaboration-protocol.md',
+    'Recommended common reads: AGENTS.md, ADR/0002-lead-subagent-collaboration-protocol.md, project_state.md'
+  )
+  switch ($Role) {
+    'researcher' {
+      $lines += 'Recommended role reads: .pi/skills/answer-research-question/SKILL.md, .pi/communication/policy.mjs, research/'
+      $lines += 'Research boundary: answer one bounded question, write only the assigned research artifact, and return to waiting.'
+      if (-not [string]::IsNullOrWhiteSpace($Question)) { $lines += "Research question: $((($Question -replace '\s+', ' ').Trim()))" }
+    }
+    'executor' {
+      $lines += 'Recommended role reads: .pi/skills/execute-delegated-task/SKILL.md, scripts/pi-team.ps1, tests/run-tests.ps1, implementation_notes/'
+      $lines += 'Implementation boundary: make the smallest coherent change in this worktree and request bounded research when needed.'
+    }
+    'reviewer' {
+      $lines += 'Recommended role reads: .pi/skills/review-delegated-task/SKILL.md, implementation_notes/, tests/run-tests.ps1'
+      $lines += 'Review boundary: inspect the diff and evidence; use read-only Git operations and edit only review tests or real failure artifacts.'
+    }
+  }
+  $lines += '--- END PI TEAM TASK CONTEXT ---'
+  return ($lines -join ' ')
 }
 function Start-Task([string]$Path) {
   Assert-Setup; $c = Parse-Contract $Path; Assert-BlackboardTask $c | Out-Null; $existing = Join-Path (StateRoot) "$($c.task_id).json"; if (Test-Path $existing) { Fail 'task already started' }
@@ -410,7 +475,7 @@ function Research([string]$TaskId,[string]$QuestionId,[string]$QuestionFile) {
   $out=Join-Path $s.worktree $delegation[0].artifact_path; New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
   $q=Get-Content -Raw -Encoding UTF8 $QuestionFile
   $researcherId = New-Id
-  $assignment = "Lead assignment. Task ID: $($s.task_id). Worktree: $($s.worktree). Research delegation: $($delegation[0].id). Research artifact: $($delegation[0].artifact_path). Required capabilities: $($delegation[0].required_capabilities -join ', '). Objective: $($delegation[0].objective). Answer exactly this question: $q"
+  $assignment = "$(New-RoleContext $contract 'researcher' 'research' $q) Lead assignment. Task ID: $($s.task_id). Worktree: $($s.worktree). Research delegation: $($delegation[0].id). Research artifact: $($delegation[0].artifact_path). Required capabilities: $($delegation[0].required_capabilities -join ', '). Objective: $($delegation[0].objective). Answer exactly this question: $q"
   if (-not($s.sessions.PSObject.Properties.Name -contains 'researcher')) { $s.sessions | Add-Member -NotePropertyName researcher -NotePropertyValue ([pscustomobject]@{agent_id=$researcherId;session_id='';role='researcher';question_id=$QuestionId;artifact_path=$delegation[0].artifact_path}) }
   Launch-Role $s 'researcher' $assignment ''
   Write-Output "RESEARCH_STARTED $QuestionId"
@@ -419,8 +484,10 @@ function Resume-Task([string]$TaskId) {
   Assert-Setup; $s=Read-State $TaskId
   if ($s.execution_status -ne 'active') { Fail 'task is not active' }
   Assert-NoLiveRoleProcesses $s
+  $contract = Parse-Contract $s.contract_path
   foreach($r in @('executor','reviewer')) {
-    Launch-Role $s $r "Resume Lead task $($s.task_id) as $r. Re-read the frozen task contract at $($s.contract_path) and continue the assigned work." $s.sessions.$r.session_id $true
+    $context = New-RoleContext $contract $r 'resume'
+    Launch-Role $s $r "$context Resume the existing Lead task session as $r and continue the assigned work." $s.sessions.$r.session_id $true
   }
   Write-Output "RESUMED $TaskId"
 }

@@ -1,7 +1,7 @@
 {
   "name": "agent-blackboard",
-  "version": "0.1.0+codex.20260825075356",
-  "description": "Local Agent Blackboard for Lead task observability, event watching, and a compact task-lane view.",
+  "version": "0.1.0+codex.20260831130030",
+  "description": "Local Agent Blackboard for Lead task observability, structured wakeup reminders, event watching, and a compact task-lane view.",
   "author": {
     "name": "Pi Team",
     "email": "pi-team@localhost"
@@ -19,6 +19,7 @@
     "capabilities": [
       "Local task observability",
       "Agent activity events",
+      "Structured Lead wakeup reminders",
       "Task-lane UI"
     ],
     "defaultPrompt": "Show the Agent Blackboard for the current project and watch for new Pi Agent activity."

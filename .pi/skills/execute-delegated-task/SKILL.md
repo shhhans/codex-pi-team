@@ -45,7 +45,7 @@ Do not use this skill when:
 
    - `type` (literal `"RESEARCH_REQUEST"`),
    - `task_id` (must equal `PI_TEAM_TASK_ID`),
-   - `delegation_id` (must equal the contract's Researcher delegation, e.g. `RESEARCH-ISSUE-003`),
+   - `delegation_id` (must equal the contract's Researcher delegation),
    - `request_id` (UUID v4 generated at send time; reused as the envelope `correlation_id`),
    - `decision_supported` (one-sentence description of the implementation decision this research unblocks),
    - `objective` (one bounded question, ≤240 chars; never an architectural, product, or scope-shaping question),

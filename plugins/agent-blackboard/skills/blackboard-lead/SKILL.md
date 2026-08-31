@@ -24,13 +24,20 @@ repository-relative `.pi/blackboard` file.
   after resources are reclaimed. Archiving hides the task by default but keeps
   its history.
 
+After the task is started, register the current Codex Lead thread with
+`blackboard_register_lead` using its exact `thread_id` and `host_id`. Critical
+Agent states create persistent structured wakeups for that binding. The host
+adapter delivers them as concise follow-up prompts and acknowledges them with
+`blackboard_ack_lead_wakeup`; a wakeup is only a reminder, not authorization or
+acceptance. Unregister the binding after acceptance or reclamation.
+
 ## Agent activity
 
 `blackboard_update` is exposed only to Pi roles. It receives the task ID and
 activity fields, while role, Agent ID, worktree, sequence, and observed time
-come from launcher-injected runtime identity. It is an observability and
-reminder plane, not authorization, completion proof, or a communication
-receipt.
+come from launcher-injected runtime identity. Critical states also enqueue a
+structured Lead reminder. Blackboard remains an observability and reminder
+plane, not authorization, completion proof, or a communication receipt.
 
 When calling `blackboard_watch`, retain the returned cursor and pass it to the
 next call. A returned event includes the latest Lead task name and description;

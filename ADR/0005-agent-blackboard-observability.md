@@ -24,6 +24,13 @@ system, completion proof, or communication bus. Scope correction and decisions
 continue through the existing Lead `report_to_lead`, supervisor, and intercom
 paths. A watcher timeout means only that no new Agent event arrived.
 
+An active task may also have one explicit Lead thread binding. Critical Agent
+states (`blocked`, `changes_requested`, `ready_for_review`,
+`ready_for_acceptance`, and `completed`) create persistent structured wakeups
+identified by task, role, and event sequence. A Codex host adapter may deliver
+these as concise follow-up prompts and acknowledge them. Wakeups never grant
+authorization, prove completion, or replace Lead inspection and acceptance.
+
 The repo-local `agent-blackboard` plugin exposes Lead-only MCP tools for task
 management, snapshot, cursor-based watch, and rendering. Its task-lane UI
 requests PiP when supported and falls back inline; closing the UI does not

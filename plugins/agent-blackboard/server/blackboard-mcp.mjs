@@ -3,12 +3,16 @@ import { readFile } from "node:fs/promises";
 import {
   acceptTask,
   archiveTask,
+  acknowledgeLeadWakeup,
   closeIncompleteTask,
   reconcileIncompleteTask,
   reconcileTask,
   createTask,
+  listLeadWakeups,
+  registerLead,
   renderSnapshotHtml,
   snapshot,
+  unregisterLead,
   updateTask,
   watch,
 } from "./blackboard-core.mjs";
@@ -50,6 +54,27 @@ const tools = [
     inputSchema: { type: "object", required: ["project_root", "task_id"], properties: { project_root: { type: "string" }, task_id: { type: "string" } }, additionalProperties: false },
   },
   {
+    name: "blackboard_register_lead",
+    description: "Register the Lead Codex thread that receives critical Agent wakeups for an active task.",
+    inputSchema: { type: "object", required: ["project_root", "task_id", "thread_id", "host_id"], properties: { project_root: { type: "string" }, task_id: { type: "string" }, thread_id: { type: "string" }, host_id: { type: "string" } }, additionalProperties: false },
+  },
+  {
+    name: "blackboard_unregister_lead",
+    description: "Remove the Lead thread binding for a task while preserving wakeup history.",
+    inputSchema: { type: "object", required: ["project_root", "task_id"], properties: { project_root: { type: "string" }, task_id: { type: "string" }, thread_id: { type: "string" }, host_id: { type: "string" } }, additionalProperties: false },
+  },
+  {
+    name: "blackboard_list_lead_wakeups",
+    description: "Read structured, unacknowledged Lead wakeups for a registered task.",
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    inputSchema: { type: "object", required: ["project_root", "task_id"], properties: { project_root: { type: "string" }, task_id: { type: "string" } }, additionalProperties: false },
+  },
+  {
+    name: "blackboard_ack_lead_wakeup",
+    description: "Acknowledge a Lead wakeup after the host confirms it created the Lead turn.",
+    inputSchema: { type: "object", required: ["project_root", "task_id", "wakeup_id"], properties: { project_root: { type: "string" }, task_id: { type: "string" }, wakeup_id: { type: "string" }, delivery_id: { type: "string" } }, additionalProperties: false },
+  },
+  {
     name: "blackboard_snapshot",
     description: "Read current task lanes and latest Agent activity.",
     _meta: { "ui/resourceUri": "ui://agent-blackboard/blackboard.html" },
@@ -86,6 +111,10 @@ async function callTool(name, args = {}) {
   if (name === "blackboard_reconcile_incomplete_task") return reconcileIncompleteTask(projectRoot, args.task_id, args);
   if (name === "blackboard_reconcile_task") return reconcileTask(projectRoot, args.task_id, args);
   if (name === "blackboard_archive_task") return archiveTask(projectRoot, args.task_id);
+  if (name === "blackboard_register_lead") return registerLead(projectRoot, args.task_id, args);
+  if (name === "blackboard_unregister_lead") return unregisterLead(projectRoot, args.task_id, args);
+  if (name === "blackboard_list_lead_wakeups") return listLeadWakeups(projectRoot, args.task_id);
+  if (name === "blackboard_ack_lead_wakeup") return acknowledgeLeadWakeup(projectRoot, args.task_id, args.wakeup_id, args);
   if (name === "blackboard_snapshot") return snapshot(projectRoot, Boolean(args.include_archived));
   if (name === "blackboard_watch") return watch(projectRoot, args.cursor, args.timeout_ms ?? 55000, Boolean(args.include_archived));
   if (name === "blackboard_render") return renderSnapshotHtml(await snapshot(projectRoot, Boolean(args.include_archived)));
@@ -100,7 +129,7 @@ async function handle(message) {
       protocolVersion,
       capabilities: { tools: { listChanged: false }, resources: { subscribe: false, listChanged: false } },
       serverInfo: { name: "agent-blackboard", version: "0.1.0" },
-      instructions: "Use Agent Blackboard as a Lead-owned observability plane. Agent events are not authorization or completion proof.",
+      instructions: "Use Agent Blackboard as a Lead-owned observability plane with wakeup reminders. Wakeups are not authorization or completion proof.",
     } };
   }
   if (message.method === "notifications/initialized") return null;

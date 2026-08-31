@@ -10,6 +10,7 @@ export const ROLE_STATES = Object.freeze({
   reviewer: new Set(["working", "waiting", "blocked", "reviewing", "changes_requested", "ready_for_acceptance"]),
 });
 export const TASK_STATUSES = new Set(["active", "accepted", "incomplete", "archived"]);
+export const LEAD_WAKE_STATES = new Set(["blocked", "changes_requested", "ready_for_review", "ready_for_acceptance", "completed"]);
 const MAX_WATCH_MS = 55_000;
 const LOCK_RETRY_MS = 25;
 const LOCK_TIMEOUT_MS = 5_000;
@@ -46,6 +47,59 @@ function ensureDescription(value) {
 function ensureAbsolutePath(value, field) {
   if (typeof value !== "string" || !isAbsolute(value)) fail(`${field} must be an absolute path`);
   return resolve(value);
+}
+
+function ensureHostId(value) {
+  return ensureLineField(value, "host_id", 240, true);
+}
+
+function ensureThreadId(value) {
+  return ensureLineField(value, "thread_id", 240, true);
+}
+
+function wakeupId(taskId, role, sequence) {
+  return `${taskId}:${role}:${sequence}`;
+}
+
+function makeLeadWakeup(event) {
+  const wakeup = {
+    id: wakeupId(event.task_id, event.role, event.sequence),
+    version: 1,
+    task_id: event.task_id,
+    role: event.role,
+    sequence: event.sequence,
+    state: event.state,
+    activity: event.activity,
+    created_at: event.observed_at,
+    status: "pending",
+    attempts: 0,
+  };
+  if (event.blocker !== undefined) wakeup.blocker = event.blocker;
+  if (event.next !== undefined) wakeup.next = event.next;
+  return wakeup;
+}
+
+function ensureWakeupStore(task) {
+  if (!Array.isArray(task.lead_wakeups)) task.lead_wakeups = [];
+  return task.lead_wakeups;
+}
+
+async function reconcileWakeupStore(root, task) {
+  const wakeups = ensureWakeupStore(task);
+  const known = new Set(wakeups.map((item) => item.id));
+  let changed = false;
+  for (const role of Object.keys(ROLE_STATES)) {
+    for (const event of await parseEventFile(root, `${task.task_id}-${role}.jsonl`)) {
+      if (!LEAD_WAKE_STATES.has(event.state)) continue;
+      const id = wakeupId(task.task_id, role, event.sequence);
+      if (known.has(id)) continue;
+      wakeups.push(makeLeadWakeup(event));
+      known.add(id);
+      changed = true;
+    }
+  }
+  if (changed) wakeups.sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+  return changed;
 }
 
 function isoNow() {
@@ -136,6 +190,8 @@ function taskSummary(task, latest = {}) {
     created_at: task.created_at,
     updated_at: task.updated_at,
     revisions: task.revisions || [],
+    lead_binding: task.lead_binding || null,
+    lead_wakeup_pending: Array.isArray(task.lead_wakeups) ? task.lead_wakeups.filter((item) => item.status !== "acked").length : 0,
     agents: Object.entries(latest).map(([role, event]) => ({ role, ...(event || {}) })),
   };
 }
@@ -228,7 +284,7 @@ export async function createTask(projectRoot, input) {
   const path = taskPath(root, taskId);
   if (existsSync(path)) fail(`task already exists: ${taskId}`);
   const now = isoNow();
-  const task = { version: 1, task_id: taskId, name, description, status: "active", created_at: now, updated_at: now, revisions: [] };
+  const task = { version: 1, task_id: taskId, name, description, status: "active", created_at: now, updated_at: now, revisions: [], lead_binding: null, lead_wakeups: [] };
   await writeJsonAtomic(path, task);
   return task;
 }
@@ -242,7 +298,7 @@ export async function publishTask(projectRoot, input) {
   return withLock(`${path}.lock`, async () => {
     if (!existsSync(path)) {
       const now = isoNow();
-      const task = { version: 1, task_id: taskId, name, description, status: "active", created_at: now, updated_at: now, revisions: [] };
+      const task = { version: 1, task_id: taskId, name, description, status: "active", created_at: now, updated_at: now, revisions: [], lead_binding: null, lead_wakeups: [] };
       await writeJsonAtomic(path, task);
       return { action: "created", task };
     }
@@ -373,6 +429,105 @@ export async function archiveTask(projectRoot, taskId) {
   });
 }
 
+export async function registerLead(projectRoot, taskId, input) {
+  const root = await ensureStateRoot(projectRoot);
+  ensureTaskId(taskId);
+  const threadId = ensureThreadId(input?.thread_id);
+  const hostId = ensureHostId(input?.host_id);
+  return withLock(`${taskPath(root, taskId)}.lock`, async () => {
+    const task = await loadTask(root, taskId);
+    if (task.status !== "active") fail("only an active task can register a Lead");
+    const existing = task.lead_binding;
+    if (existing && (existing.thread_id !== threadId || existing.host_id !== hostId)) {
+      fail(`task already has a different Lead binding: ${taskId}`);
+    }
+    task.lead_binding = { thread_id: threadId, host_id: hostId, registered_at: existing?.registered_at || isoNow() };
+    task.updated_at = isoNow();
+    await reconcileWakeupStore(root, task);
+    ensureWakeupStore(task);
+    await writeJsonAtomic(taskPath(root, taskId), task);
+    return { task_id: taskId, binding: task.lead_binding, pending: task.lead_wakeups.filter((item) => item.status !== "acked").length };
+  });
+}
+
+export async function unregisterLead(projectRoot, taskId, input = {}) {
+  const root = await ensureStateRoot(projectRoot);
+  ensureTaskId(taskId);
+  const threadId = input.thread_id === undefined ? undefined : ensureThreadId(input.thread_id);
+  const hostId = input.host_id === undefined ? undefined : ensureHostId(input.host_id);
+  return withLock(`${taskPath(root, taskId)}.lock`, async () => {
+    const task = await loadTask(root, taskId);
+    const existing = task.lead_binding;
+    if (existing && ((threadId !== undefined && existing.thread_id !== threadId) || (hostId !== undefined && existing.host_id !== hostId))) {
+      fail(`Lead binding does not match task: ${taskId}`);
+    }
+    task.lead_binding = null;
+    task.updated_at = isoNow();
+    await writeJsonAtomic(taskPath(root, taskId), task);
+    return { task_id: taskId, binding: null };
+  });
+}
+
+export async function listLeadWakeups(projectRoot, taskId) {
+  const root = await ensureStateRoot(projectRoot);
+  ensureTaskId(taskId);
+  return withLock(`${taskPath(root, taskId)}.lock`, async () => {
+    const task = await loadTask(root, taskId);
+    const changed = await reconcileWakeupStore(root, task);
+    if (changed) {
+      task.updated_at = isoNow();
+      await writeJsonAtomic(taskPath(root, taskId), task);
+    }
+    return {
+      task_id: taskId,
+      status: task.status,
+      binding: task.lead_binding || null,
+      wakeups: ensureWakeupStore(task).filter((item) => item.status !== "acked"),
+    };
+  });
+}
+
+export async function recordLeadWakeupDelivery(projectRoot, taskId, wakeupId, input) {
+  const root = await ensureStateRoot(projectRoot);
+  ensureTaskId(taskId);
+  const id = ensureLineField(wakeupId, "wakeup_id", 400, true);
+  const delivered = input?.delivered === true;
+  const deliveryId = input?.delivery_id === undefined ? undefined : ensureLineField(input.delivery_id, "delivery_id", 240);
+  const error = input?.error === undefined ? undefined : ensureLineField(input.error, "error", 500);
+  return withLock(`${taskPath(root, taskId)}.lock`, async () => {
+    const task = await loadTask(root, taskId);
+    const wakeup = ensureWakeupStore(task).find((item) => item.id === id);
+    if (!wakeup) fail(`unknown Lead wakeup: ${id}`);
+    wakeup.attempts = Number(wakeup.attempts || 0) + 1;
+    wakeup.last_attempt_at = isoNow();
+    wakeup.status = delivered ? "delivered" : "failed";
+    if (deliveryId !== undefined) wakeup.delivery_id = deliveryId;
+    if (error !== undefined) wakeup.last_error = error;
+    else delete wakeup.last_error;
+    task.updated_at = isoNow();
+    await writeJsonAtomic(taskPath(root, taskId), task);
+    return { task_id: taskId, wakeup };
+  });
+}
+
+export async function acknowledgeLeadWakeup(projectRoot, taskId, wakeupId, input = {}) {
+  const root = await ensureStateRoot(projectRoot);
+  ensureTaskId(taskId);
+  const id = ensureLineField(wakeupId, "wakeup_id", 400, true);
+  const deliveryId = input.delivery_id === undefined ? undefined : ensureLineField(input.delivery_id, "delivery_id", 240);
+  return withLock(`${taskPath(root, taskId)}.lock`, async () => {
+    const task = await loadTask(root, taskId);
+    const wakeup = ensureWakeupStore(task).find((item) => item.id === id);
+    if (!wakeup) fail(`unknown Lead wakeup: ${id}`);
+    if (deliveryId !== undefined && wakeup.delivery_id !== deliveryId) fail(`delivery does not match Lead wakeup: ${id}`);
+    wakeup.status = "acked";
+    wakeup.acked_at = isoNow();
+    task.updated_at = isoNow();
+    await writeJsonAtomic(taskPath(root, taskId), task);
+    return { task_id: taskId, wakeup };
+  });
+}
+
 export async function appendAgentEvent(projectRoot, identity, input) {
   const root = await ensureStateRoot(projectRoot);
   const taskId = ensureTaskId(identity?.task_id);
@@ -398,6 +553,12 @@ export async function appendAgentEvent(projectRoot, identity, input) {
       event.sequence = sequence;
       event.observed_at = isoNow();
       await appendFile(path, `${JSON.stringify(event)}\n`, "utf8");
+      const wakeups = ensureWakeupStore(task);
+      if (LEAD_WAKE_STATES.has(event.state) && !wakeups.some((item) => item.id === wakeupId(taskId, role, sequence))) {
+        wakeups.push(makeLeadWakeup(event));
+        task.updated_at = event.observed_at;
+        await writeJsonAtomic(taskFile, task);
+      }
       return { event, task: { task_id: task.task_id, name: task.name, description: task.description, status: task.status } };
     });
   });

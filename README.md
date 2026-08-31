@@ -66,7 +66,8 @@ autoloaded.
 ## Agent Blackboard
 
 The repo-local `agent-blackboard` plugin provides a Lead-owned observability
-plane. Task metadata and append-only Agent activity events live at
+plane with structured Lead wakeup reminders. Task metadata and append-only
+Agent activity events live at
 `<git-common-dir>/harness-blackboard/v1/`, shared across the main worktree and
 task worktrees. The Lead creates and updates task IDs, names, descriptions, and
 lifecycle; Pi roles can only append their own injected-identity activity with
@@ -75,7 +76,14 @@ lifecycle; Pi roles can only append their own injected-identity activity with
 The Blackboard is not an authorization or communication bus. Use the existing
 `report_to_lead`, supervisor, and intercom paths for decisions and correction.
 The plugin supplies MCP tools for task management, snapshots, cursor-based
-watching, and a task-lane UI that requests PiP and falls back inline.
+watching, Lead thread registration, structured wakeup listing/acknowledgement,
+and a task-lane UI that requests PiP and falls back inline.
+After `start`, the Lead registers its current Codex `thread_id` and `host_id`.
+Only material states (`blocked`, `changes_requested`, `ready_for_review`,
+`ready_for_acceptance`, and `completed`) create wakeups. The host adapter maps
+those records to `send_message_to_thread`; it must acknowledge delivery, while
+the Lead still performs the normal snapshot, diff, artifact, and contract
+checks.
 The MCP server and its blackboard core are packaged together inside the plugin;
 the installed cache must not depend on a sibling `.pi/blackboard` path.
 The plugin also supplies `$pi-team-lead`, which carries this complete launch
@@ -98,6 +106,12 @@ It snapshots the formal contract under the shared Pi Team state root, binds
 stable Pi session IDs, disables ambient extensions and skills, and loads only
 the role's explicit tools, private skill, and extensions. The Lead then watches
 Blackboard events; Agent events never replace review or acceptance.
+
+Active roles inherit the stable shared context from `AGENTS.md`. The launcher
+adds a compact role-specific task context at `start`, `research`, and `resume`
+so agents receive the relevant scope, artifact paths, recommended reads, and
+validation entrypoints before their first repository exploration. Task-specific
+context is generated at runtime and is not added to reusable prompts or skills.
 
 ## Formal contract and closure
 

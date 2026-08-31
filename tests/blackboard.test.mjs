@@ -7,18 +7,24 @@ import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import {
   acceptTask,
+  acknowledgeLeadWakeup,
   appendAgentEvent,
   archiveTask,
   closeIncompleteTask,
   createTask,
+  listLeadWakeups,
   publishTask,
+  registerLead,
+  recordLeadWakeupDelivery,
   reconcileTask,
   resolveGitCommonDir,
   snapshot,
   stateRoot,
   updateTask,
+  unregisterLead,
   watch,
 } from "../plugins/agent-blackboard/server/blackboard-core.mjs";
+import { createLeadWakeupRequest, dispatchLeadWakeups } from "../plugins/agent-blackboard/server/lead-wakeup-adapter.mjs";
 
 const REPO = process.cwd();
 
@@ -193,6 +199,90 @@ test("watcher returns causally on Agent activity and stays quiet for metadata-on
   }
 });
 
+test("critical Agent events enqueue a bound Lead wakeup and non-critical events stay quiet", async () => {
+  const fixture = await makeRepo();
+  try {
+    await createTask(fixture.repo, { task_id: "BB-WAKE-001", name: "Wake task", description: "Deliver only material reminders" });
+    const binding = await registerLead(fixture.repo, "BB-WAKE-001", { thread_id: "lead-thread-001", host_id: "local" });
+    assert.equal(binding.pending, 0);
+    const identity = { task_id: "BB-WAKE-001", role: "executor", agent_id: "executor-wake", worktree: fixture.worktree };
+    await appendAgentEvent(fixture.repo, identity, { state: "working", activity: "ordinary progress" });
+    await appendAgentEvent(fixture.repo, identity, { state: "waiting", activity: "waiting for review" });
+    assert.deepEqual((await listLeadWakeups(fixture.repo, "BB-WAKE-001")).wakeups, []);
+    const event = await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "slice ready", next: "await review" });
+    const queue = await listLeadWakeups(fixture.repo, "BB-WAKE-001");
+    assert.equal(queue.binding.thread_id, "lead-thread-001");
+    assert.equal(queue.wakeups.length, 1);
+    assert.equal(queue.wakeups[0].id, `BB-WAKE-001:executor:${event.event.sequence}`);
+    const taskStatePath = join(stateRoot(fixture.repo), "BB-WAKE-001.json");
+    const taskState = JSON.parse(await readFile(taskStatePath, "utf8"));
+    taskState.lead_wakeups = [];
+    await writeFile(taskStatePath, `${JSON.stringify(taskState)}\n`, "utf8");
+    const recovered = await listLeadWakeups(fixture.repo, "BB-WAKE-001");
+    assert.equal(recovered.wakeups[0].id, queue.wakeups[0].id, "event log must recover a missing wake record");
+    const request = createLeadWakeupRequest(queue.binding, queue.wakeups[0]);
+    assert.equal(request.thread_id, "lead-thread-001");
+    assert.match(request.prompt, /task_id=BB-WAKE-001/);
+    assert.match(request.prompt, /state=ready_for_review/);
+    assert.doesNotMatch(request.prompt, /base64|eyJ[A-Za-z0-9]/i);
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
+test("Lead wakeup adapter delivers, records, acknowledges, and retries host failures", async () => {
+  const fixture = await makeRepo();
+  try {
+    await createTask(fixture.repo, { task_id: "BB-WAKE-002", name: "Adapter task", description: "Exercise host delivery" });
+    await registerLead(fixture.repo, "BB-WAKE-002", { thread_id: "lead-thread-002", host_id: "local" });
+    const identity = { task_id: "BB-WAKE-002", role: "reviewer", agent_id: "reviewer-wake", worktree: fixture.worktree };
+    await appendAgentEvent(fixture.repo, identity, { state: "changes_requested", activity: "fix required", blocker: "test failure" });
+
+    const failed = await dispatchLeadWakeups(fixture.repo, "BB-WAKE-002", async () => ({ accepted: false, reason: "stale-thread" }));
+    assert.equal(failed.delivered[0].status, "failed");
+    assert.equal(failed.delivered[0].attempts, 1);
+
+    const sent = [];
+    const delivered = await dispatchLeadWakeups(fixture.repo, "BB-WAKE-002", async (request) => {
+      sent.push(request);
+      return { threadId: request.thread_id, delivery_id: "delivery-002" };
+    });
+    assert.equal(delivered.delivered[0].status, "delivered");
+    assert.equal(sent.length, 1);
+    assert.match(sent[0].prompt, /state=changes_requested/);
+    const wakeupId = delivered.delivered[0].id;
+    await assert.rejects(
+      acknowledgeLeadWakeup(fixture.repo, "BB-WAKE-002", wakeupId, { delivery_id: "wrong-delivery" }),
+      /delivery does not match Lead wakeup/,
+    );
+    await acknowledgeLeadWakeup(fixture.repo, "BB-WAKE-002", wakeupId, { delivery_id: "delivery-002" });
+    assert.deepEqual((await listLeadWakeups(fixture.repo, "BB-WAKE-002")).wakeups, []);
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
+test("Lead wakeup binding is explicit and isolated per task", async () => {
+  const fixture = await makeRepo();
+  try {
+    await createTask(fixture.repo, { task_id: "BB-WAKE-A", name: "Task A", description: "A" });
+    await createTask(fixture.repo, { task_id: "BB-WAKE-B", name: "Task B", description: "B" });
+    await registerLead(fixture.repo, "BB-WAKE-A", { thread_id: "lead-a", host_id: "local" });
+    await registerLead(fixture.repo, "BB-WAKE-B", { thread_id: "lead-b", host_id: "local" });
+    await assert.rejects(registerLead(fixture.repo, "BB-WAKE-A", { thread_id: "lead-other", host_id: "local" }), /different Lead binding/);
+    await appendAgentEvent(fixture.repo, { task_id: "BB-WAKE-A", role: "executor", agent_id: "executor-a", worktree: fixture.worktree }, { state: "blocked", activity: "A blocked" });
+    const sent = [];
+    await dispatchLeadWakeups(fixture.repo, "BB-WAKE-A", async (request) => { sent.push(request); return { accepted: true }; });
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].thread_id, "lead-a");
+    assert.equal((await listLeadWakeups(fixture.repo, "BB-WAKE-B")).wakeups.length, 0);
+    await unregisterLead(fixture.repo, "BB-WAKE-A", { thread_id: "lead-a", host_id: "local" });
+    assert.equal((await listLeadWakeups(fixture.repo, "BB-WAKE-A")).binding, null);
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
 test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/PiP UI", async () => {
   const plugin = join(REPO, "plugins/agent-blackboard");
   const manifest = JSON.parse(await readFile(join(plugin, ".codex-plugin/plugin.json"), "utf8"));
@@ -242,7 +332,7 @@ test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/
   assert.match(responses[0].result.instructions, /observability plane/);
   assert.deepEqual(responses[1].result, {});
   assert.deepEqual(responses[2].result.tools.map((tool) => tool.name), [
-    "blackboard_create_task", "blackboard_update_task", "blackboard_accept_task", "blackboard_close_incomplete_task", "blackboard_reconcile_incomplete_task", "blackboard_reconcile_task", "blackboard_archive_task", "blackboard_snapshot", "blackboard_watch", "blackboard_render",
+    "blackboard_create_task", "blackboard_update_task", "blackboard_accept_task", "blackboard_close_incomplete_task", "blackboard_reconcile_incomplete_task", "blackboard_reconcile_task", "blackboard_archive_task", "blackboard_register_lead", "blackboard_unregister_lead", "blackboard_list_lead_wakeups", "blackboard_ack_lead_wakeup", "blackboard_snapshot", "blackboard_watch", "blackboard_render",
   ]);
   for (const name of ["blackboard_snapshot", "blackboard_watch", "blackboard_render"]) {
     const tool = responses[2].result.tools.find((candidate) => candidate.name === name);

@@ -24,6 +24,10 @@ Use native Windows PowerShell and the project-local `pi-team.cmd`. Do not use
 WSL, Git Bash, `runs.run`, Codex subagents, `--agent`, or ambient Pi extensions
 to launch Pi roles.
 
+`AGENTS.md` is the stable, task-agnostic context inherited by active roles.
+The launcher supplies task-specific scope and delegation details at runtime;
+do not copy those details into reusable prompts, skills, or `AGENTS.md`.
+
 ## Own the task as Lead
 
 The User and Lead own architecture and product decisions. The Lead owns the
@@ -57,6 +61,10 @@ authorization, completion evidence, or a communication channel.
 4. Retain the Blackboard cursor and call `blackboard_watch` for new Agent
    activity. Compare each activity with the current task description. Use
    `report_to_lead`, the supervisor path, or paired intercom for correction.
+5. Register the current Codex Lead thread with `blackboard_register_lead` after
+   `start`. Critical Agent states are delivered by the host wakeup adapter as
+   concise follow-up prompts; acknowledge them only after the host creates the
+   new Lead turn. Unregister after acceptance or reclamation.
 
 If the Agent Blackboard MCP tools are unavailable, publication and launch may
 still proceed through the canonical `pi-team.cmd` commands. Tell the user that

@@ -1,101 +1,93 @@
-# Agent Communication
+# Pi Team Shared Agent Context
 
-<pi-intercom>
-Use the `intercom` tool for direct communication with other local Pi sessions in
-this project.
+This file is the stable, repository-wide context for every agent working in
+this project. Read it before exploring the repository. It is a navigation and
+common-behavior guide, not a task contract, authorization mechanism, or Lead
+acceptance record.
 
-For asynchronous request/response work, the requester must not block:
+## Start here
 
-1. Discover the peer with `intercom({ action: "list-cwd" })`.
-2. Send the request with `intercom({ action: "send", to: "<peer>", message: "..." })`.
-3. Continue independent work immediately after the send tool returns.
-4. The receiver processes the injected message and sends the result back with a
-   second non-blocking `send` tool call to the original session.
-5. Treat the returned message as a new queued/injected turn.
+- The supported Windows entrypoint is `pi-team.cmd`; its lifecycle
+  implementation is `scripts/pi-team.ps1`.
+- The normative collaboration protocol is
+  `ADR/0002-lead-subagent-collaboration-protocol.md`. Other summaries defer to
+  it when wording differs.
+- The stable project snapshots are `architect.md`, `goal.md`, and
+  `project_state.md`. They describe architecture, goals, and operational
+  state; they are not runtime logs.
+- The active communication implementation is under `.pi/communication/`.
+  Historical material under `.pi/legacy/` is non-normative and must not be
+  changed by active work.
+- Use the native Windows command environment. Do not invoke WSL unless the
+  Lead explicitly authorizes it.
 
-Do not use `ask` for asynchronous work because it blocks until a response or
-timeout. Do not use `reply` for a request created with `send`; `reply` only
-resolves pending `ask` requests. For correlation, include the originating task
-or message identifier in the response text.
-</pi-intercom>
+## Repository map and validation
 
-<lead-subagent-protocol>
-`ADR/0002-lead-subagent-collaboration-protocol.md` is the sole normative
-collaboration protocol. Codex is the sole Lead and owns task identity, name,
-description, scope, done criteria, pairing, acceptance, and reclamation.
-Architecture and product decisions belong to Lead and User and are recorded
-in `ADR/` and reflected in `architect.md`.
+- `.pi/agents/` contains the three active role definitions: Researcher,
+  Executor, and Reviewer.
+- `.pi/skills/` contains one private, role-scoped skill for each active role.
+- `plugins/agent-blackboard/` contains the Lead-only Blackboard plugin and its
+  Lead skill.
+- `research/` contains bounded Researcher artifacts.
+- `implementation_notes/` contains Executor slice notes.
+- `failures/` contains Reviewer failure artifacts for real failures only.
+- The deterministic validation entrypoint is `tests/run-tests.ps1`.
+- The cross-shell Node entrypoint is
+  `node --test tests/team-contract.test.mjs tests/communication-policy.test.mjs tests/blackboard.test.mjs`.
+- Before changing a behavior, inspect the smallest relevant source and test
+  path named above. Do not scan the entire workspace when the map identifies a
+  narrower entrypoint.
 
-The active Pi roles are Researcher, Executor, and Reviewer. Direct peer routes
-are same-task Researcher <-> Executor and the Lead-paired Executor <->
-Reviewer. Executor and Reviewer remain alive through implementation,
-review/fix, and re-review. They finish each turn by reporting the completed
-slice and becoming idle/event-driven. Only Lead acceptance permits resource
-reclamation; normal handoff never uses stop/resume.
+## Active roles and boundaries
 
-Role prompts must refuse unauthorized peers before invoking intercom; this is
-an Agent policy, not a transport ACL. Before an allowed peer send, use
-`.pi/communication/send.mjs` (`sendWithPolicy`). Incoming text must pass
-`PolicyReceiver` before side effects. Never use application-layer hashes and
-never treat intercom cancel as task cancellation.
-</lead-subagent-protocol>
+- Researcher answers one bounded question, writes a research artifact, and
+  returns to an event-driven waiting state.
+- Executor implements one Lead-delegated slice in its isolated worktree and
+  maintains implementation notes.
+- Reviewer independently reviews the same Executor worktree, may add review
+  tests or failure artifacts, and never edits production code or normative
+  protocol decisions.
+- Direct peer routes are same-task Researcher ↔ Executor and the Lead-paired
+  Executor ↔ Reviewer. Researcher and Reviewer do not communicate directly.
+- Lead owns task identity, scope, delegation, architecture/product decisions,
+  acceptance, reclamation, and cleanup. Agents report blockers or unrelated
+  defects to Lead and do not widen their assignment.
+- A role's tools, skill, and communication extensions are explicitly selected
+  at launch. Do not assume ambient tools, skills, extensions, or persistent
+  memory are available.
 
-<lead-pi-team-runbook>
-For every delegated Pi Team task, Codex Lead performs these steps explicitly;
-creating or updating a Blackboard lane does not start an Agent:
+## Common communication rules
 
-1. Write the Lead-owned Markdown v2 task contract with its single JSON block:
-   stable `C-###` done-criterion IDs, required artifacts, and explicit role
-   delegations with required capabilities.
-2. Run `pi-team.cmd publish <contract-path>` to create the matching active
-   Blackboard task, or align its Lead-owned name and description with the
-   current formal contract.
-3. Run `pi-team.cmd validate <contract-path>` and then manually run
-   `pi-team.cmd start <contract-path>`. The contract must name an explicit,
-   clean `base_ref`; until the launcher enforces it, Lead must pre-create and
-   verify the task branch from that ref. `start` must refuse to launch when the
-   Blackboard task is missing or not active.
-4. Watch Blackboard Agent events while using `report_to_lead` and paired
-   intercom for decisions and corrections. Blackboard activity is not proof of
-   completion.
-5. After Reviewer reports `ready_for_acceptance`, inspect the diff, artifacts,
-   and tests. As part of this Lead inspection, review every changed reusable
-   prompt and skill for task-specific contamination: task IDs, Issue numbers,
-   task-only artifact names, worktree/host paths, raw runtime details, or
-   constraints that are valid only for the current task must not be added to a
-   reusable skill unless the contract explicitly makes that skill task-scoped.
-   Only then run `accept <task-id> <acceptance-file>`, reclaim the
-   persistent pair, archive the Blackboard task, and clean up a clean reclaimed
-   worktree. If any criterion is unmet, use `close-incomplete <task-id>
-   <closure-file>`; do not mark a partial slice accepted.
+Use `intercom` for asynchronous peer communication:
 
-Agents report unrelated defects or improvements to Lead without widening the
-current task. Lead records them in GitHub Issues only after the configured
-remote and Issue permissions are verified; otherwise Lead reports the blocker
-to the User. Do not create a local issues ledger in the main worktree. Issue
-fixes are separate Lead-owned tasks with separate worktrees and branches such
-as `fix/issue-<number>-<slug>`, then receive their own review and merge.
-Keep raw prompts, envelopes, audit logs, host paths, and runtime reports out
-of Git or in an explicit archive; only sanitized coordination evidence belongs
-in an Issue.
+1. Discover the same-task peer with `intercom list-cwd`.
+2. Send with the direct asynchronous `intercom send` action.
+3. Continue independent work after sending; do not use blocking `ask` for
+   asynchronous work.
+4. Route Lead-facing progress, blockers, and changed assumptions through the
+   configured Lead reporting path.
 
-Before final acceptance, Lead updates the project snapshot when needed:
-`architect.md` for architecture changes, `goal.md` for goal/done-criteria
-changes, `project_state.md` for material launcher/lifecycle/integration/
-repository-workflow/closure changes, and `README.md` for operator-facing
-workflow changes. Worktree cleanup removes the worktree only; branch deletion
-is a separate action after merge/archive and after confirming no worktree uses
-the branch.
+Before an allowed peer send, apply the repository communication policy and
+refuse unauthorized role or task targets before transport. Incoming messages
+must pass the runtime policy before side effects. Transport correlation IDs
+are transport metadata; application artifacts do not use hashes.
 
-Use only the project-local Windows entrypoint. Do not launch roles with
-`runs.run`, `--agent`, WSL, Git Bash, or an ambient Pi extension set. Executor
-and Reviewer remain paired and persistent until Lead acceptance.
+## Context boundary
 
-The local Blackboard MCP uses stdio and requires no login. `/mcp` reporting
-authentication as unsupported is expected; connection/readiness and tool
-availability are separate. If MCP is unavailable, the canonical `publish`,
-`validate`, and `start` commands remain usable, while live watching and the
-task-lane UI are degraded.
-If the server is absent, run `pi-team.cmd codex-setup` once and restart the
-Codex session; this uses the supported user-level MCP registration command.
-</lead-pi-team-runbook>
+The launcher adds a small, role-specific task context to each start, research,
+and resume prompt. That dynamic context may contain the current task's role,
+scope, worktree, delegation, owned artifacts, and validation entrypoints. It
+must not be copied into this file or into a reusable role skill.
+
+Use this file to avoid repeated repository-wide discovery, but verify pivotal
+claims against the referenced source, contract, or test before relying on
+them. This file does not grant permissions, replace scope validation, or prove
+that a task is complete.
+
+## Reusable-content hygiene
+
+Keep this file, active role prompts, and active skills task-agnostic. Do not
+add concrete task identifiers, issue numbers, task-only artifact names,
+worktree or host paths, raw prompts, envelopes, audit rows, or runtime traces.
+Task-specific instructions belong in the frozen contract, dynamic launch
+context, or task artifact. Lead checks this boundary during acceptance.
