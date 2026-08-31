@@ -59,7 +59,12 @@ creating or updating a Blackboard lane does not start an Agent:
    intercom for decisions and corrections. Blackboard activity is not proof of
    completion.
 5. After Reviewer reports `ready_for_acceptance`, inspect the diff, artifacts,
-   and tests. Only then run `accept <task-id> <acceptance-file>`, reclaim the
+   and tests. As part of this Lead inspection, review every changed reusable
+   prompt and skill for task-specific contamination: task IDs, Issue numbers,
+   task-only artifact names, worktree/host paths, raw runtime details, or
+   constraints that are valid only for the current task must not be added to a
+   reusable skill unless the contract explicitly makes that skill task-scoped.
+   Only then run `accept <task-id> <acceptance-file>`, reclaim the
    persistent pair, archive the Blackboard task, and clean up a clean reclaimed
    worktree. If any criterion is unmet, use `close-incomplete <task-id>
    <closure-file>`; do not mark a partial slice accepted.

@@ -98,7 +98,10 @@ role event stream, the Lead independently verifies:
 2. The complete project validation and task-specific validation both pass from
    the intended base and worktree.
 3. The final diff still matches the frozen scope and contains no raw runtime
-   traces, prompts, envelopes, audit records, or temporary probes.
+   traces, prompts, envelopes, audit records, or temporary probes. The Lead
+   separately checks every changed reusable prompt and skill for task-specific
+   contamination such as task IDs, Issue numbers, task-only artifact names,
+   worktree/host paths, or constraints that apply only to the current task.
 4. The Lead authority, task/scope binding, role and peer authorization,
    artifact ownership, and lifecycle rules remain intact.
 5. Only after these checks does the Lead run `accept`, reclaim the persistent
