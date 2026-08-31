@@ -58,3 +58,14 @@ Do not use this skill when:
 - Material updates mirror to Lead via `contact_supervisor` with `reason: "progress_update"`, including the originating Lead task ID and peer.
 - Read-only Git operations (`status`, `diff`, `log`, `show`, `blame`, and equivalent) are allowed. Worktree-changing Git operations require explicit Lead authorization.
 - Use native worktree commands. On Windows, do not invoke WSL without Lead authorization. Do not create a Scout or unassigned subtasks.
+
+## Issue #11 audit-row redaction checks
+
+When reviewing changes that touched `.pi/communication/` for Issue #11, verify the audit-row redaction contract by reading the `<auditDir>/<role>.jsonl` rows produced by `tests/communication-policy.test.mjs` and asserting:
+
+1. Every allowed outbound (`direction: "outbound", outcome: "allowed"`) carries the structured envelope fields `kind`, `subject`, `body_summary`, `body_fingerprint`, `body_length`. The base64 wire form never appears.
+2. Every allowed inbound (`direction: "inbound", outcome: "accepted"`) carries the same structured fields. The base64 wire form never appears.
+3. Every refused inbound / outbound (`outcome: "refused"`) carries NO `body_summary`, `body_fingerprint`, `body_length`, or `kind` / `subject` from the envelope. The refused row must carry only `direction`, `action`, `recipient`, `outcome`, `reason`, `sender`, `messageId` (when known), `correlationId` (when known), and `trace` (when applicable).
+4. The audit JSON never includes the strings `"base64"`, `"body_encoding"`, or the `agent-team/v1` envelope header.
+
+When reviewing the typed-failure surface, verify the runtime's `classifyDeliveryFailure` returns one of `stale-session`, `peer_wrong_role`, `peer_wrong_task`, or `undefined` (for opaque failures). Cross-task and cross-role rediscovery must always be refused; the runtime never silently redelivers to a different task or a different role. The `parseSameTaskTeamPeer` parser preserves the original case of the agent's typed task-id and launch-id so the audit row's reason field is greppable against the agent's input.
