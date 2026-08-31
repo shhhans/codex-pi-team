@@ -35,7 +35,7 @@ Expected results:
   - `.pi/skills/execute-delegated-task/SKILL.md` (modified — step 11 mirror)
   - `.pi/skills/answer-research-question/SKILL.md` (modified — step 11 mirror)
   - `.pi/skills/review-delegated-task/SKILL.md` (modified — "Issue #11 audit-row redaction checks" section)
-  - `tests/communication-policy.test.mjs` (modified — 11 new Issue #11 cases + 1 test fix)
+  - `tests/communication-policy.test.mjs` (modified — 13 new Issue #11 cases + 1 test fix)
 - `git diff -- .pi/agents .pi/skills .pi/communication` shows only text additions / production-logic extensions listed above; the wire envelope (`makeEnvelope` / `parseEnvelope`), the bounded peer topology (`BOUNDED_PEERS`), the canonical base64url check, the Issue #3 body gate (`validateResearchBody` / `authorizeResearchDelegation`), and the lifecycle `markStale` / restart contract are byte-identical.
 
 ## Mapping to done criteria
@@ -74,8 +74,8 @@ Expected results:
 | **N5** — denied inbound (unauthorized sender) audit row never carries the inbound body text or the base64 | PASS | "Issue #11 N6: denied inbound (unauthorized sender) audit row never carries the base64 body" |
 | **N6** — duplicate id within `DedupStore` window (transport re-delivery) refused | PASS | "denied inbound reviewer<-researcher must not create a pending reply-store reservation; allowed executor->reviewer must be accepted" (unchanged) + "runtime policy preserves envelope, dedup, reply-store, lifecycle mechanics unchanged" (unchanged) |
 | **C1** — existing peer topology assertions still hold | PASS | "policy.mjs exposes only the three active runtime roles and legacy role names are rejected" + "async peer send bidirectionally allowed only executor<->researcher and executor<->reviewer" + "executor outbound peer shape is exactly researcher + reviewer" + "reviewer outbound peer shape is exactly executor" (all unchanged) |
-| **C2** — existing role prompts/skills still pass team-contract assertions | PASS | The pre-existing 23 `tests/team-contract.test.mjs` tests continue to pass (text-only updates to the role prompts and skills do not change the parsed frontmatter assertions) |
-| **C3** — Blackboard observability unaffected | PASS | All 7 `tests/blackboard.test.mjs` tests continue to pass (unchanged) |
+| **C2** — existing role prompts/skills still pass team-contract assertions | PASS | The pre-existing 20 `tests/team-contract.test.mjs` tests continue to pass (text-only updates to the role prompts and skills do not change the parsed frontmatter assertions) |
+| **C3** — Blackboard observability unaffected | PASS | All 6 `tests/blackboard.test.mjs` tests continue to pass (unchanged) |
 | **C4** — Issue #3 allow scheme stays green | PASS | All 21 Issue #3 test cases (Issue #3 policy constants, validator/gate unit tests, runtime-gate integration tests, inbound/ACL tests) continue to pass |
 | **C5** — existing denial semantics for unauthorized inbound still hold | PASS | "denied inbound reviewer<-researcher must not create a pending reply-store reservation" continues to pass; the new body gate runs after the existing sender-identity check |
 | **C6** — no new persistent role memory | PASS | "active role memory files are absent and the executor runtime directory is removed" continues to pass |
@@ -85,7 +85,7 @@ Expected results:
 ## Test counts
 
 - `tests/run-tests.ps1`: **76 tests, 76 pass, 0 fail, 0 skipped** (≈ 43 s).
-- `tests/communication-policy.test.mjs`: 49 tests (16 pre-existing + 21 Issue #3 + 12 Issue #11).
+- `tests/communication-policy.test.mjs`: 50 tests (16 pre-existing + 21 Issue #3 + 13 Issue #11).
 - `tests/team-contract.test.mjs`: 20 tests (unchanged).
 - `tests/blackboard.test.mjs`: 6 tests (unchanged).
 
@@ -103,7 +103,7 @@ Expected results:
 ## Decision and reproduction notes
 
 - The Issue #11 decision (full text in `plans/ISSUE-011-decision.md`) selects Approach A from `research/ISSUE-011-intercom-envelope-recovery.md` §7. Approach B (modify or replace the envelope) is forbidden by the Issue #11 `out_of_scope` clauses and would break every wire-shape assertion in `tests/communication-policy.test.mjs` and the launch-id binding contract in `tests/team-contract.test.mjs`.
-- The smallest coherent change: 6 production files (3 logic-only modifications to `policy.mjs` / `runtime-policy.mjs` / `send.mjs` + 3 text additions to `executor.md` / `researcher.md` / `reviewer.md`) + 3 skill mirrors + 1 README extension + 1 new plan + 1 new implementation notes + 1 new verification report + 1 extended test file (11 new tests + 1 test fix).
+- The smallest coherent change: 6 production files (3 logic-only modifications to `policy.mjs` / `runtime-policy.mjs` / `send.mjs` + 3 text additions to `executor.md` / `researcher.md` / `reviewer.md`) + 3 skill mirrors + 1 README extension + 1 new plan + 1 new implementation notes + 1 new verification report + 1 extended test file (13 new Issue #11 tests + 1 test fix).
 - No public CLI change, no capability change, no peer-topology change, no role markdown / skill structural change.
 
 ## Conclusion
