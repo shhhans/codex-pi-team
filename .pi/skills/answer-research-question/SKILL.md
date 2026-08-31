@@ -63,6 +63,7 @@ Do not use this skill when:
    - `detail` (non-empty string, ≤1024 chars),
    - `next_decision_needed` (required when `reason_code` is `architectural | out_of_scope | under_specified`; ≤240 chars; describes the Lead decision that would unblock the Executor).
 10. After each request, update Blackboard to `waiting` and end the turn idle/event-driven. Do not mark the session `completed` after one request and do not exit or stop waiting. Only explicit Lead completion/reclaim ends the Researcher session.
+11. **Issue #11 audit-row redaction.** When sending `RESEARCH_RESULT` / `RESEARCH_BLOCKED` to the paired Executor, the wire envelope is built via `.pi/communication/policy.mjs` `makeEnvelope` (which encodes the body to base64url for transport). The Executor-side inbound audit row carries the redacted envelope fields only (`kind`, `subject`, `references`, `body_summary` ≤80 UTF-8 chars, `body_fingerprint` 16 hex chars, `body_length`); the base64 wire form never appears in the audit or in the Executor's context. The Researcher does not need to alter its outbound body construction — the runtime's `formatAuditEvent` redacts the audit row, and the Executor's prompt never carries the raw envelope text. The Researcher must still use `makeEnvelope` (never hand-rolled base64) to construct the outbound envelope; the runtime's `parseEnvelope` canonical-base64url check remains the wire gate.
 
 ## Boundaries
 

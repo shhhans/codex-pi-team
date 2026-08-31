@@ -51,6 +51,37 @@ Messages use the structured `agent-team/v1` envelope. UUIDs are internal
 transport correlation identifiers; application artifacts use Lead task
 IDs and no application-level content hash.
 
+## Audit surface (Issue #11)
+
+The audit row written by `appendPolicyAudit` carries the structured
+envelope fields (`kind`, `subject`, `references`, `body_summary`
+≤80 UTF-8 chars, `body_fingerprint` 16 hex chars, `body_length`) for
+**accepted** inbounds and **allowed** outbounds. The base64 wire body
+never appears in any audit row, regardless of outcome. For **refused**
+events (outbound or inbound), no envelope-derived field is serialized;
+the row carries only the structured denial surface (`direction`,
+`action`, `recipient`, `outcome`, `reason`, `sender`, `messageId`,
+`correlationId`, `trace`). This prevents unauthorized senders' body
+bytes from leaking into the audit even when the runtime has parsed the
+envelope for ACL evaluation. The audit shape is the source-of-truth
+for Lead retrospection; `formatAuditEvent` in
+`.pi/communication/policy.mjs` is the only writer.
+
+## Stale-session recovery (Issue #11)
+
+When a same-task paired peer (`pi-team--<task-id>--<role>--<launch-id>`)
+becomes unreachable, `sendWithPolicy` classifies the transport failure
+against a conservative sentinel list (`no-such-session`,
+`session-not-found`, `disconnected`, `not-delivered`, `no-such-target`)
+and the runtime surfaces a typed diagnostic with the recovery hint:
+"call `intercom list-cwd` and re-send to the current same-task paired
+role peer". The runtime never silently redelivers to a different task
+or a different role; cross-task rediscovery returns `peer_wrong_task`,
+cross-role rediscovery returns `peer_wrong_role`, and unauthorized
+senders / malformed envelopes keep their existing ACL / wire-shape
+refusal surfaces. The agent prompt and skills describe the four typed
+failures and the recovery path.
+
 ## Evidence boundary
 
 Run `powershell -ExecutionPolicy Bypass -File tests/run-tests.ps1` on

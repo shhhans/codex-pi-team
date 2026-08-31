@@ -74,6 +74,11 @@ Do not use this skill when:
 8. Persist `implementation_notes/<task-id>.md` at the worktree root with: Lead task ID, current slice state, files changed, research requests/results or blockers, validation performed, and remaining risks. Use `<task-id>` exactly as Lead supplied it.
 9. Send `READY_FOR_REVIEW` (or `FIX_READY`) to the paired Reviewer via `intercom`, including the worktree and notes paths. Use envelope correlation IDs from Lead.
 10. Report the completed slice to Lead and end the turn idle/event-driven. Remain allocated for `REVIEW_FAIL`, fixes, re-review, and acceptance. Do not self-approve or commit unless Lead explicitly authorized it.
+11. **Issue #11 — structured send + stale-session recovery.** The wire `agent-team/v1` envelope is unchanged (`body_encoding: base64url`, canonical round-trip check at `.pi/communication/policy.mjs`); only the agent-facing audit and diagnostics surface is redacted. Build the envelope via the repo-local helper (`sendWithPolicy` + `makeEnvelope` in `.pi/communication/`); the audit row carries only `kind`, `subject`, `references`, `body_summary` (≤80 UTF-8 chars), `body_fingerprint` (16 hex), `body_length`. The base64 body never appears in the audit row or any agent-facing context. When `intercom send` returns a typed failure, decode the reason prefix and recover:
+    - `stale-session:role=<r>:task_id=<t>:launch_id=<old>:retry=list-cwd` — same-task paired peer is unreachable; call `intercom list-cwd`, pick the current `pi-team--<t>--<r>--<new-launch-id>`, and re-send. Do NOT retry the cached launch-id.
+    - `peer_wrong_role:sender=<s>:role=<r>` — target resolves to a role outside the sender's bounded peer set; cross-role rediscovery is refused; route through Lead.
+    - `peer_wrong_task:role=<r>:expected_task_id=<e>:actual_task_id=<a>` — target resolves to a different task; cross-task rediscovery is refused; route through Lead.
+    - `unauthorized-peer` / `parseEnvelope` errors — existing ACL / wire-shape failures; fix and retry.
 
 ## Boundaries
 

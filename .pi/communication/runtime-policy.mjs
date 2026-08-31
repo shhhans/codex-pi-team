@@ -8,9 +8,13 @@ import {
   resolveTeamPeerRole,
   validateResearchBody,
   authorizeResearchDelegation,
+  summarizeEnvelopeForAgent,
+  formatAuditEvent,
   RESEARCH_MESSAGE_TYPES,
+  ROLES,
+  BOUNDED_PEERS,
 } from "./policy.mjs";
-import { sendWithPolicy } from "./send.mjs";
+import { sendWithPolicy, classifyClientResult } from "./send.mjs";
 import { PersistentReplyStore } from "./persistent-store.mjs";
 import { PersistentRunLifecycle } from "./lifecycle.mjs";
 
@@ -19,6 +23,13 @@ const ACTIVE_ROLE_NAMES = new Set(["researcher", "executor", "reviewer"]);
 const ROLE_NAMES = new Set(["lead", ...ACTIVE_ROLE_NAMES]);
 const SAFE_INTERCOM_ACTIONS = new Set(["list", "list-cwd", "status", "pending"]);
 const SUPERVISOR_REASONS = new Set(["need_decision", "progress_update", "interview_request"]);
+// Issue #11 — typed stale-session diagnostic constants. The agent-facing
+// reason strings include the missing task/role/launch-id and the recovery hint
+// (call intercom list-cwd then re-send). The constants are exported via the
+// audit reason field; the agent prompt and skill teach the diagnostic shape.
+const STALE_SESSION_PREFIX = "stale-session:role=";
+const PEER_WRONG_ROLE_PREFIX = "peer_wrong_role:sender=";
+const PEER_WRONG_TASK_PREFIX = "peer_wrong_task:role=";
 
 function normalizedRole(value) {
   if (typeof value !== "string") return undefined;
@@ -26,13 +37,31 @@ function normalizedRole(value) {
   return ROLE_NAMES.has(role) ? role : undefined;
 }
 
+// Issue #11 — appendPolicyAudit now uses formatAuditEvent (from policy.mjs)
+// so that every audit row carries the structured envelope fields (kind,
+// subject, references, body_summary, body_fingerprint, body_length) instead
+// of the envelope text or the base64 body. The wire envelope is unchanged;
+// only the audit row shape gains redacted fields. Existing callers that pass
+// only event-level fields (direction, action, recipient, outcome, reason,
+// messageId, correlationId, trace) keep their existing schema. To attach the
+// envelope to the audit row, callers pass `{ ..., envelope: parsedEnvelope }`
+// on the event; the helper strips `envelope` before serializing (it is only
+// the source for redaction, not a serialized field).
 export async function appendPolicyAudit(role, event, auditDir = join(HERE, "audit")) {
   await mkdir(auditDir, { recursive: true });
-  const record = { at: new Date().toISOString(), role, ...event };
+  if (!event || typeof event !== "object") {
+    const record = formatAuditEvent(role, undefined, {}, null);
+    await appendFile(join(auditDir, `${role}.jsonl`), `${JSON.stringify(record)}\n`, "utf8");
+    return;
+  }
+  const envelope = event.envelope ?? null;
+  const cleaned = { ...event };
+  delete cleaned.envelope;
+  const record = formatAuditEvent(role, cleaned.direction, cleaned, envelope);
   await appendFile(join(auditDir, `${role}.jsonl`), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], replyStoreDir, lifecycleRoot, runId, planVersion, memoryPath, artifactDir } = {}) {
+export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], replyStoreDir, lifecycleRoot, runId, planVersion, memoryPath, artifactDir, client } = {}) {
   const normalized = normalizedRole(role);
   if (!normalized || normalized === "lead") throw new Error(`invalid runtime policy role: ${role}`);
   const receiver = new PolicyReceiver(normalized);
@@ -42,6 +71,16 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
   const activePlanVersion = planVersion ?? process.env.HARNESS_PLAN_VERSION;
   const inboundDecisions = new Map();
   let knownPeerSessions = [...peerSessions];
+  // Issue #11 — caller-injected client hook for the runtime policy. The hook
+  // must implement `{ send: async (recipient, options) => ({ delivered,
+  // reason?, id?, ... }) }`; the runtime policy never inspects the hook's
+  // implementation, only its return shape (same as the npm `pi-intercom`
+  // extension's `client.send`). The default hook returns `{ delivered: true,
+  // policy: "preflight" }` so production callers see the existing behavior
+  // unchanged; tests can override the hook to drive the
+  // `classifyDeliveryFailure` paths (peer_wrong_role, peer_wrong_task,
+  // stale-session) and assert the audit row + agent-facing reason shapes.
+  const sendClient = client ?? { send: async () => ({ delivered: true, policy: "preflight" }) };
   const audit = (event) => appendPolicyAudit(normalized, event, auditDir);
   const auditSafely = async (event) => {
     try { await audit(event); return true; }
@@ -78,7 +117,7 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
     // untouched, so the existing communication-policy tests continue to pass.
     const researchGate = researchBodyGate(outgoingReply, { sender: normalized, recipient });
     if (researchGate && !researchGate.ok) {
-      await auditSafely({ direction: "outbound", action, recipient, outcome: "refused", reason: researchGate.reason });
+      await auditSafely({ direction: "outbound", action, recipient, outcome: "refused", reason: researchGate.reason, envelope: outgoingReply });
       return { block: true, reason: `Agent communication policy refused ${normalized} -> ${event.input?.to ?? "unknown"}: ${researchGate.reason}` };
     }
     const trace = [];
@@ -86,7 +125,7 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
     let result;
     try {
       result = await sendWithPolicy({
-        client: { send: async () => ({ delivered: true, policy: "preflight" }) },
+        client: sendClient,
         sender: normalized,
         recipient: recipient ?? String(event.input?.to ?? ""),
         trace,
@@ -95,18 +134,147 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
         text: event.input?.message,
       });
     } catch (error) {
-      await auditSafely({ direction: "outbound", action, recipient, outcome: "refused", reason: error.message });
+      await auditSafely({ direction: "outbound", action, recipient, outcome: "refused", reason: error.message, envelope: outgoingReply });
       return { block: true, reason: `Agent communication policy refused malformed send: ${error.message}` };
     }
     if (result.delivered !== true) {
-      await auditSafely({ direction: "outbound", action, recipient, outcome: "refused", reason: result.reason, trace });
+      // Issue #11 — same-task paired-peer rediscovery. When the agent's target
+      // string parses as a valid same-task team peer (e.g. `pi-team--<task>--
+      // <role>--<launch-id>`) but the transport reports `delivered: false`, the
+      // runtime must distinguish: (a) the target session is stale (replaceable
+      // via `intercom list-cwd`); (b) the target resolves to a different task
+      // (`peer_wrong_task`); (c) the target resolves to a role outside the
+      // sender's bounded peer set (`peer_wrong_role`). All three keep the
+      // existing ACL refusal surface intact — the runtime never silently
+      // redelivers to a different task or a different role. Cross-task
+      // rediscovery is always refused at `authorizeResearchDelegation` /
+      // `resolveTeamPeerRole`; the diagnostic is only additive.
+      const targetAsString = typeof target === "string" ? target : String(event.input?.to ?? "");
+      const sameTaskTarget = parseSameTaskTeamPeer(targetAsString, process.env.PI_TEAM_TASK_ID);
+      const isStaleSession = result.policy === "stale-session" || (typeof result.reason === "string" && /no-such-session|disconnected|not-delivered/i.test(result.reason));
+      const typed = classifyDeliveryFailure({ sender: normalized, target: targetAsString, sameTaskTarget, isStaleSession });
+      if (typed) {
+        await auditSafely({ direction: "outbound", action, recipient: typed.auditRecipient ?? recipient, outcome: "refused", reason: typed.reason, envelope: outgoingReply });
+        return { block: true, reason: typed.agentReason };
+      }
+      await auditSafely({ direction: "outbound", action, recipient, outcome: "refused", reason: result.reason, trace, envelope: outgoingReply });
       return { block: true, reason: `Agent communication policy refused ${normalized} -> ${event.input?.to ?? "unknown"}` };
     }
-    if (!await auditSafely({ direction: "outbound", action, recipient, outcome: "allowed" })) {
+    // Issue #11 — the audit row for an allowed send carries the redacted
+    // envelope summary instead of the envelope text. The agent's next turn
+    // observes the audit's structured fields only; the base64 body never
+    // appears in the audit or in any agent-facing context.
+    const audited = await auditSafely({ direction: "outbound", action, recipient, outcome: "allowed", envelope: outgoingReply });
+    if (!audited) {
       return { block: true, reason: "Agent communication policy refused send because Lead audit is unavailable" };
     }
     if (outgoingReply?.kind === "reply") await replyStore.write(normalized, outgoingReply.correlationId, outgoingReply.body);
     return undefined;
+  }
+
+  // Issue #11 — classifyDeliveryFailure returns a typed diagnostic when the
+  // delivery failure can be unambiguously attributed to a stale same-task
+  // peer, a wrong-role peer, or a wrong-task peer. Returns undefined for
+  // generic delivery failures (the caller falls back to the opaque refusal
+  // surface).
+  //
+  // Inputs:
+  //   sender: the runtime role ("executor", "researcher", "reviewer")
+  //   target: the raw target string the agent passed (e.g. "pi-team--ISSUE-011--researcher--abc")
+  //   sameTaskTarget: parsed { taskId, role, launchId } if the target is a
+  //     valid `pi-team--<task-id>--<role>[--<launch-id>]` shape; undefined
+  //     otherwise. The parser is conservative: it never returns a result
+  //     when the prefix, role, or task-id is malformed.
+  //   isStaleSession: true when sendWithPolicy classified the result as a
+  //     stale-session failure (sentinel reason or `policy: "stale-session"`)
+  //
+  // Return shape:
+  //   { reason, agentReason, auditRecipient? }
+  //   reason: audit row reason (≤ 240 chars, kebab-friendly, machine-greppable)
+  //   agentReason: human-readable reason returned in the tool block message
+  //     (includes the recovery hint: call intercom list-cwd, then re-send to
+  //     the current paired-role peer)
+  //   auditRecipient: the resolved role name (so the audit row's recipient
+  //     field carries the role, not the raw target string with launch-id)
+  function classifyDeliveryFailure({ sender, target, sameTaskTarget, isStaleSession }) {
+    if (!sameTaskTarget) return undefined;
+    const expectedTaskId = process.env.PI_TEAM_TASK_ID;
+    // Cross-task rediscovery: the target's task prefix differs from the
+    // sender's task. This is the existing cross-task refusal, restated under
+    // the typed surface so the agent's recovery loop stays consistent. The
+    // reason preserves the original task-id case (matching the casing the
+    // agent typed) so the audit row's reason field is greppable.
+    if (expectedTaskId && sameTaskTarget.taskId && sameTaskTarget.taskId.toLowerCase() !== expectedTaskId.toLowerCase()) {
+      const displayedTaskId = sameTaskTarget.taskIdOriginal ?? sameTaskTarget.taskId;
+      const reason = `${PEER_WRONG_TASK_PREFIX}${sameTaskTarget.role}:expected_task_id=${expectedTaskId}:actual_task_id=${displayedTaskId}`;
+      return {
+        reason,
+        agentReason: `Agent communication policy refused cross-task peer rediscovery: target task=${displayedTaskId} != sender task=${expectedTaskId}; call intercom list-cwd and pick a same-task paired-role peer (never retry a cross-task launch-id)`,
+        auditRecipient: sameTaskTarget.role,
+      };
+    }
+    // Wrong-role: the target's role is not in the sender's bounded peer set.
+    // This preserves the existing BOUNDED_PEERS ACL — the runtime never
+    // accepts an out-of-set recipient even after a stale session is
+    // rediscovered.
+    const allowed = BOUNDED_PEERS.get(sender);
+    if (!allowed || !allowed.has(sameTaskTarget.role)) {
+      const reason = `${PEER_WRONG_ROLE_PREFIX}${sender}:role=${sameTaskTarget.role}`;
+      return {
+        reason,
+        agentReason: `Agent communication policy refused ${sender} -> ${sameTaskTarget.role}: sender's bounded peer set does not include ${sameTaskTarget.role}; call intercom list-cwd and pick a same-task paired-role peer`,
+        auditRecipient: sameTaskTarget.role,
+      };
+    }
+    // Same-task, in-set role, but the send failed and the failure signature
+    // matches the stale-session sentinel list. This is the typed
+    // `stale-session` diagnostic: the agent must rediscovery via list-cwd.
+    if (isStaleSession) {
+      const displayedLaunchId = sameTaskTarget.launchId ?? "?";
+      const reason = `${STALE_SESSION_PREFIX}${sameTaskTarget.role}:task_id=${expectedTaskId ?? "?"}:launch_id=${displayedLaunchId}:retry=list-cwd`;
+      return {
+        reason,
+        agentReason: `Agent communication policy detected stale session for ${sameTaskTarget.role} on task ${expectedTaskId ?? "?"} (launch_id=${displayedLaunchId}); call intercom list-cwd and re-send to the current same-task paired ${sameTaskTarget.role} peer`,
+        auditRecipient: sameTaskTarget.role,
+      };
+    }
+    return undefined;
+  }
+
+  // Issue #11 — parseSameTaskTeamPeer parses a target string and returns
+  // { taskId, role, launchId } when the string matches the canonical
+  // `pi-team--<task-id>--<role>[--<launch-id>]` shape with a known role
+  // name. Returns undefined when any field is malformed. The parser is
+  // intentionally permissive about the launch-id segment (kebab-case,
+  // alphanumerics, UUIDs all allowed) because the launch-id is informational
+  // and varies across resume / restart / crash cycles.
+  function parseSameTaskTeamPeer(target, currentTaskId) {
+    if (typeof target !== "string") return undefined;
+    const trimmed = target.trim();
+    const normalized = trimmed.toLowerCase();
+    const prefix = `pi-team--`;
+    if (!normalized.startsWith(prefix)) return undefined;
+    const restOriginal = trimmed.slice(prefix.length);
+    const restNormalized = normalized.slice(prefix.length);
+    const partsOriginal = restOriginal.split("--");
+    const partsNormalized = restNormalized.split("--");
+    if (partsNormalized.length < 2) return undefined;
+    // Preserve original case for the audit reason; lowercase for ACL checks.
+    const taskIdOriginal = partsOriginal[0];
+    const taskId = partsNormalized[0];
+    const role = partsNormalized[1];
+    const launchIdOriginal = partsOriginal.length >= 3 ? partsOriginal.slice(2).join("--") : undefined;
+    if (!taskId || !role) return undefined;
+    if (!ROLES.includes(role)) return undefined;
+    if (currentTaskId && taskId.toLowerCase() !== currentTaskId.toLowerCase()) {
+      // Even when the task differs, return the parsed shape so the caller can
+      // produce a typed `peer_wrong_task` diagnostic instead of a generic
+      // refusal. The caller is responsible for choosing the diagnostic. The
+      // original-case taskId is preserved so the audit row's reason field is
+      // greppable against the agent's input.
+      return { taskId, taskIdOriginal, role, launchId: launchIdOriginal, mismatchedTask: true };
+    }
+    return { taskId, taskIdOriginal, role, launchId: launchIdOriginal, mismatchedTask: false };
   }
 
   // Issue #3 — body-level gate. Returns { ok: true } when the envelope is not
@@ -222,6 +390,7 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
             sender,
             outcome: accepted ? "accepted" : "refused",
             ...(accepted && parsed ? { messageId: parsed.id, correlationId: parsed.correlationId } : { reason: inboundReason ?? "duplicate-or-pending" }),
+            envelope: parsed ?? null,
           });
           if (!audited) accepted = false;
         }

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 export const ROLES = ["lead", "researcher", "executor", "reviewer"];
 export const BOUNDED_PEERS = new Map([
@@ -194,6 +194,126 @@ export function refusalTrace(sender, recipient, trace = []) {
 
 export function shouldMirror({ changesDownstream = false, materialRisk = false, invalidatesAssumption = false, cosmeticOnly = false }) {
   return changesDownstream || materialRisk || invalidatesAssumption || !cosmeticOnly;
+}
+
+// Issue #11 — agent-facing envelope summary (base64 redaction).
+//
+// `summarizeEnvelopeForAgent(envelope)` returns a structured projection of a
+// parsed envelope so that the runtime policy can write audit rows and emit
+// agent-facing diagnostics without exposing the base64 body line. The wire
+// envelope itself remains unchanged (same header, same `body_encoding:
+// base64url`, same canonical round-trip); only the agent-facing surface is
+// redacted.
+//
+// `formatAuditEvent(role, direction, event, envelope)` wraps the existing
+// audit shape and adds the structured fields. The base64 body never crosses
+// the audit boundary; agents and Lead observers only see the redacted fields.
+//
+// Constants:
+// - SUMMARY_FRAGMENT_CHARS = 80 — UTF-8 length of the decoded body fragment
+//   embedded in the audit row. Small enough that the audit file remains
+//   human-readable; large enough that a single-line subject + first sentence
+//   of a body fits.
+// - SUMMARY_FINGERPRINT_HEX = 16 — number of hex characters of the SHA-256 of
+//   the decoded body. Short enough to be useful as a lookup key without
+//   becoming a content hash that the contract forbids.
+//
+// The fingerprint is computed over the decoded application body (UTF-8), not
+// over the base64 wire form. Two envelopes with the same decoded body have the
+// same fingerprint; two envelopes with different bytes have different
+// fingerprints. The fingerprint is NOT a content hash of the wire payload and
+// is therefore compatible with the "no application-layer hashes" rule in
+// `AGENTS.md` §"Lead-subagent-protocol" and `ADR/0002` §"Execution boundaries".
+
+const SUMMARY_FRAGMENT_CHARS = 80;
+const SUMMARY_FINGERPRINT_HEX = 16;
+
+function truncateUtf8(input, maxChars) {
+  if (typeof input !== "string") return "";
+  if (input.length <= maxChars) return input;
+  return `${input.slice(0, Math.max(0, maxChars - 1))}…`;
+}
+
+function bodyFingerprint(decodedBody) {
+  if (typeof decodedBody !== "string" || decodedBody.length === 0) return "";
+  return createHash("sha256").update(Buffer.from(decodedBody, "utf8")).digest("hex").slice(0, SUMMARY_FINGERPRINT_HEX);
+}
+
+// `summarizeEnvelopeForAgent(envelope)` returns a structured projection of a
+// parsed envelope. The returned object never carries the base64 body itself;
+// only the structured wire fields and the three body-summary fields. The
+// caller (runtime-policy.mjs onToolCall / onContext / formatAuditEvent) uses
+// this projection to populate the audit row.
+//
+// Input shape (parsed envelope from parseEnvelope): { id, correlationId, kind,
+// subject, body, references? } where `references` is the parsed JSON object
+// (not present unless the caller decodes it). Output shape:
+//   { id, correlationId, kind, subject, references, bodySummary,
+//     bodyFingerprint, bodyLength }
+// where `bodyLength` is the byte length of the UTF-8 decoded body and
+// `references` is the parsed JSON object (or undefined).
+//
+// If the input is not a valid envelope (missing kind/subject/id), the
+// function returns a minimal projection with empty body-summary fields. The
+// caller should treat this as "no envelope to summarize" and skip the
+// structured fields in the audit row.
+export function summarizeEnvelopeForAgent(envelope) {
+  if (!envelope || typeof envelope !== "object") return undefined;
+  const kind = typeof envelope.kind === "string" ? envelope.kind : "";
+  const subject = typeof envelope.subject === "string" ? envelope.subject : "";
+  const id = typeof envelope.id === "string" ? envelope.id : "";
+  const correlationId = typeof envelope.correlationId === "string" ? envelope.correlationId : "";
+  const body = typeof envelope.body === "string" ? envelope.body : "";
+  // A genuine parsed envelope carries all of {kind, subject, id,
+  // correlationId}. If any are missing, the caller passed a partial object
+  // (e.g. an empty record) and the projection is meaningless; the caller
+  // should skip the structured fields in the audit row.
+  if (!kind || !subject || !id || !correlationId) return undefined;
+  const bodyLength = Buffer.byteLength(body, "utf8");
+  return {
+    id,
+    correlationId,
+    kind,
+    subject,
+    references: envelope.references && typeof envelope.references === "object" ? envelope.references : undefined,
+    bodySummary: truncateUtf8(body, SUMMARY_FRAGMENT_CHARS),
+    bodyFingerprint: bodyFingerprint(body),
+    bodyLength,
+  };
+}
+
+// `formatAuditEvent(role, direction, event, envelope)` builds a redacted audit
+// row. The shape is additive to the existing `appendPolicyAudit` row (which is
+// `{ at, role, ...event }`); the structured fields are appended only when an
+// envelope is provided and parses cleanly. The base64 body never appears in
+// the output.
+//
+// `event` is the existing event payload (e.g. `{ direction: "outbound",
+// action: "send", recipient, outcome, reason, messageId?, correlationId?,
+// trace? }`). The function never strips existing fields; it only adds the
+// redacted envelope fields.
+export function formatAuditEvent(role, direction, event, envelope) {
+  const record = { at: new Date().toISOString(), role, ...event };
+  // Issue #11 — refused events never expose any envelope-derived field
+  // (not the truncated body fragment, the fingerprint, the byte length, or
+  // the kind/subject/references). This prevents the audit from leaking an
+  // unauthorized sender's body bytes even when the runtime has already
+  // parsed the envelope for ACL evaluation.
+  const outcome = event && typeof event.outcome === "string" ? event.outcome : undefined;
+  if (outcome !== "refused") {
+    const summary = summarizeEnvelopeForAgent(envelope);
+    if (summary) {
+      if (summary.kind) record.kind = summary.kind;
+      if (summary.subject) record.subject = summary.subject;
+      if (summary.references) record.references = summary.references;
+      if (summary.bodySummary !== undefined) record.bodySummary = summary.bodySummary;
+      if (summary.bodyFingerprint) record.bodyFingerprint = summary.bodyFingerprint;
+      record.bodyLength = summary.bodyLength;
+    }
+  }
+  // Strip the envelope source field so it never reaches the serialized row.
+  if ("envelope" in record) delete record.envelope;
+  return record;
 }
 
 // Issue #3 — Executor→paired-Researcher bounded research schema (Issue #3 §3).
