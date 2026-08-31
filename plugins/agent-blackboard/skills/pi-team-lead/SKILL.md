@@ -31,6 +31,11 @@ task ID, name, description, scope, done criteria, Executor-Reviewer pairing,
 acceptance, and resource reclamation. Keep decisions in `ADR/` and align
 `architect.md`, `goal.md`, and `project_state.md` when their content changes.
 
+Reusable role prompts and skills must remain task-agnostic unless the contract
+explicitly makes them task-scoped. Task-specific instructions belong in the
+frozen contract or task artifacts, not in a reusable skill. The Lead owns the
+final check for contamination before acceptance.
+
 Write a tracked Markdown v2 task contract with exactly one JSON contract block.
 Each done criterion has a stable `C-###` ID, owner, and artifact path; each
 role delegation declares its stable ID, artifact path, and required
@@ -86,8 +91,18 @@ inspect evidence; it is never sufficient proof by itself.
 
 ## Accept and close
 
-After Reviewer reports `ready_for_acceptance`, inspect the actual diff,
-artifacts, and test results against the contract. If they pass:
+After Reviewer reports `ready_for_acceptance`, treat the Reviewer result as the
+first acceptance gate, then perform an independent Lead acceptance gate. The
+Reviewer verifies implementation quality, scope, regressions, and evidence;
+the Lead alone verifies the frozen contract and authorizes delivery. Inspect
+the actual diff, artifacts, and test results against the contract. As part of
+that inspection, review every changed reusable prompt and skill for
+task-specific contamination, including task IDs, Issue numbers, task-only
+artifact names, worktree or host paths, raw runtime details, and constraints
+that apply only to the current task. Reject the slice or request cleanup if
+such content was added without an explicit task-scoped contract.
+
+If both gates pass:
 
 1. Write acceptance evidence that covers every frozen criterion ID and its
    required artifacts, then run `<project-root>\pi-team.cmd accept <task-id>
