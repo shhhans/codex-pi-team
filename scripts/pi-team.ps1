@@ -278,9 +278,9 @@ function Wait-RoleReady($State,[string]$Role,[string]$LaunchId) {
   Fail "role startup did not register readiness: $Role"
 }
 function Stop-RoleTree($Session) {
-  foreach ($pid in @($Session.launcher_pid,$Session.runtime_pid) | Where-Object { $_ } | Select-Object -Unique) {
-    if (-not (Get-Process -Id ([int]$pid) -ErrorAction SilentlyContinue)) { continue }
-    & taskkill.exe /PID ([int]$pid) /T /F | Out-Null
+  foreach ($processId in @($Session.launcher_pid,$Session.runtime_pid) | Where-Object { $_ } | Select-Object -Unique) {
+    if (-not (Get-Process -Id ([int]$processId) -ErrorAction SilentlyContinue)) { continue }
+    & taskkill.exe /PID ([int]$processId) /T /F | Out-Null
   }
 }
 function Assert-NoLiveRoleProcesses($State) { foreach($role in @('executor','reviewer','researcher')) { if (-not($State.sessions.PSObject.Properties.Name -contains $role)) { continue }; $runtime=Read-Runtime $State $role; if (Test-RuntimeLive $runtime) { Fail "task already has live role process; refusing duplicate resume: ${role}:$($runtime.runtime_pid)" } } }
@@ -375,7 +375,11 @@ function RoleArguments([string]$Role,[string]$InitialPrompt,[string]$SessionId) 
 function Launch-Role($State,[string]$Role,[string]$Prompt,[string]$SessionId,[bool]$Resume=$false) {
   $pi = if ($env:PI_CMD) {$env:PI_CMD} else {'pi.cmd'}; $wt = if ($env:WT_CMD) {$env:WT_CMD} else {'wt.exe'}
   $launchId=New-Id; $State.sessions.$Role | Add-Member -NotePropertyName launch_id -NotePropertyValue $launchId -Force
-  $sessionArgs = if ($Resume) { @('--session',$SessionId) } else { @() }
+  # `--session` only selects an existing file. A role can reach resume after
+  # a launcher failure that happened before Pi created its first session, so
+  # use the same persisted ID with `--session-id`: Pi resumes it when present
+  # and creates it with that exact ID when absent.
+  $sessionArgs = if ($Resume) { @('--session-id',$SessionId) } else { @() }
   $roleSession = if ($Resume) { '' } else { $SessionId }
   $args=@('-d',$State.worktree,$pi) + $sessionArgs + @(RoleArguments $Role $Prompt $roleSession)
   $proc=Start-RoleProcess $wt $args $State.worktree $State.task_id $Role $State.sessions.$Role.agent_id $State.worktree $State.scope_id $launchId
@@ -398,7 +402,7 @@ function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question
   $outOfScope = @($Contract.out_of_scope | ForEach-Object { [string]$_ }) -join '; '
   if ($Mode -eq 'resume') {
     return (@(
-      '--- PI TEAM TASK CONTEXT v1 ---',
+      'Pi Team task context: --- PI TEAM TASK CONTEXT v1 ---',
       'Context mode: resume',
       'Stable project context: AGENTS.md is already present in the existing session; do not reload or rediscover it.',
       "Task ID: $($Contract.task_id)",
@@ -413,7 +417,7 @@ function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question
     ) -join ' ')
   }
   $lines = @(
-    '--- PI TEAM TASK CONTEXT v1 ---',
+    'Pi Team task context: --- PI TEAM TASK CONTEXT v1 ---',
     "Context mode: $Mode",
     'Stable project context: AGENTS.md is inherited; use it as the shared repository map.',
     'Context boundary: this is orientation only. The launcher, runtime policy, and Lead still enforce authorization and acceptance.',

@@ -594,6 +594,7 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       assert.match(prompt, /Required capabilities: /, `${record.role} prompt must declare its required capabilities`);
       assert.match(prompt, /Objective: /, `${record.role} prompt must declare its objective`);
       assert.match(prompt, /Done criteria: /, `${record.role} prompt must declare its own done criteria`);
+      assert.doesNotMatch(prompt, /^-/, `${record.role} prompt must not begin with a CLI option marker`);
       assert.match(prompt, /--- PI TEAM TASK CONTEXT v1 ---/, `${record.role} prompt must include the dynamic task context marker`);
       assert.match(prompt, /Stable project context: AGENTS\.md/, `${record.role} prompt must point to inherited AGENTS.md context`);
       assert.match(prompt, /Visible scope: /, `${record.role} prompt must include its visible scope`);
@@ -668,10 +669,11 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     assert.match(resumeRecords.map((record) => record.args.join(" ")).join("\n"), new RegExp(executorSessionId));
     assert.match(resumeRecords.map((record) => record.args.join(" ")).join("\n"), new RegExp(reviewerSessionId));
     for (const record of resumeRecords) {
-      assert.equal(record.args.includes("--session"), true);
-      assert.equal(record.args.includes("--session-id"), false, "resume must select the session created by the first launch, not create another one");
+      assert.equal(record.args.includes("--session-id"), true, "resume must bind the persisted session ID and create it if the initial launch failed before session creation");
+      assert.equal(record.args.includes("--session"), false);
       assert.equal(record.args.includes("--no-extensions"), true);
       const prompt = record.args[record.args.length - 1];
+      assert.doesNotMatch(prompt, /^-/, `${record.role} resume prompt must not begin with a CLI option marker`);
       assert.match(prompt, /Context mode: resume/);
       assert.match(prompt, /Resume rule: preserve the existing task scope/);
       assert.doesNotMatch(prompt, /Recommended common reads:/, "resume must not repeat the shared context map");
