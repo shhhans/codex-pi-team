@@ -34,7 +34,7 @@ Do not use this skill when:
 - `read`, `grep`, `find`, `ls` — local inspection within the worktree only.
 - `bash` — run tests, formatters, and verification commands inside the worktree.
 - `edit`, `write` — change code and persist artifacts only inside the worktree.
-- `report_to_lead` — mirror progress, escalate scope/decisions, surface risks; never use for routine completion.
+- `blackboard_update` — publish task status and request a Lead wakeup with `blocked`, `changes_requested`, or `ready_for_review` when Lead attention is required.
 - `intercom` — direct peer channel only with the paired Researcher and the paired Reviewer; refuse all other peers before `intercom send` or `ask`. Use the tool directly; do not hand-build envelopes or invoke `send.mjs` for routine sends.
 
 ## Workflow
@@ -55,7 +55,7 @@ Do not use this skill when:
    - `frozen_contract_version` (positive integer from the current contract snapshot),
    - optional `deadline_hint` (ISO 8601 string) and `context_refs` (string[] inside `allowed_paths`).
 
-   A request that violates the schema is refused at `runtime-policy.mjs` `onToolCall` before the envelope reaches the transport; the audit row records `direction: "outbound", outcome: "refused", reason: "research-schema-invalid:..."`. Keep the request inside the frozen contract; escalate architecture, product, or scope decisions to Lead via `report_to_lead reason: "need_decision"`.
+   A request that violates the schema is refused at `runtime-policy.mjs` `onToolCall` before the envelope reaches the transport; the audit row records `direction: "outbound", outcome: "refused", reason: "research-schema-invalid:..."`. Keep the request inside the frozen contract; escalate architecture, product, or scope decisions with `blackboard_update` state `blocked` and the decision needed in `blocker`.
 4. Send the paired Researcher a JSON event through `intercom` with `to: "researcher"`. Do not call `list-cwd`, provide a session/launch ID, construct JSONL/envelopes or base64, or call `.pi/communication/send.mjs`; runtime resolves the current peer and owns correlation, encoding, and validation.
 5. Continue independent work after sending; do not block or poll indefinitely. When a `RESEARCH_RESULT` arrives, inspect the artifact, record the request, result, and decision impact in `implementation_notes/<task-id>.md`, and continue. The `RESEARCH_RESULT` body schema (validated at the inbound gate by `policy.mjs` `validateResearchBody`) is:
 
@@ -78,9 +78,9 @@ Do not use this skill when:
 
 - Production code only inside the assigned worktree. Never edit tests to hide failures (Reviewer owns failure artifacts).
 - IDs come from Lead; never use content hashes or self-generated UUIDs.
-- Architecture or product decisions are Lead+User territory; escalate via `report_to_lead` with `blocked` and the decision required.
+- Architecture or product decisions are Lead+User territory; escalate through `blackboard_update` with state `blocked` and the decision required.
 - Do not store secrets in `implementation_notes/<task-id>.md` or memory.
-- Material updates mirror to Lead via `report_to_lead`, including the originating Lead task ID and peer.
+- Material updates are published through `blackboard_update`, including the originating Lead task ID and peer.
 - Use native worktree commands. On Windows, do not invoke WSL without Lead authorization. Do not create a Scout, repeat unbounded discovery, or split unassigned subtasks. Researcher requests are bounded peer requests, not new task decomposition.
 
 ## Slice events

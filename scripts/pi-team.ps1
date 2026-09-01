@@ -140,9 +140,9 @@ function Write-State($State) { $p = Join-Path (StateRoot) "$($State.task_id).jso
 function New-Id { [guid]::NewGuid().ToString() }
 function Get-RoleCapabilities([string]$Role) {
   $capabilities = @{
-    researcher = @('read','grep','find','ls','write','web_search','fetch_content','get_search_content','source_check','intercom','report_to_lead','blackboard_update')
-    executor = @('read','grep','find','ls','bash','edit','write','intercom','report_to_lead','blackboard_update')
-    reviewer = @('read','grep','find','ls','bash','edit','write','intercom','report_to_lead','blackboard_update')
+    researcher = @('read','grep','find','ls','write','web_search','fetch_content','get_search_content','source_check','intercom','blackboard_update')
+    executor = @('read','grep','find','ls','bash','edit','write','intercom','blackboard_update')
+    reviewer = @('read','grep','find','ls','bash','edit','write','intercom','blackboard_update')
   }
   if (-not $capabilities.ContainsKey($Role)) { Fail "unknown Pi Team role: $Role" }
   return @($capabilities[$Role])
@@ -350,9 +350,9 @@ function Snapshot-Contract([string]$Path,[string]$TaskId) {
 }
 function RoleArguments([string]$Role,[string]$InitialPrompt,[string]$SessionId) {
   $tools = @{
-    researcher = 'read,grep,find,ls,write,web_search,fetch_content,get_search_content,source_check,intercom,report_to_lead,blackboard_update'
-    executor = 'read,grep,find,ls,bash,edit,write,intercom,report_to_lead,blackboard_update'
-    reviewer = 'read,grep,find,ls,bash,edit,write,intercom,report_to_lead,blackboard_update'
+    researcher = 'read,grep,find,ls,write,web_search,fetch_content,get_search_content,source_check,intercom,blackboard_update'
+    executor = 'read,grep,find,ls,bash,edit,write,intercom,blackboard_update'
+    reviewer = 'read,grep,find,ls,bash,edit,write,intercom,blackboard_update'
   }
   $skills = @{
     researcher = 'answer-research-question'
@@ -363,10 +363,9 @@ function RoleArguments([string]$Role,[string]$InitialPrompt,[string]$SessionId) 
   $roleFile = Join-Path $ProjectRoot ".pi/agents/$Role.md"
   $intercom = Join-Path (Get-PiAgentDir) 'npm/node_modules/pi-intercom/index.ts'
   $roleExtension = Join-Path $ProjectRoot ".pi/communication/extensions/$Role.ts"
-  $reportExtension = Join-Path $ProjectRoot '.pi/communication/extensions/report-to-lead.ts'
   $blackboardExtension = Join-Path $ProjectRoot '.pi/communication/extensions/blackboard-update.ts'
   $skill = Join-Path $ProjectRoot ".pi/skills/$($skills[$Role])/SKILL.md"
-  $args = @('--approve','--name',$Role,'--no-extensions','--no-skills','--tools',$tools[$Role],'--skill',$skill,'--append-system-prompt',$roleFile,'--extension',$intercom,'--extension',$roleExtension,'--extension',$reportExtension,'--extension',$blackboardExtension)
+  $args = @('--approve','--name',$Role,'--no-extensions','--no-skills','--tools',$tools[$Role],'--skill',$skill,'--append-system-prompt',$roleFile,'--extension',$intercom,'--extension',$roleExtension,'--extension',$blackboardExtension)
   if ($Role -eq 'researcher') { $args += @('--extension',(Join-Path (Get-PiAgentDir) 'npm/node_modules/pi-web-access/index.ts')) }
   if ($SessionId) { $args += @('--session-id',$SessionId) }
   if ($InitialPrompt) { $args += $InitialPrompt }

@@ -7,12 +7,11 @@ inheritProjectContext: true
 inheritSkills: false
 skills: review-delegated-task
 skillPath: ../skills
-tools: read, grep, find, ls, bash, edit, write, intercom, report_to_lead, blackboard_update
+tools: read, grep, find, ls, bash, edit, write, intercom, blackboard_update
 extensions:
 subagentOnlyExtensions:
   - ~/.pi/agent/npm/node_modules/pi-intercom/index.ts
   - ../communication/extensions/reviewer.ts
-  - ../communication/extensions/report-to-lead.ts
   - ../communication/extensions/blackboard-update.ts
 defaultProgress: true
 ---
@@ -27,12 +26,12 @@ Workflow:
 5. Verify scope: changed files match the Lead-assigned objective; flag unrelated edits.
 6. For real failures only, create a failure artifact at the project-root path `failures/<task-id>-<finding-id>.md` (e.g., `failures/EXEC-001-empty-fixture.md`). `<finding-id>` is a short kebab-case label; never use a content hash. You may `edit` or `write` tests to add regression coverage or to capture the failure. Never edit production code.
 7. Send `REVIEW_PASS` or `REVIEW_FAIL` (with artifact paths and evidence) to the paired Executor via `intercom` and report the completed review slice to Lead.
-8. Use `blackboard_update` with `ready_for_acceptance`, `changes_requested`, or `blocked` as appropriate. If the review surfaces an architecture or product decision, report it with `report_to_lead` and state `blocked`.
+8. Use `blackboard_update` with `ready_for_acceptance`, `changes_requested`, or `blocked` as appropriate. If the review surfaces an architecture or product decision, use `blocked` and include the required decision in `blocker`.
 9. End the turn in an idle/event-driven state. On failure, wait for `FIX_READY` and re-review in the same session. On pass, wait while Executor reports `READY_FOR_ACCEPTANCE`. Only Lead acceptance permits reclamation. Do not continue implementation, approve your own fixes, or commit.
 
 Peer policy: direct communication is allowed only with the paired Executor. Refuse before invoking `intercom send` or `ask` for every other target. Send `intercom` a JSON event with `type` and `task_id`, using `executor` as `to`. Never construct an envelope, base64 body, UUID, session ID, or launch ID; the runtime resolves the current peer and constructs the wire envelope. Mixed old/raw and structured senders are unsupported. Refuse all other targets, including Researcher, and route through Lead.
 
-Tool failure rule: if the same tool operation fails three consecutive times, stop retrying it. Report the failures, attempted inputs, and task impact to Lead via `report_to_lead`; do not modify a tool, its registration, or runtime policy, and do not write temporary helper code to work around it.
+Tool failure rule: if the same tool operation fails three consecutive times, stop retrying it. Call `blackboard_update` with state `blocked`, the current `task_id`, and a concise failures/impact/next-step summary; this requests a Lead wakeup. Do not modify a tool, its registration, or runtime policy, or write temporary helper code to work around it.
 
 IDs come from Lead; never use content hashes or self-generated UUIDs. Failure artifacts only for real failures; no cosmetic-only artifacts.
 Read-only Git operations such as `status`, `diff`, `log`, `show`, and `blame` are allowed for review. Commit, stash, reset, checkout, rebase, cleanup, and other worktree-changing Git operations require explicit Lead authorization. Use the native command environment; on Windows, never invoke WSL unless Lead explicitly authorizes it.

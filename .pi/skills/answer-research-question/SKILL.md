@@ -18,7 +18,7 @@ Use this skill when:
 
 Do not use this skill when:
 - The question is architectural or implementation-shaped → route to Lead.
-- The question spans many sub-questions → report `blocked` to Lead with `report_to_lead` and request explicit scoping.
+- The question spans many sub-questions → publish `blocked` with `blackboard_update` and request explicit scoping.
 - A Deep Research MCP workflow is requested → that path is intentionally unavailable; escalate.
 
 ## Required Tools and their roles
@@ -26,7 +26,7 @@ Do not use this skill when:
 - `read`, `grep`, `find`, `ls` — local inspection only; cite exact paths and versions for pivotal local claims.
 - `web_search`, `fetch_content`, `get_search_content`, `source_check` — web discovery and source validation.
 - `write` — persist the research artifact only.
-- `report_to_lead` — mirror material findings, blockers, and scope decisions to Lead.
+- `blackboard_update` — publish material findings, blockers, and scope decisions to Lead; a `blocked` state requests a Lead wakeup.
 - `intercom` — direct peer channel only with Executor (paired executor for the same task); refuse all other peers before `intercom send` or `ask`.
 
 ## Workflow
@@ -54,7 +54,7 @@ Do not use this skill when:
    - `confidence` (overall ∈ `high|medium|low`),
    - `decision_impact` (one-sentence description of how the Executor should use the result).
 
-   Report the same material finding, artifact path, confidence, and gaps to Lead with `report_to_lead`.
+   Publish the material finding, artifact path, confidence, and gaps with `blackboard_update`; use `blocked` when Lead action is required.
 9. If the request is outside the frozen contract, requires an architecture/product decision, lacks required capability, collides with an in-flight request, hits a stranded-or-finalized artifact, encounters a scope-change invalidation, exceeds the deadline, or cannot be answered safely, send `RESEARCH_BLOCKED` to the paired Executor and report `blocked` to Lead with the reason and next decision needed. The `RESEARCH_BLOCKED` body schema is:
 
    - `type` (literal `"RESEARCH_BLOCKED"`),

@@ -7,12 +7,11 @@ inheritProjectContext: true
 inheritSkills: false
 skills: execute-delegated-task
 skillPath: ../skills
-tools: read, grep, find, ls, bash, edit, write, intercom, report_to_lead, blackboard_update
+tools: read, grep, find, ls, bash, edit, write, intercom, blackboard_update
 extensions:
 subagentOnlyExtensions:
   - ~/.pi/agent/npm/node_modules/pi-intercom/index.ts
   - ../communication/extensions/executor.ts
-  - ../communication/extensions/report-to-lead.ts
   - ../communication/extensions/blackboard-update.ts
 defaultContext: fork
 defaultProgress: true
@@ -40,7 +39,7 @@ Workflow:
    - `frozen_contract_version` (positive integer from the current contract snapshot),
    - optional `deadline_hint` (ISO 8601 string) and `context_refs` (string[] inside `allowed_paths`).
 
-   A request that violates the schema is refused at `runtime-policy.mjs` `onToolCall` before the envelope reaches the transport; the audit row records `direction: "outbound", outcome: "refused", reason: "research-schema-invalid:..."`. Keep the request inside the frozen contract; escalate architecture, product, or scope decisions to Lead via `report_to_lead reason: "need_decision"`.
+   A request that violates the schema is refused at `runtime-policy.mjs` `onToolCall` before the envelope reaches the transport; the audit row records `direction: "outbound", outcome: "refused", reason: "research-schema-invalid:..."`. Keep the request inside the frozen contract; escalate architecture, product, or scope decisions with `blackboard_update` state `blocked`, including the decision needed in `blocker`.
 5. Send the JSON research event directly to `to: "researcher"`. Do not call `list-cwd`, select a session, construct JSONL/envelopes or base64, or call `.pi/communication/send.mjs`; runtime discovers the current same-task peer and owns encoding and validation.
 6. Continue independent work after sending; do not block or poll indefinitely. When a `RESEARCH_RESULT` arrives, inspect the artifact and record the request, result, and decision impact in `implementation_notes/<task-id>.md`. The `RESEARCH_RESULT` body schema (validated at the inbound gate) is:
 
@@ -62,9 +61,9 @@ Workflow:
 
 Peer policy: direct communication is allowed only with the paired Researcher and Reviewer. Refuse before invoking `intercom send` or `ask` for every other target. Send `intercom` a JSON event whose `type` and `task_id` are present, and use only `researcher` or `reviewer` as `to`. Never construct an envelope, base64 body, UUID, session ID, or launch ID: the runtime resolves the current peer and builds the canonical wire envelope. All active roles for a task must be upgraded together; mixed old/raw and structured senders are unsupported.
 
-Tool failure rule: if the same tool operation fails three consecutive times, stop retrying it. Report the failures, attempted inputs, and task impact to Lead via `report_to_lead`; do not modify a tool, its registration, or runtime policy, and do not write temporary helper code to work around it.
+Tool failure rule: if the same tool operation fails three consecutive times, stop retrying it. Call `blackboard_update` with state `blocked`, the current `task_id`, and a concise failures/impact/next-step summary; this requests a Lead wakeup. Do not modify a tool, its registration, or runtime policy, or write temporary helper code to work around it.
 
-Slice completion, material updates, blockers, and changed assumptions must be visible to Lead through `report_to_lead`. Never wait indefinitely for Lead after reporting; end the turn idle and accept the next injected event.
+Slice completion, material updates, blockers, and changed assumptions must be visible to Lead through `blackboard_update`. Use a wakeup state when Lead action is needed. Never wait indefinitely for Lead after reporting; end the turn idle and accept the next injected event.
 
 Escalate architecture or product decisions instead of silently making them. Never edit tests to hide failures (Reviewer owns failure artifacts).
 

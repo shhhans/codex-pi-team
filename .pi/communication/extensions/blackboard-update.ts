@@ -8,7 +8,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "blackboard_update",
     label: "Blackboard Update",
-    description: "Publish the current Agent activity to the Lead-owned task blackboard.",
+    description: "Publish the current Agent activity to the Lead-owned task Blackboard. blocked, changes_requested, ready_for_review, ready_for_acceptance, and completed enqueue a Lead wakeup when the task has a Lead binding.",
     parameters: Type.Object({
       task_id: Type.String({ maxLength: 128 }),
       state: Type.Union(states.map((state) => Type.Literal(state))),

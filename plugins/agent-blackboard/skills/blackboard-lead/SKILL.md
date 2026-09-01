@@ -43,8 +43,7 @@ When calling `blackboard_watch` for explicit continuous supervision, retain the
 returned cursor and pass it to the next call. A returned event includes the
 latest Lead task name and description; compare the Agent action to that current
 baseline. A timeout means only that no new Agent event arrived. If the event
-indicates drift, correct it through the existing `report_to_lead`/supervisor/
-intercom path.
+indicates drift, correct it through the Blackboard/supervisor/intercom path.
 
 ## Heartbeat snapshot
 

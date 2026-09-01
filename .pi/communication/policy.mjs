@@ -48,7 +48,6 @@ export const RESEARCHER_CAPABILITIES = new Set([
   "get_search_content",
   "source_check",
   "intercom",
-  "report_to_lead",
   "blackboard_update",
 ]);
 // Architectural verbs used by the pre-flight heuristic in validateResearchBody.

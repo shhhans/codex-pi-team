@@ -25,9 +25,12 @@ review/fix, and re-review. `READY_FOR_REVIEW`, `REVIEW_PASS`,
 an event, the role reports its completed slice to Lead and becomes idle;
 normal handoff does not stop or resume the sessions.
 
-Each active role also loads `blackboard-update.ts`. `blackboard_update` records
-explicit Agent activity in the Lead-owned common-dir Blackboard, but it does
-not authorize work, prove completion, or replace this communication path.
+Each active role loads `blackboard-update.ts`; `report_to_lead` is not
+registered. `blackboard_update` records explicit Agent activity in the
+Lead-owned common-dir Blackboard. `blocked`, `changes_requested`,
+`ready_for_review`, `ready_for_acceptance`, and `completed` enqueue a Lead
+wakeup when the task has a Lead binding. It does not authorize work, prove
+completion, or replace peer communication.
 
 `sendWithPolicy` in `send.mjs` applies the outbound gate. Each active
 agent loads its matching extension from `extensions/`. The extension
@@ -42,10 +45,10 @@ writing the reply store. An authorized entry is retained. Completed
 reply replay remains available through `receiveAndReplay`; `onContext`
 does not create eager pending reservations.
 
-All three active roles may contact Lead only with the closed reason set:
-`need_decision`, `progress_update`, and `interview_request`. Routine peer
-results need not be relayed through Lead, but material risk, changed
-downstream assumptions, and decision requests must be mirrored.
+Routine peer results need not be relayed through Lead. Material risk, changed
+downstream assumptions, and decision requests are published through
+`blackboard_update`; use `blocked` whenever a Lead decision or intervention is
+needed.
 
 Messages use the structured `agent-team/v1` envelope. Roles do not construct
 that envelope: they submit a JSON event with `type` and `task_id` to a peer

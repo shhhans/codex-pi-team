@@ -401,8 +401,8 @@ test("researcher subagentOnlyExtensions wires shared intercom, shared web access
   const exts = parseScalarList(fm.subagentOnlyExtensions);
   assert.deepEqual(
     exts,
-    ["~/.pi/agent/npm/node_modules/pi-intercom/index.ts", "~/.pi/agent/npm/node_modules/pi-web-access/index.ts", "../communication/extensions/researcher.ts", "../communication/extensions/report-to-lead.ts", "../communication/extensions/blackboard-update.ts"],
-    "researcher must explicitly load shared transport, shared web access, and project policy extensions",
+    ["~/.pi/agent/npm/node_modules/pi-intercom/index.ts", "~/.pi/agent/npm/node_modules/pi-web-access/index.ts", "../communication/extensions/researcher.ts", "../communication/extensions/blackboard-update.ts"],
+    "researcher must explicitly load shared transport, shared web access, and Blackboard policy extensions",
   );
   assert.equal(fm.extensions, "", "researcher must disable ambient extensions");
   await expectExists(join(REPO, ".pi/communication/extensions/researcher.ts"));
@@ -422,8 +422,8 @@ test("executor and reviewer each load their own communication policy extension",
     const exts = parseScalarList(fm.subagentOnlyExtensions);
     assert.deepEqual(
       exts,
-      ["~/.pi/agent/npm/node_modules/pi-intercom/index.ts", `../communication/extensions/${role}.ts`, "../communication/extensions/report-to-lead.ts", "../communication/extensions/blackboard-update.ts"],
-      `${role} must load shared intercom and only its own project policy extensions`,
+      ["~/.pi/agent/npm/node_modules/pi-intercom/index.ts", `../communication/extensions/${role}.ts`, "../communication/extensions/blackboard-update.ts"],
+      `${role} must load shared intercom and Blackboard policy extensions`,
     );
     assert.equal(fm.extensions, "", `${role} must disable ambient extensions`);
     assert.doesNotMatch(text, /pi-web-access/, `${role} must not load pi-web-access`);
@@ -537,12 +537,11 @@ test("Issue #3 policy constants export the bounded research envelope surface", (
     "intercom",
     "ls",
     "read",
-    "report_to_lead",
     "source_check",
     "web_search",
     "write",
   ]);
-  assert.equal([...RESEARCHER_CAPABILITIES].length, 12, "RESEARCHER_CAPABILITIES must contain exactly 12 capabilities matching team-contract RESEARCHER_TOOLS");
+  assert.equal([...RESEARCHER_CAPABILITIES].length, 11, "RESEARCHER_CAPABILITIES must contain exactly 11 capabilities matching team-contract RESEARCHER_TOOLS");
   // Deep Research tools must be absent.
   for (const banned of ["bash", "edit", "research_run", "deep_research_task", "deep_research_review", "research_synthesis_input", "research_report_artifact"]) {
     assert.equal(RESEARCHER_CAPABILITIES.has(banned), false, `RESEARCHER_CAPABILITIES must not contain ${banned}`);

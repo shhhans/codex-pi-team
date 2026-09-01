@@ -71,7 +71,7 @@ authorization, completion evidence, or a communication channel.
    the Blackboard lane alone never starts either role.
 4. For explicit continuous supervision, retain the Blackboard cursor and call
    `blackboard_watch` for new Agent activity. Compare each activity with the
-   current task description. Use `report_to_lead`, the supervisor path, or
+   current task description. Use the Blackboard event, the supervisor path, or
    paired intercom for correction.
 5. Register the current Codex Lead thread with `blackboard_register_lead` after
    `start`. Critical Agent states are delivered by the host wakeup adapter as

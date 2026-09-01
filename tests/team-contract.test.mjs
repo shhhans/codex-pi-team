@@ -5,13 +5,11 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { appendRoleEvent } from "../.pi/communication/role-events.mjs";
-
 const REPO = process.cwd();
 const SKILL_NAMES = ["answer-research-question", "execute-delegated-task", "review-delegated-task"];
-const RESEARCHER_TOOLS = ["read", "grep", "find", "ls", "write", "web_search", "fetch_content", "get_search_content", "source_check", "intercom", "report_to_lead", "blackboard_update"];
-const EXECUTOR_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom", "report_to_lead", "blackboard_update"];
-const REVIEWER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom", "report_to_lead", "blackboard_update"];
+const RESEARCHER_TOOLS = ["read", "grep", "find", "ls", "write", "web_search", "fetch_content", "get_search_content", "source_check", "intercom", "blackboard_update"];
+const EXECUTOR_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom", "blackboard_update"];
+const REVIEWER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom", "blackboard_update"];
 const DEEP_RESEARCH_TOOLS = ["research_run", "deep_research_task", "deep_research_review", "research_synthesis_input", "research_report_artifact"];
 const ACTIVE_ROLES = ["researcher", "executor", "reviewer"];
 const LEGACY_ROLES = ["architect", "critic", "engineer"];
@@ -111,7 +109,8 @@ test("active role definitions exist with valid frontmatter and required tools", 
     assert.match(text, /Peer policy:/, `${role} must declare a peer policy`);
     assert.match(text, /refuse before/i, `${role} must refuse before intercom send/ask`);
     assert.match(text, /Tool failure rule:.*three consecutive times/s, `${role} must escalate a repeated tool failure`);
-    assert.match(text, /do not modify a tool.*temporary helper code/s, `${role} must not self-modify a failing tool`);
+    assert.match(text, /do not modify a tool.*temporary helper code/is, `${role} must not self-modify a failing tool`);
+    assert.doesNotMatch(text, /report_to_lead/, `${role} must use Blackboard rather than the retired Lead-report tool`);
     // Active roles must not bind persistent memory; they use role prompt + private skills only.
     assert.ok(!("memory" in fm), `${role} frontmatter must not declare a memory binding`);
     assert.doesNotMatch(text, /^memory:\s*$/m, `${role} must not contain a memory: frontmatter block`);
@@ -160,8 +159,8 @@ test("researcher alone loads shared pi-web-access and has no Deep Research tools
     assert.equal(tools.includes(banned), false, `Researcher must not include Deep Research tool ${banned}`);
   }
   const exts = parseScalarList(fm.subagentOnlyExtensions);
-  assert.deepEqual(exts, [SHARED_INTERCOM, SHARED_WEB_ACCESS, "../communication/extensions/researcher.ts", "../communication/extensions/report-to-lead.ts", "../communication/extensions/blackboard-update.ts"],
-    "Researcher must load shared intercom, web access, and project policy extensions");
+  assert.deepEqual(exts, [SHARED_INTERCOM, SHARED_WEB_ACCESS, "../communication/extensions/researcher.ts", "../communication/extensions/blackboard-update.ts"],
+    "Researcher must load shared intercom, web access, and Blackboard policy extensions");
   assert.match(text, /answer-research-question/);
   assert.equal(fm.skills, "answer-research-question");
   assert.equal(fm.skillPath, "../skills");
@@ -827,18 +826,6 @@ test("acceptance requires each frozen criterion ID and synchronizes the Blackboa
     assert.equal(parseJsonText(await readFile(blackboardFile, "utf8")).outcome, "accepted");
   } finally {
     for (const path of [stateFile, contractSnapshot, reviewerEvents, blackboardFile]) await rm(path, { force: true });
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("report_to_lead event storage continues sequences across concurrent appends", async () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-team-role-events-"));
-  try {
-    const base = { task_id: "EVT-001", role: "reviewer", agent_id: "reviewer-test", worktree: root, state: "reviewing", activity: "checking" };
-    await appendRoleEvent(root, base);
-    const concurrent = await Promise.all(Array.from({ length: 8 }, (_, index) => appendRoleEvent(root, { ...base, activity: `checking ${index}` })));
-    assert.deepEqual(concurrent.map((event) => event.sequence).sort((a, b) => a - b), [2, 3, 4, 5, 6, 7, 8, 9]);
-  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
