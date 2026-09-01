@@ -1289,6 +1289,28 @@ test("structured send builds the canonical envelope and resolves the current sam
   }
 });
 
+test("structured peer resolution uses the canonical session ID when name is a display alias", async (t) => {
+  const { auditDir, replyStoreDir } = freshRuntimePaths(t);
+  const previousTaskId = process.env.PI_TEAM_TASK_ID;
+  process.env.PI_TEAM_TASK_ID = "SMK-008";
+  try {
+    const policy = createRoleRuntimePolicy("executor", {
+      auditDir,
+      replyStoreDir,
+      listPeerSessions: async () => [{
+        id: "pi-team--SMK-008--reviewer--fresh-launch",
+        name: "pi-team--SMK-008--reviewer",
+      }],
+    });
+    const event = { type: "READY_FOR_REVIEW", task_id: "SMK-008", delegation_id: "EXECUTOR-SMK-008", worktree: "D:/task", implementation_notes_path: "implementation_notes/SMK-008.md" };
+    const call = makeIntercomEvent("send", "reviewer", JSON.stringify(event));
+    assert.equal(await policy.onToolCall(call), undefined);
+    assert.equal(call.input.to, "pi-team--SMK-008--reviewer--fresh-launch");
+  } finally {
+    if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
+  }
+});
+
 test("structured lifecycle handoffs accept their delegation identifier", () => {
   const event = {
     type: "READY_FOR_REVIEW",

@@ -43,8 +43,13 @@ function resolveCurrentPeerSession(sessions, taskId, role) {
   const prefix = `pi-team--${taskId.toLowerCase()}--${role}--`;
   const matches = sessions.filter(session => {
     if (!session || typeof session.id !== "string") return false;
-    const name = typeof session.name === "string" ? session.name.toLowerCase() : "";
-    return name.startsWith(prefix);
+    // pi-intercom exposes the canonical task/role/launch identity as `id`.
+    // `name` is only a display alias (for example `pi-team--TASK--reviewer`)
+    // and omits the launch-id, so it cannot be the sole authorization key.
+    const identities = [session.id, session.name]
+      .filter((value) => typeof value === "string")
+      .map((value) => value.toLowerCase());
+    return identities.some((identity) => identity.startsWith(prefix));
   });
   if (matches.length === 0) return { ok: false, reason: `peer-unavailable:role=${role}:task_id=${taskId}` };
   if (matches.length !== 1) return { ok: false, reason: `peer-ambiguous:role=${role}:task_id=${taskId}` };
