@@ -226,6 +226,23 @@ function Invoke-BlackboardLifecycle([string]$Action,[string]$TaskId,[string]$Out
   $result = & $node.Source @arguments 2>&1
   if ($LASTEXITCODE -ne 0) { Fail "Blackboard $Action failed: $(($result -join "`n").Trim())" }
 }
+function Get-BlackboardTask([string]$TaskId) {
+  $node = Get-Command node.exe -ErrorAction SilentlyContinue
+  if (-not $node) { Fail 'node.exe is required to read Blackboard task state' }
+  $cli = Join-Path $ProjectRoot 'plugins/agent-blackboard/server/blackboard-cli.mjs'
+  if (-not (Test-Path -LiteralPath $cli -PathType Leaf)) { Fail "Blackboard CLI is missing: $cli" }
+  $result = & $node.Source $cli 'snapshot' $ProjectRoot 2>&1
+  if ($LASTEXITCODE -ne 0) { Fail "Blackboard snapshot failed: $(($result -join "`n").Trim())" }
+  try { $snapshot = ($result -join "`n") | ConvertFrom-Json } catch { Fail 'Blackboard snapshot returned invalid JSON' }
+  $tasks = @($snapshot.tasks | Where-Object { $_.task_id -eq $TaskId })
+  if ($tasks.Count -ne 1) { Fail "Blackboard task not found or ambiguous: $TaskId" }
+  return $tasks[0]
+}
+function Assert-ReviewerReadyForAcceptance([string]$TaskId) {
+  $task = Get-BlackboardTask $TaskId
+  $reviewer = @($task.agents | Where-Object { $_.role -eq 'reviewer' })
+  if ($reviewer.Count -ne 1 -or $reviewer[0].state -ne 'ready_for_acceptance') { Fail 'Reviewer is not ready_for_acceptance' }
+}
 function Doctor {
   foreach ($x in @('git','node.exe','pi.cmd','wt.exe','powershell.exe')) { if (-not (Get-Command $x -ErrorAction SilentlyContinue)) { Write-Output "MISSING $x" } else { Write-Output "OK $x" } }
   $s = Get-Content -Raw (Join-Path $ProjectRoot '.pi/settings.json') | ConvertFrom-Json; if ($s.defaultProvider -ne 'minimax-cn' -or $s.defaultModel -ne 'MiniMax-M3') { Write-Output 'MISSING MiniMax configuration' } else { Write-Output 'OK MiniMax configuration' }
@@ -511,8 +528,7 @@ function Assert-MissingCriteria($Contract,$Evidence) {
 }
 function Accept([string]$TaskId,[string]$EvidencePath) {
   $s=Read-State $TaskId; if ($s.execution_status -ne 'active' -or $s.outcome -ne 'pending') { Fail 'task is not awaiting acceptance' }
-  $e=Read-OutcomeFile $EvidencePath 'accepted'; $p=Join-Path (StateRoot) "$TaskId-reviewer.jsonl"
-  if (-not(Test-Path $p) -or -not((Get-Content $p | Select-Object -Last 1) -match '"state":"ready_for_acceptance"')) { Fail 'Reviewer is not ready_for_acceptance' }
+  $e=Read-OutcomeFile $EvidencePath 'accepted'; Assert-ReviewerReadyForAcceptance $TaskId
   $contract=Parse-Contract $s.contract_path; $expected=@{}; foreach($criterion in @($contract.done_criteria)) { $expected[[string]$criterion.id]=$criterion }
   if (@($e.criteria).Count -ne $expected.Count) { Fail 'acceptance evidence must cover every done criterion exactly once' }
   $seen=@{}

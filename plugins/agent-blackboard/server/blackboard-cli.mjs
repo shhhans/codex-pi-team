@@ -1,4 +1,4 @@
-import { acceptTask, archiveTask, closeIncompleteTask, publishTask, reconcileTask } from "./blackboard-core.mjs";
+import { acceptTask, archiveTask, closeIncompleteTask, publishTask, reconcileTask, snapshot } from "./blackboard-core.mjs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -18,6 +18,8 @@ try {
   if (command === "publish") {
     if (!inputPath) throw new Error("publish requires project root and contract path");
     result = await publishTask(projectRoot, await readContract(inputPath));
+  } else if (command === "snapshot") {
+    result = await snapshot(projectRoot);
   } else if (command === "accept") {
     if (!inputPath) throw new Error("accept requires project root and task id");
     result = await acceptTask(projectRoot, inputPath);

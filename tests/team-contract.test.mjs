@@ -5,6 +5,7 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { appendAgentEvent } from "../plugins/agent-blackboard/server/blackboard-core.mjs";
 const REPO = process.cwd();
 const SKILL_NAMES = ["answer-research-question", "execute-delegated-task", "review-delegated-task"];
 const RESEARCHER_TOOLS = ["read", "grep", "find", "ls", "write", "web_search", "fetch_content", "get_search_content", "source_check", "intercom", "blackboard_update"];
@@ -791,7 +792,6 @@ test("acceptance requires each frozen criterion ID and synchronizes the Blackboa
   const stateRoot = join(commonDir, "pi-team", "v1");
   const stateFile = join(stateRoot, `${taskId}.json`);
   const contractSnapshot = join(stateRoot, "contracts", `${taskId}.md`);
-  const reviewerEvents = join(stateRoot, `${taskId}-reviewer.jsonl`);
   const blackboardFile = join(commonDir, "harness-blackboard", "v1", `${taskId}.json`);
   const value = {
     version: 2, task_id: taskId, name: "Strict acceptance", description: "Validate criteria IDs.", base_ref: "master", branch: `pi-team/test-acceptance-${process.pid}`, worktree,
@@ -811,7 +811,9 @@ test("acceptance requires each frozen criterion ID and synchronizes the Blackboa
     await mkdir(join(stateRoot, "contracts"), { recursive: true });
     await writeFile(contractSnapshot, await readFile(contract));
     await writeFile(stateFile, JSON.stringify({ version: 2, task_id: taskId, execution_status: "active", outcome: "pending", worktree, contract_path: contractSnapshot, sessions: {} }));
-    await writeFile(reviewerEvents, `${JSON.stringify({ state: "ready_for_acceptance" })}\n`);
+    await appendAgentEvent(REPO, { task_id: taskId, role: "reviewer", agent_id: "reviewer-acceptance", worktree }, {
+      state: "ready_for_acceptance", activity: "Acceptance evidence is ready.", next: "Await Lead acceptance.",
+    });
 
     await writeFile(evidence, JSON.stringify({ outcome: "accepted", criteria: [{ criterion_id: "C-999", artifacts: ["implementation_notes/ACC-001.md"] }] }));
     const rejected = run("accept", [taskId, evidence]);
@@ -825,7 +827,8 @@ test("acceptance requires each frozen criterion ID and synchronizes the Blackboa
     assert.equal(parseJsonText(await readFile(stateFile, "utf8")).outcome, "accepted");
     assert.equal(parseJsonText(await readFile(blackboardFile, "utf8")).outcome, "accepted");
   } finally {
-    for (const path of [stateFile, contractSnapshot, reviewerEvents, blackboardFile]) await rm(path, { force: true });
+    for (const path of [stateFile, contractSnapshot, blackboardFile]) await rm(path, { force: true });
+    await rm(join(commonDir, "harness-blackboard", "v1", `${taskId}-reviewer.jsonl`), { force: true });
     await rm(root, { recursive: true, force: true });
   }
 });
