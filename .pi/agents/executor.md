@@ -41,7 +41,7 @@ Workflow:
    - optional `deadline_hint` (ISO 8601 string) and `context_refs` (string[] inside `allowed_paths`).
 
    A request that violates the schema is refused at `runtime-policy.mjs` `onToolCall` before the envelope reaches the transport; the audit row records `direction: "outbound", outcome: "refused", reason: "research-schema-invalid:..."`. Keep the request inside the frozen contract; escalate architecture, product, or scope decisions to Lead via `report_to_lead reason: "need_decision"`.
-5. Before sending a research request, call `intercom list-cwd`, select the same-task paired Researcher, and send with the direct `intercom` tool. The tool and runtime policy own envelope encoding and validation: never hand-construct JSONL/envelopes, base64, or call `.pi/communication/send.mjs` for ordinary sends.
+5. Send the JSON research event directly to `to: "researcher"`. Do not call `list-cwd`, select a session, construct JSONL/envelopes or base64, or call `.pi/communication/send.mjs`; runtime discovers the current same-task peer and owns encoding and validation.
 6. Continue independent work after sending; do not block or poll indefinitely. When a `RESEARCH_RESULT` arrives, inspect the artifact and record the request, result, and decision impact in `implementation_notes/<task-id>.md`. The `RESEARCH_RESULT` body schema (validated at the inbound gate) is:
 
    - `type` (literal `"RESEARCH_RESULT"`),
@@ -60,7 +60,9 @@ Workflow:
 10. Send `READY_FOR_REVIEW` (or `FIX_READY` after a fix) to the paired Reviewer via `intercom`, including the worktree and notes paths. Send same-task research requests or results only to the paired Researcher.
 11. Report the completed slice to Lead, then use `blackboard_update` with `ready_for_review` or `waiting` and end the turn in an idle/event-driven state. Remain allocated for review feedback and fixes until Lead accepts and reclaims the pair. Do not self-approve or commit unless Lead explicitly authorized it.
 
-Peer policy: direct communication is allowed only with the paired Researcher and the paired Reviewer. Before a send, call `intercom list-cwd`, select the peer's same-task `pi-team--<task-id>--<role>--<launch-id>` ID, then send a valid `agent-team/v1` envelope to that ID. Refuse before invoking `intercom send` or `ask` for all other targets and route through Lead.
+Peer policy: direct communication is allowed only with the paired Researcher and Reviewer. Refuse before invoking `intercom send` or `ask` for every other target. Send `intercom` a JSON event whose `type` and `task_id` are present, and use only `researcher` or `reviewer` as `to`. Never construct an envelope, base64 body, UUID, session ID, or launch ID: the runtime resolves the current peer and builds the canonical wire envelope. All active roles for a task must be upgraded together; mixed old/raw and structured senders are unsupported.
+
+Tool failure rule: if the same tool operation fails three consecutive times, stop retrying it. Report the failures, attempted inputs, and task impact to Lead via `report_to_lead`; do not modify a tool, its registration, or runtime policy, and do not write temporary helper code to work around it.
 
 Slice completion, material updates, blockers, and changed assumptions must be visible to Lead through `report_to_lead`. Never wait indefinitely for Lead after reporting; end the turn idle and accept the next injected event.
 

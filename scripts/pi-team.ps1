@@ -394,6 +394,12 @@ function New-RoleAssignment($Contract,[string]$Role) {
   $context = New-RoleContext $Contract $Role 'start'
   return "$context Lead assignment. Task ID: $($Contract.task_id). Worktree: $($Contract.worktree). Role: $Role. Delegation: $($delegation[0].id). Artifact: $($delegation[0].artifact_path). Required capabilities: $($delegation[0].required_capabilities -join ', '). Objective: $($delegation[0].objective). Done criteria: $criteria."
 }
+function Get-ToolRuntimeMetadata {
+  $version = [Environment]::OSVersion.VersionString
+  $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+  $powershell = "$($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)"
+  return "Tool runtime metadata: os_family=Windows; os_version=$version; os_architecture=$architecture; shell=PowerShell $powershell; path_separator=\\; POSIX shell utilities are not assumed; WSL requires explicit Lead authorization."
+}
 function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question='') {
   $delegation = @($Contract.delegations | Where-Object { $_.role -eq $Role })
   if ($delegation.Count -ne 1) { Fail "contract must declare exactly one delegation for role $Role" }
@@ -411,6 +417,7 @@ function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question
       "Worktree: $($Contract.worktree)",
       "Delegation: $($delegation[0].id)",
       "Owned artifact: $($delegation[0].artifact_path)",
+      (Get-ToolRuntimeMetadata),
       "Visible scope: $scope",
       'Resume rule: preserve the existing task scope and session history; continue from the next uncompleted slice without rediscovering the whole repository.',
       '--- END PI TEAM TASK CONTEXT ---'
@@ -432,6 +439,7 @@ function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question
     "Visible scope: $scope",
     "Out of scope: $outOfScope",
     "Owned done criteria: $($ownedCriteria -join '; ')",
+    (Get-ToolRuntimeMetadata),
     'Normative protocol: ADR/0002-lead-subagent-collaboration-protocol.md',
     'Recommended common reads: AGENTS.md, ADR/0002-lead-subagent-collaboration-protocol.md, project_state.md'
   )

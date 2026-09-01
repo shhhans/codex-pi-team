@@ -47,9 +47,14 @@ All three active roles may contact Lead only with the closed reason set:
 results need not be relayed through Lead, but material risk, changed
 downstream assumptions, and decision requests must be mirrored.
 
-Messages use the structured `agent-team/v1` envelope. UUIDs are internal
-transport correlation identifiers; application artifacts use Lead task
-IDs and no application-level content hash.
+Messages use the structured `agent-team/v1` envelope. Roles do not construct
+that envelope: they submit a JSON event with `type` and `task_id` to a peer
+role name, while runtime resolves the current same-task session and generates
+the UUIDs, canonical envelope, and base64url body. UUIDs are internal transport
+correlation identifiers; application artifacts use Lead task IDs and no
+application-level content hash. Raw envelopes, session IDs, and launch IDs are
+rejected before transport; all active roles must use the same structured-send
+version.
 
 ## Audit surface (Issue #11)
 
@@ -69,18 +74,11 @@ for Lead retrospection; `formatAuditEvent` in
 
 ## Stale-session recovery (Issue #11)
 
-When a same-task paired peer (`pi-team--<task-id>--<role>--<launch-id>`)
-becomes unreachable, `sendWithPolicy` classifies the transport failure
-against a conservative sentinel list (`no-such-session`,
-`session-not-found`, `disconnected`, `not-delivered`, `no-such-target`)
-and the runtime surfaces a typed diagnostic with the recovery hint:
-"call `intercom list-cwd` and re-send to the current same-task paired
-role peer". The runtime never silently redelivers to a different task
-or a different role; cross-task rediscovery returns `peer_wrong_task`,
-cross-role rediscovery returns `peer_wrong_role`, and unauthorized
-senders / malformed envelopes keep their existing ACL / wire-shape
-refusal surfaces. The agent prompt and skills describe the four typed
-failures and the recovery path.
+Each structured send resolves the current same-task peer role from the
+intercom extension channel immediately before transport. Roles never cache or
+provide a session or launch ID. Missing or ambiguous peers, cross-task targets,
+wrong roles, malformed JSON events, and raw envelopes are refused before
+transport without exposing the resolved session identifier.
 
 ## Evidence boundary
 

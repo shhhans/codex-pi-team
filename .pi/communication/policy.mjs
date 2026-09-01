@@ -17,6 +17,14 @@ export const SUPERVISOR_REASONS = new Set(["need_decision", "progress_update", "
 // above is unchanged. Lead authority over frozen contract, scope, acceptance,
 // and reclamation is preserved.
 export const RESEARCH_MESSAGE_TYPES = new Set(["RESEARCH_REQUEST", "RESEARCH_RESULT", "RESEARCH_BLOCKED"]);
+export const LIFECYCLE_MESSAGE_TYPES = new Set([
+  "READY_FOR_REVIEW",
+  "FIX_READY",
+  "REVIEW_PASS",
+  "REVIEW_FAIL",
+  "READY_FOR_ACCEPTANCE",
+]);
+export const STRUCTURED_MESSAGE_TYPES = new Set([...RESEARCH_MESSAGE_TYPES, ...LIFECYCLE_MESSAGE_TYPES]);
 export const RESEARCH_BLOCK_REASON_CODES = new Set([
   "out_of_scope",
   "architectural",
@@ -74,6 +82,68 @@ export function makeEnvelope({ id, correlationId = id, kind, subject, body, plan
     `subject: ${subject}`,
     `body: ${encodedBody}`,
   ].join("\n");
+}
+
+// The roles submit this JSON event to intercom.  Wire concerns stay here: the
+// runtime owns UUID generation, envelope construction, and base64url encoding.
+export function makeStructuredEnvelope(text, taskId) {
+  if (typeof text !== "string") throw new Error("structured-message-must-be-json");
+  let event;
+  try { event = JSON.parse(text); } catch { throw new Error("structured-message-invalid-json"); }
+  if (!event || typeof event !== "object" || Array.isArray(event)) throw new Error("structured-message-must-be-object");
+  if (typeof event.type !== "string" || !STRUCTURED_MESSAGE_TYPES.has(event.type)) throw new Error("structured-message-unknown-type");
+  if (typeof taskId !== "string" || event.task_id !== taskId) throw new Error("structured-message-task-id-mismatch");
+
+  let kind;
+  let correlationId;
+  if (event.type === "RESEARCH_REQUEST") kind = "request";
+  else if (event.type === "RESEARCH_RESULT") kind = "reply";
+  else if (event.type === "RESEARCH_BLOCKED") kind = "error";
+  else kind = "progress";
+
+  if (RESEARCH_MESSAGE_TYPES.has(event.type)) {
+    const schema = validateResearchBody(event.type, event);
+    if (!schema.ok) throw new Error(`structured-message-schema-invalid:${event.type}:${schema.reason_code}`);
+    if (!UUID.test(event.request_id)) throw new Error("structured-message-invalid-request-id");
+    correlationId = event.request_id;
+  } else {
+    validateLifecycleEvent(event);
+    correlationId = randomUUID();
+  }
+
+  const subject = `${event.type} ${taskId}`;
+  return {
+    event,
+    envelope: makeEnvelope({
+      id: randomUUID(),
+      correlationId,
+      kind,
+      subject,
+      body: JSON.stringify(event),
+      artifactPath: event.artifact_path,
+    }),
+  };
+}
+
+function validateLifecycleEvent(event) {
+  const allowed = new Map([
+    ["READY_FOR_REVIEW", new Set(["type", "task_id", "delegation_id", "worktree", "implementation_notes_path", "artifact_path"])],
+    ["FIX_READY", new Set(["type", "task_id", "delegation_id", "worktree", "implementation_notes_path", "artifact_path"])],
+    ["REVIEW_PASS", new Set(["type", "task_id", "delegation_id", "evidence_paths", "artifact_path"])],
+    ["REVIEW_FAIL", new Set(["type", "task_id", "delegation_id", "failure_paths", "evidence_paths", "artifact_path"])],
+    ["READY_FOR_ACCEPTANCE", new Set(["type", "task_id", "delegation_id", "worktree", "implementation_notes_path", "artifact_path"])],
+  ]);
+  const known = allowed.get(event.type);
+  if (!known || Object.keys(event).some(key => !known.has(key))) throw new Error("structured-message-unknown-field");
+  if (event.type === "REVIEW_PASS" || event.type === "REVIEW_FAIL") {
+    const paths = event.type === "REVIEW_PASS" ? event.evidence_paths : event.failure_paths;
+    if (!Array.isArray(paths) || paths.length === 0 || paths.some(path => typeof path !== "string" || !path)) throw new Error("structured-message-invalid-evidence-paths");
+    if (event.evidence_paths !== undefined && (!Array.isArray(event.evidence_paths) || event.evidence_paths.some(path => typeof path !== "string" || !path))) throw new Error("structured-message-invalid-evidence-paths");
+    return;
+  }
+  if (typeof event.worktree !== "string" || !event.worktree || (typeof event.implementation_notes_path !== "string" && typeof event.artifact_path !== "string")) {
+    throw new Error("structured-message-missing-handoff-reference");
+  }
 }
 
 export function parseEnvelope(text, { expiresAt } = {}) {

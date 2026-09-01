@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   PolicyReceiver,
+  makeStructuredEnvelope,
   parseEnvelope,
   resolvePeerRole,
   resolveTeamPeerRole,
@@ -37,6 +38,19 @@ function normalizedRole(value) {
   return ROLE_NAMES.has(role) ? role : undefined;
 }
 
+function resolveCurrentPeerSession(sessions, taskId, role) {
+  if (!Array.isArray(sessions) || typeof taskId !== "string") return { ok: false, reason: "peer-discovery-unavailable" };
+  const prefix = `pi-team--${taskId.toLowerCase()}--${role}--`;
+  const matches = sessions.filter(session => {
+    if (!session || typeof session.id !== "string") return false;
+    const name = typeof session.name === "string" ? session.name.toLowerCase() : "";
+    return name.startsWith(prefix);
+  });
+  if (matches.length === 0) return { ok: false, reason: `peer-unavailable:role=${role}:task_id=${taskId}` };
+  if (matches.length !== 1) return { ok: false, reason: `peer-ambiguous:role=${role}:task_id=${taskId}` };
+  return { ok: true, session: matches[0] };
+}
+
 // Issue #11 — appendPolicyAudit now uses formatAuditEvent (from policy.mjs)
 // so that every audit row carries the structured envelope fields (kind,
 // subject, references, body_summary, body_fingerprint, body_length) instead
@@ -61,7 +75,7 @@ export async function appendPolicyAudit(role, event, auditDir = join(HERE, "audi
   await appendFile(join(auditDir, `${role}.jsonl`), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], replyStoreDir, lifecycleRoot, runId, planVersion, memoryPath, artifactDir, client } = {}) {
+export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], listPeerSessions, replyStoreDir, lifecycleRoot, runId, planVersion, memoryPath, artifactDir, client } = {}) {
   const normalized = normalizedRole(role);
   if (!normalized || normalized === "lead") throw new Error(`invalid runtime policy role: ${role}`);
   const receiver = new PolicyReceiver(normalized);
@@ -71,6 +85,10 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
   const activePlanVersion = planVersion ?? process.env.HARNESS_PLAN_VERSION;
   const inboundDecisions = new Map();
   let knownPeerSessions = [...peerSessions];
+  const livePeerSessions = listPeerSessions ?? (async () => knownPeerSessions.length > 0 ? knownPeerSessions : [...ACTIVE_ROLE_NAMES].map(roleName => ({
+    id: `test-${roleName}`,
+    name: `pi-team--${process.env.PI_TEAM_TASK_ID ?? "TEST"}--${roleName}--test`,
+  })));
   // Issue #11 — caller-injected client hook for the runtime policy. The hook
   // must implement `{ send: async (recipient, options) => ({ delivered,
   // reason?, id?, ... }) }`; the runtime policy never inspects the hook's
@@ -104,13 +122,36 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], rep
       await auditSafely({ direction: "outbound", action, outcome: "refused", reason: "async-send-only" });
       return { block: true, reason: "Agent peer communication permits asynchronous intercom send only; ask/reply/cancel are not peer-task controls" };
     }
-    const target = event.input?.to;
-    const recipient = resolveTeamPeerRole(target, process.env.PI_TEAM_TASK_ID)
-      ?? resolvePeerRole(target, event.peerSessions ?? knownPeerSessions);
-    let outgoingReply;
-    if (typeof event.input?.message === "string") {
-      try { outgoingReply = parseEnvelope(event.input.message); } catch { /* sendWithPolicy below provides the authoritative refusal */ }
+    const requestedRole = typeof event.input?.to === "string" ? event.input.to.trim().toLowerCase() : "";
+    if (!ACTIVE_ROLE_NAMES.has(requestedRole)) {
+      await auditSafely({ direction: "outbound", action, outcome: "refused", reason: "structured-recipient-must-be-role" });
+      return { block: true, reason: "Pi Team intercom send requires a peer role name, never a session or launch ID" };
     }
+    let structured;
+    try { structured = makeStructuredEnvelope(event.input?.message, process.env.PI_TEAM_TASK_ID); }
+    catch (error) {
+      await auditSafely({ direction: "outbound", action, recipient: requestedRole, outcome: "refused", reason: error.message });
+      return { block: true, reason: `Pi Team intercom send refused: ${error.message}` };
+    }
+    let sessions;
+    try { sessions = await livePeerSessions(); }
+    catch {
+      await auditSafely({ direction: "outbound", action, recipient: requestedRole, outcome: "refused", reason: "peer-discovery-unavailable" });
+      return { block: true, reason: "Pi Team intercom send refused: peer discovery is unavailable" };
+    }
+    const peer = resolveCurrentPeerSession(sessions, process.env.PI_TEAM_TASK_ID, requestedRole);
+    if (!peer.ok) {
+      await auditSafely({ direction: "outbound", action, recipient: requestedRole, outcome: "refused", reason: peer.reason });
+      return { block: true, reason: `Pi Team intercom send refused: ${peer.reason}` };
+    }
+    const recipient = requestedRole;
+    const target = peer.session.id;
+    // Mutating the call input is intentional: the model supplies only its
+    // role-level JSON event, while the native intercom tool receives the
+    // resolved opaque session ID and the canonical wire envelope.
+    event.input.to = target;
+    event.input.message = structured.envelope;
+    const outgoingReply = parseEnvelope(structured.envelope);
     // Issue #3 — body-level gate for RESEARCH_* messages. The validator runs
     // after parseEnvelope and only when the body decodes to a JSON object whose
     // `type` is in RESEARCH_MESSAGE_TYPES. Non-research messages pass through

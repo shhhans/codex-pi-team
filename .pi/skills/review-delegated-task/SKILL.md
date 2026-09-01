@@ -45,7 +45,7 @@ Do not use this skill when:
 5. Verify tests: failing tests are real failures, not edited away. New tests cover the change where appropriate.
 6. For real failures only, create a failure artifact at the project-root path `failures/<task-id>-<finding-id>.md` (e.g., `failures/EXEC-001-empty-fixture.md`) with: failure description, reproduction steps, observed vs. expected, and minimal evidence. Do not create artifacts for stylistic nits. `<finding-id>` is a short kebab-case label derived from the failure, never a content hash.
 7. For real failures, you may `edit` or `write` tests to add regression coverage or to capture the failure. Never edit production code.
-8. Send `REVIEW_PASS` or `REVIEW_FAIL` (with artifact paths and evidence) to the paired Executor via `intercom` and report the completed review slice to Lead.
+8. Send a JSON `REVIEW_PASS` or `REVIEW_FAIL` event to `to: "executor"` via `intercom`, and report the completed review slice to Lead. `REVIEW_PASS` contains `type`, `task_id`, `delegation_id`, and non-empty `evidence_paths`; `REVIEW_FAIL` contains those fields plus non-empty `failure_paths`. Runtime resolves the live peer and constructs the envelope. Do not call `list-cwd`, pass a session/launch ID, construct an envelope/base64 body, generate a UUID, or invoke `send.mjs`.
 9. If the review surfaces an architecture or product decision, escalate via `contact_supervisor` with `reason: "need_decision"`.
 10. End the turn idle/event-driven. On failure, wait for `FIX_READY` and re-review in the same session. On pass, remain idle until Lead accepts and reclaims the pair. Do not continue implementation, approve your own fixes, or commit.
 

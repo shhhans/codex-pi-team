@@ -40,6 +40,17 @@ explicitly makes them task-scoped. Task-specific instructions belong in the
 frozen contract or task artifacts, not in a reusable skill. The Lead owns the
 final check for contamination before acceptance.
 
+## Tool-change completion rule
+
+Whenever a role-visible tool, its input/output contract, its runtime wrapper,
+or its availability changes, update the complete tool contract in the same
+change: registration and load order, role allowlists and role-card guidance,
+tool/skill documentation, runtime policy or wrapper behavior, and focused
+tests. Include current OS metadata in the launch-time tool guidance rather
+than assuming a POSIX shell or hard-coding a host. Restart every active role
+for the task after deployment; mixed tool contracts are unsupported. Do not
+accept a tool change until a live smoke exercises the changed path.
+
 Write a tracked Markdown v2 task contract with exactly one JSON contract block.
 Each done criterion has a stable `C-###` ID, owner, and artifact path; each
 role delegation declares its stable ID, artifact path, and required

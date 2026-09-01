@@ -41,12 +41,12 @@ Do not use this skill when:
 
 1. Confirm the Lead task ID, worktree path, and scope before any change. Refuse if any are missing.
 2. `cd` into the worktree and inspect the assigned files with `read`, `grep`, `find`, `ls`.
-3. When facts, compatibility, test design, or an implementation boundary are uncertain, formulate one bounded `RESEARCH_REQUEST` for the paired Researcher before guessing. The request is a JSON body inside the standard `agent-team/v1` envelope. The required schema (validated at the runtime gate by `policy.mjs` `validateResearchBody` and `authorizeResearchDelegation`) is:
+3. When facts, compatibility, test design, or an implementation boundary are uncertain, formulate one bounded JSON `RESEARCH_REQUEST` event for the paired Researcher before guessing. Runtime, not the role, constructs the standard `agent-team/v1` envelope. The required event schema (validated at the runtime gate by `policy.mjs` `validateResearchBody` and `authorizeResearchDelegation`) is:
 
    - `type` (literal `"RESEARCH_REQUEST"`),
    - `task_id` (must equal `PI_TEAM_TASK_ID`),
    - `delegation_id` (must equal the contract's Researcher delegation),
-   - `request_id` (UUID v4 generated at send time; reused as the envelope `correlation_id`),
+   - `request_id` (the Lead-supplied request identifier; runtime derives the envelope `correlation_id` from it),
    - `decision_supported` (one-sentence description of the implementation decision this research unblocks),
    - `objective` (one bounded question, ≤240 chars; never an architectural, product, or scope-shaping question),
    - `allowed_paths` (non-empty subset of the contract's `in_scope`; must not intersect `out_of_scope`),
@@ -56,7 +56,7 @@ Do not use this skill when:
    - optional `deadline_hint` (ISO 8601 string) and `context_refs` (string[] inside `allowed_paths`).
 
    A request that violates the schema is refused at `runtime-policy.mjs` `onToolCall` before the envelope reaches the transport; the audit row records `direction: "outbound", outcome: "refused", reason: "research-schema-invalid:..."`. Keep the request inside the frozen contract; escalate architecture, product, or scope decisions to Lead via `report_to_lead reason: "need_decision"`.
-4. Before sending a research request, call `intercom list-cwd`, select the same-task paired Researcher, and send with the direct `intercom` tool. The tool and runtime policy own envelope encoding and validation: never hand-construct JSONL/envelopes, base64, or call `.pi/communication/send.mjs` for ordinary sends.
+4. Send the paired Researcher a JSON event through `intercom` with `to: "researcher"`. Do not call `list-cwd`, provide a session/launch ID, construct JSONL/envelopes or base64, or call `.pi/communication/send.mjs`; runtime resolves the current peer and owns correlation, encoding, and validation.
 5. Continue independent work after sending; do not block or poll indefinitely. When a `RESEARCH_RESULT` arrives, inspect the artifact, record the request, result, and decision impact in `implementation_notes/<task-id>.md`, and continue. The `RESEARCH_RESULT` body schema (validated at the inbound gate by `policy.mjs` `validateResearchBody`) is:
 
    - `type` (literal `"RESEARCH_RESULT"`),
@@ -72,7 +72,7 @@ Do not use this skill when:
 6. Make the smallest coherent change that satisfies the scope. Follow existing project conventions; do not refactor unrelated code.
 7. Run the project's validation commands (`bash`) appropriate to the change set. Capture pass/fail evidence.
 8. Persist `implementation_notes/<task-id>.md` at the worktree root with: Lead task ID, current slice state, files changed, research requests/results or blockers, validation performed, and remaining risks. Use `<task-id>` exactly as Lead supplied it.
-9. Send `READY_FOR_REVIEW` (or `FIX_READY`) to the paired Reviewer via `intercom`, including the worktree and notes paths. Use envelope correlation IDs from Lead.
+9. Send a JSON `READY_FOR_REVIEW` (or `FIX_READY`) event to `to: "reviewer"`, including `task_id`, worktree, and notes path. Runtime supplies the envelope correlation ID.
 10. Report the completed slice to Lead and end the turn idle/event-driven. Remain allocated for `REVIEW_FAIL`, fixes, re-review, and acceptance. Do not self-approve or commit unless Lead explicitly authorized it.
 ## Boundaries
 

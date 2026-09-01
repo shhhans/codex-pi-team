@@ -110,6 +110,8 @@ test("active role definitions exist with valid frontmatter and required tools", 
     assert.match(text, /^tools:.*\bintercom\b/m, `${role} must include intercom for paired peer communication`);
     assert.match(text, /Peer policy:/, `${role} must declare a peer policy`);
     assert.match(text, /refuse before/i, `${role} must refuse before intercom send/ask`);
+    assert.match(text, /Tool failure rule:.*three consecutive times/s, `${role} must escalate a repeated tool failure`);
+    assert.match(text, /do not modify a tool.*temporary helper code/s, `${role} must not self-modify a failing tool`);
     // Active roles must not bind persistent memory; they use role prompt + private skills only.
     assert.ok(!("memory" in fm), `${role} frontmatter must not declare a memory binding`);
     assert.doesNotMatch(text, /^memory:\s*$/m, `${role} must not contain a memory: frontmatter block`);
@@ -117,6 +119,14 @@ test("active role definitions exist with valid frontmatter and required tools", 
     assert.doesNotMatch(text, /\b(?:ISSUE|BOOTSTRAP|PERF)-\d{3,}\b/, `${role} prompt must not contain concrete task identifiers`);
     assert.doesNotMatch(text, /[A-Za-z]:[\\/][^\r\n]*\\(?:Pi-team|Coding)/i, `${role} prompt must not contain host paths`);
   }
+});
+
+test("Lead skill requires complete tool-contract updates and live validation", async () => {
+  const text = await readFile(join(REPO, "plugins/agent-blackboard/skills/pi-team-lead/SKILL.md"), "utf8");
+  assert.match(text, /Tool-change completion rule/);
+  assert.match(text, /registration and load order.*role allowlists.*tool\/skill documentation.*focused\s+tests/s);
+  assert.match(text, /Restart every active role/);
+  assert.match(text, /live smoke exercises the changed path/);
 });
 
 test("shared context and active skills remain task-agnostic", async () => {
@@ -593,6 +603,7 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       assert.match(prompt, /Artifact: /, `${record.role} prompt must declare its artifact path`);
       assert.match(prompt, /Required capabilities: /, `${record.role} prompt must declare its required capabilities`);
       assert.match(prompt, /Objective: /, `${record.role} prompt must declare its objective`);
+      assert.match(prompt, /Tool runtime metadata: os_family=Windows;/, `${record.role} prompt must include launch-time OS metadata`);
       assert.match(prompt, /Done criteria: /, `${record.role} prompt must declare its own done criteria`);
       assert.doesNotMatch(prompt, /^-/, `${record.role} prompt must not begin with a CLI option marker`);
       assert.match(prompt, /--- PI TEAM TASK CONTEXT v1 ---/, `${record.role} prompt must include the dynamic task context marker`);
