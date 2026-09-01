@@ -1259,6 +1259,13 @@ test.skip("Issue #11 P3 (runtime path): executor→researcher stale session surf
   }
 });
 
+test("Blackboard extension owns runtime readiness after Lead-report retirement", async () => {
+  const text = await readFile(join(REPO, ".pi/communication/extensions/blackboard-update.ts"), "utf8");
+  assert.match(text, /registerRoleRuntime/);
+  assert.match(text, /PI_INTERCOM_STABLE_ID/);
+  await assert.rejects(stat(join(REPO, ".pi/communication/extensions/report-to-lead.ts")));
+});
+
 test("structured send builds the canonical envelope and resolves the current same-task peer", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const previousTaskId = process.env.PI_TEAM_TASK_ID;

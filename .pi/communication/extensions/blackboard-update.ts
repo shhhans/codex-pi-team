@@ -1,10 +1,22 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { appendAgentEvent } from "../../../plugins/agent-blackboard/server/blackboard-core.mjs";
+import { registerRoleRuntime } from "../role-events.mjs";
 
 const states = ["working", "waiting", "blocked", "completed", "ready_for_review", "reviewing", "changes_requested", "ready_for_acceptance"] as const;
 
 export default function (pi: ExtensionAPI) {
+  const taskId = process.env.PI_TEAM_TASK_ID;
+  const role = process.env.PI_TEAM_ROLE;
+  const agentId = process.env.PI_TEAM_AGENT_ID;
+  const stateRoot = process.env.PI_TEAM_STATE_ROOT;
+  const launchId = process.env.PI_TEAM_LAUNCH_ID;
+  const intercomId = process.env.PI_INTERCOM_STABLE_ID;
+  // This extension is present in every active role. It owns runtime readiness
+  // now that the retired report_to_lead extension is no longer loaded.
+  if (taskId && role && agentId && stateRoot && launchId && intercomId) {
+    registerRoleRuntime(stateRoot, { task_id: taskId, role, agent_id: agentId, launch_id: launchId, intercom_id: intercomId, worktree: process.env.PI_TEAM_WORKTREE }).catch(() => undefined);
+  }
   pi.registerTool({
     name: "blackboard_update",
     label: "Blackboard Update",
