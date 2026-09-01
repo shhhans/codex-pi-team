@@ -1,6 +1,6 @@
 {
   "name": "agent-blackboard",
-  "version": "0.1.0+codex.20260831130030",
+  "version": "0.1.0+codex.20260831190621",
   "description": "Local Agent Blackboard for Lead task observability, structured wakeup reminders, event watching, and a compact task-lane view.",
   "author": {
     "name": "Pi Team",

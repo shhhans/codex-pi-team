@@ -32,9 +32,14 @@ these as concise follow-up prompts and acknowledge them. Wakeups never grant
 authorization, prove completion, or replace Lead inspection and acceptance.
 
 The repo-local `agent-blackboard` plugin exposes Lead-only MCP tools for task
-management, snapshot, cursor-based watch, and rendering. Its task-lane UI
-requests PiP when supported and falls back inline; closing the UI does not
-disable the Lead watcher. Archived tasks remain queryable with
+management, snapshot, cursor-based watch, and rendering. `blackboard_snapshot`
+also accepts a caller-owned cursor and returns the current active task snapshot
+plus only newly observed critical changes. It does not persist the cursor;
+retrying with the previous cursor therefore preserves at-least-once
+observation. Periodic Codex heartbeat checks use this snapshot path rather than
+`blackboard_watch`, and do not require thread binding or a wakeup transport. Its
+task-lane UI requests PiP when supported and falls back inline; closing the UI
+does not disable the Lead watcher. Archived tasks remain queryable with
 `include_archived=true` and are hidden from the default snapshot.
 
 Formal task publication also has a canonical non-MCP adapter:

@@ -90,7 +90,11 @@ for task creation, metadata revisions, acceptance, archival, snapshots,
 cursor-based watching, and rendering. Agents cannot create tasks or edit Lead
 task name/description. The Blackboard is an observation/reminder plane; scope
 correction continues through the existing Lead communication paths. Archived
-tasks remain available through an explicit archived snapshot.
+tasks remain available through an explicit archived snapshot. A periodic Lead
+heartbeat uses `blackboard_snapshot` with a caller-owned cursor: it returns the
+current active lanes and only new critical changes, without server-side cursor
+checkpointing. Heartbeat polling is independent of `blackboard_watch`, thread
+binding, and wakeup transport.
 The plugin's `pi-team-lead` skill carries the full publish, explicit launch,
 watch, acceptance, reclamation, and archival workflow into new Codex sessions,
 including sessions whose working directory is above this repository.

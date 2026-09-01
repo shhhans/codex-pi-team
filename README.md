@@ -77,7 +77,12 @@ The Blackboard is not an authorization or communication bus. Use the existing
 `report_to_lead`, supervisor, and intercom paths for decisions and correction.
 The plugin supplies MCP tools for task management, snapshots, cursor-based
 watching, Lead thread registration, structured wakeup listing/acknowledgement,
-and a task-lane UI that requests PiP and falls back inline.
+and a task-lane UI that requests PiP and falls back inline. For periodic Codex
+heartbeat checks, call `blackboard_snapshot` with the previous returned cursor:
+it always returns the current active lanes plus only new critical changes
+(`blocked`, `changes_requested`, `ready_for_review`, `ready_for_acceptance`, or
+`completed`). The cursor is caller-owned and is not checkpointed by the
+Blackboard, so retrying with the prior cursor is safe and may repeat changes.
 After `start`, the Lead registers its current Codex `thread_id` and `host_id`.
 Only material states (`blocked`, `changes_requested`, `ready_for_review`,
 `ready_for_acceptance`, and `completed`) create wakeups. The host adapter maps

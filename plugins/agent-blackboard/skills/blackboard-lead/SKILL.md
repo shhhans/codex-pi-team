@@ -39,11 +39,28 @@ come from launcher-injected runtime identity. Critical states also enqueue a
 structured Lead reminder. Blackboard remains an observability and reminder
 plane, not authorization, completion proof, or a communication receipt.
 
-When calling `blackboard_watch`, retain the returned cursor and pass it to the
-next call. A returned event includes the latest Lead task name and description;
-compare the Agent action to that current baseline. A timeout means only that no
-new Agent event arrived. If the event indicates drift, correct it through the
-existing `report_to_lead`/supervisor/intercom path.
+When calling `blackboard_watch` for explicit continuous supervision, retain the
+returned cursor and pass it to the next call. A returned event includes the
+latest Lead task name and description; compare the Agent action to that current
+baseline. A timeout means only that no new Agent event arrived. If the event
+indicates drift, correct it through the existing `report_to_lead`/supervisor/
+intercom path.
+
+## Heartbeat snapshot
+
+For a Codex heartbeat or other periodic Lead check, use `blackboard_snapshot`
+as the only Blackboard read. Pass the cursor returned by the previous
+heartbeat in `cursor`, inspect only `changes`, and retain the newly returned
+cursor for the next heartbeat. The first call without a cursor establishes the
+baseline from the latest state of active tasks. `changes` contains only active
+task updates in `blocked`, `changes_requested`, `ready_for_review`,
+`ready_for_acceptance`, or `completed`; ordinary `working`, `waiting`, and
+`reviewing` updates are not heartbeat changes. With no changes, end that
+heartbeat turn. With changes, independently read the contract, diff, and
+artifacts before continuing the normal Lead workflow. Blackboard does not save
+the cursor, so retry a failed heartbeat with the prior cursor; duplicate
+observations are expected and safe. Heartbeat polling does not require
+`blackboard_watch`, Lead thread binding, an App Server, or a wakeup bridge.
 
 ## UI
 

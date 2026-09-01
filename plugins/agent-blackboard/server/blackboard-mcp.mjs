@@ -79,7 +79,7 @@ const tools = [
     description: "Read current task lanes and latest Agent activity.",
     _meta: { "ui/resourceUri": "ui://agent-blackboard/blackboard.html" },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    inputSchema: { type: "object", required: ["project_root"], properties: { project_root: { type: "string" }, include_archived: { type: "boolean" } }, additionalProperties: false },
+    inputSchema: { type: "object", required: ["project_root"], properties: { project_root: { type: "string" }, include_archived: { type: "boolean" }, cursor: { type: "string" } }, additionalProperties: false },
   },
   {
     name: "blackboard_watch",
@@ -115,7 +115,7 @@ async function callTool(name, args = {}) {
   if (name === "blackboard_unregister_lead") return unregisterLead(projectRoot, args.task_id, args);
   if (name === "blackboard_list_lead_wakeups") return listLeadWakeups(projectRoot, args.task_id);
   if (name === "blackboard_ack_lead_wakeup") return acknowledgeLeadWakeup(projectRoot, args.task_id, args.wakeup_id, args);
-  if (name === "blackboard_snapshot") return snapshot(projectRoot, Boolean(args.include_archived));
+  if (name === "blackboard_snapshot") return snapshot(projectRoot, Boolean(args.include_archived), args.cursor);
   if (name === "blackboard_watch") return watch(projectRoot, args.cursor, args.timeout_ms ?? 55000, Boolean(args.include_archived));
   if (name === "blackboard_render") return renderSnapshotHtml(await snapshot(projectRoot, Boolean(args.include_archived)));
   throw new Error(`unknown tool: ${name}`);
@@ -129,7 +129,7 @@ async function handle(message) {
       protocolVersion,
       capabilities: { tools: { listChanged: false }, resources: { subscribe: false, listChanged: false } },
       serverInfo: { name: "agent-blackboard", version: "0.1.0" },
-      instructions: "Use Agent Blackboard as a Lead-owned observability plane with wakeup reminders. Wakeups are not authorization or completion proof.",
+      instructions: "Use Agent Blackboard as a Lead-owned observability plane with wakeup reminders. For periodic heartbeat checks, use blackboard_snapshot with its caller-owned cursor and inspect changes. Wakeups are not authorization or completion proof.",
     } };
   }
   if (message.method === "notifications/initialized") return null;

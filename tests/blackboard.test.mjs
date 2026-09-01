@@ -165,6 +165,56 @@ test("agent events are role-scoped, append-only, validated, and cursor-watchable
   }
 });
 
+test("snapshot exposes active critical changes with a caller-owned cursor", async () => {
+  const fixture = await makeRepo();
+  try {
+    await createTask(fixture.repo, { task_id: "BB-SNAPSHOT-001", name: "Incremental task", description: "Heartbeat baseline" });
+    const executor = { task_id: "BB-SNAPSHOT-001", role: "executor", agent_id: "executor-snapshot", worktree: fixture.worktree };
+    const researcher = { task_id: "BB-SNAPSHOT-001", role: "researcher", agent_id: "researcher-snapshot", worktree: fixture.worktree };
+    const reviewer = { task_id: "BB-SNAPSHOT-001", role: "reviewer", agent_id: "reviewer-snapshot", worktree: fixture.worktree };
+    await appendAgentEvent(fixture.repo, executor, { state: "working", activity: "starting" });
+    await appendAgentEvent(fixture.repo, researcher, { state: "waiting", activity: "waiting for scope" });
+    await appendAgentEvent(fixture.repo, reviewer, { state: "reviewing", activity: "checking" });
+    const ready = await appendAgentEvent(fixture.repo, executor, { state: "ready_for_review", activity: "slice ready" });
+    const accepted = await appendAgentEvent(fixture.repo, reviewer, { state: "ready_for_acceptance", activity: "review ready" });
+    const completed = await appendAgentEvent(fixture.repo, researcher, { state: "completed", activity: "research complete" });
+
+    const initial = await snapshot(fixture.repo);
+    assert.equal(typeof initial.cursor, "string");
+    assert.deepEqual(new Set(initial.changes.map((event) => event.state)), new Set(["ready_for_review", "ready_for_acceptance", "completed"]));
+    assert.equal(initial.changes.find((event) => event.state === "ready_for_review").sequence, ready.event.sequence);
+    assert.equal(initial.changes.find((event) => event.state === "ready_for_acceptance").sequence, accepted.event.sequence);
+    assert.equal(initial.changes.find((event) => event.state === "completed").sequence, completed.event.sequence);
+    assert.equal(initial.changes[0].task.task_id, "BB-SNAPSHOT-001");
+
+    const unchanged = await snapshot(fixture.repo, false, initial.cursor);
+    assert.deepEqual(unchanged.changes, []);
+    assert.equal(unchanged.tasks[0].task_id, "BB-SNAPSHOT-001");
+
+    await appendAgentEvent(fixture.repo, executor, { state: "working", activity: "post-baseline work" });
+    await appendAgentEvent(fixture.repo, researcher, { state: "blocked", activity: "research blocked", blocker: "missing input" });
+    await appendAgentEvent(fixture.repo, reviewer, { state: "changes_requested", activity: "fix required" });
+    await appendAgentEvent(fixture.repo, executor, { state: "ready_for_review", activity: "updated slice" });
+    const changed = await snapshot(fixture.repo, false, initial.cursor);
+    assert.deepEqual(new Set(changed.changes.map((event) => event.state)), new Set(["blocked", "changes_requested", "ready_for_review"]));
+    assert.equal(changed.changes.every((event) => event.task.status === "active"), true);
+    assert.equal(changed.tasks[0].agents.find((agent) => agent.role === "executor").sequence, 4);
+
+    const retried = await snapshot(fixture.repo, false, initial.cursor);
+    assert.deepEqual(retried.changes.map(({ task, ...event }) => event), changed.changes.map(({ task, ...event }) => event));
+    await assert.rejects(snapshot(fixture.repo, false, "not-a-valid-cursor"), /invalid blackboard cursor/);
+    await assert.rejects(snapshot(fixture.repo, false, Buffer.from(JSON.stringify({ version: 1 }), "utf8").toString("base64url")), /invalid blackboard cursor/);
+
+    await acceptTask(fixture.repo, "BB-SNAPSHOT-001");
+    await archiveTask(fixture.repo, "BB-SNAPSHOT-001");
+    assert.deepEqual((await snapshot(fixture.repo, false, initial.cursor)).changes, []);
+    assert.deepEqual((await snapshot(fixture.repo, true, initial.cursor)).changes, []);
+    assert.equal((await snapshot(fixture.repo, true)).tasks[0].status, "archived");
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
 test("watcher returns causally on Agent activity and stays quiet for metadata-only changes", async () => {
   const fixture = await makeRepo();
   try {
@@ -339,6 +389,8 @@ test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/
     assert.equal(tool.annotations.readOnlyHint, true, `${name} must be declared read-only`);
     assert.equal(tool.annotations.openWorldHint, false, `${name} must be declared closed-world`);
   }
+  const snapshotTool = responses[2].result.tools.find((tool) => tool.name === "blackboard_snapshot");
+  assert.equal(snapshotTool.inputSchema.properties.cursor.type, "string");
   assert.equal(responses[3].result.resources[0].uri, "ui://agent-blackboard/blackboard.html");
 
   const fixture = await makeRepo();

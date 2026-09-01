@@ -222,12 +222,17 @@ async function allEvents(root) {
 }
 
 function decodeCursor(cursor) {
-  if (!cursor) return {};
-  if (typeof cursor === "object") return cursor.files || {};
+  if (cursor === undefined || cursor === null || cursor === "") return {};
+  if (typeof cursor === "object") {
+    if (Array.isArray(cursor) || cursor.version !== 1 || !cursor.files || typeof cursor.files !== "object" || Array.isArray(cursor.files)) fail("invalid blackboard cursor");
+    return cursor.files;
+  }
+  if (typeof cursor !== "string") fail("invalid blackboard cursor");
   try {
     const json = Buffer.from(cursor, "base64url").toString("utf8");
     const decoded = JSON.parse(json);
-    return decoded && typeof decoded === "object" && decoded.files ? decoded.files : {};
+    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded) || decoded.version !== 1 || !decoded.files || typeof decoded.files !== "object" || Array.isArray(decoded.files)) fail("invalid blackboard cursor");
+    return decoded.files;
   } catch { fail("invalid blackboard cursor"); }
 }
 
@@ -240,7 +245,7 @@ function eventsAfter(events, cursor) {
   return events.filter(({ key, event }) => Number(event.sequence) > Number(seen[key] || 0));
 }
 
-function cursorFor(events, previous = {}) {
+function cursorFor(events, previous) {
   const files = { ...decodeCursor(previous) };
   for (const { key, event } of events) files[key] = Math.max(Number(files[key] || 0), Number(event.sequence));
   return encodeCursor(files);
@@ -257,12 +262,27 @@ async function latestByTask(root, events) {
   return latest;
 }
 
+function changeTask(task) {
+  return task ? { task_id: task.task_id, name: task.name, description: task.description, status: task.status } : null;
+}
+
+function snapshotChanges(eventItems, latest, tasks, cursor) {
+  const activeTasks = new Map(tasks.filter((task) => task.status === "active").map((task) => [task.task_id, task]));
+  const candidates = cursor
+    ? eventsAfter(eventItems, cursor).map(({ event }) => event)
+    : [...activeTasks.keys()].flatMap((taskId) => Object.values(latest.get(taskId) || {}));
+  return candidates
+    .filter((event) => activeTasks.has(event.task_id) && LEAD_WAKE_STATES.has(event.state))
+    .sort((a, b) => a.observed_at.localeCompare(b.observed_at) || a.task_id.localeCompare(b.task_id) || a.role.localeCompare(b.role) || a.sequence - b.sequence)
+    .map((event) => ({ ...event, task: changeTask(activeTasks.get(event.task_id)) }));
+}
+
 async function taskFiles(root) {
   const entries = await readdir(root, { withFileTypes: true });
   return entries.filter((entry) => entry.isFile() && entry.name.endsWith(".json") && !entry.name.includes(".tmp")).map((entry) => entry.name);
 }
 
-export async function snapshot(projectRoot = process.cwd(), includeArchived = false) {
+export async function snapshot(projectRoot = process.cwd(), includeArchived = false, cursor) {
   const root = await ensureStateRoot(projectRoot);
   const eventItems = await allEvents(root);
   const latest = await latestByTask(root, eventItems);
@@ -273,7 +293,7 @@ export async function snapshot(projectRoot = process.cwd(), includeArchived = fa
     tasks.push(taskSummary(task, latest.get(task.task_id) || {}));
   }
   tasks.sort((a, b) => a.task_id.localeCompare(b.task_id));
-  return { version: 1, state_root: root, tasks, cursor: cursorFor(eventItems) };
+  return { version: 1, state_root: root, tasks, changes: snapshotChanges(eventItems, latest, tasks, cursor), cursor: cursorFor(eventItems, cursor) };
 }
 
 export async function createTask(projectRoot, input) {

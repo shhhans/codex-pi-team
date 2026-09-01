@@ -58,9 +58,10 @@ authorization, completion evidence, or a communication channel.
 3. Run `<project-root>\pi-team.cmd start <absolute-contract-path>` explicitly.
    This manual command starts the persistent Executor-Reviewer pair; publishing
    the Blackboard lane alone never starts either role.
-4. Retain the Blackboard cursor and call `blackboard_watch` for new Agent
-   activity. Compare each activity with the current task description. Use
-   `report_to_lead`, the supervisor path, or paired intercom for correction.
+4. For explicit continuous supervision, retain the Blackboard cursor and call
+   `blackboard_watch` for new Agent activity. Compare each activity with the
+   current task description. Use `report_to_lead`, the supervisor path, or
+   paired intercom for correction.
 5. Register the current Codex Lead thread with `blackboard_register_lead` after
    `start`. Critical Agent states are delivered by the host wakeup adapter as
    concise follow-up prompts; acknowledge them only after the host creates the
@@ -96,6 +97,18 @@ resume roles for normal handoff, and do not reclaim either role early.
 Use `blackboard_snapshot`, `blackboard_watch`, or `blackboard_render` to inspect
 activity. An activity event, including `ready_for_acceptance`, is a prompt to
 inspect evidence; it is never sufficient proof by itself.
+
+When a Codex heartbeat performs a periodic check, call `blackboard_snapshot`
+with the cursor returned by the previous heartbeat. Inspect only its
+`changes`; the first call establishes a baseline from active tasks, and an
+empty `changes` list ends the heartbeat turn. Heartbeat changes are limited to
+`blocked`, `changes_requested`, `ready_for_review`, `ready_for_acceptance`, and
+`completed`. If changes exist, read the current contract, diff, and artifacts
+and continue the ordinary Lead acceptance or supervision flow. Keep the new
+cursor, and retry with the old cursor if the heartbeat fails. This is
+at-least-once observation: duplicate changes are safe. Heartbeat polling does
+not depend on `blackboard_watch`, Lead thread binding, App Server, or a wakeup
+bridge.
 
 ## Accept and close
 
