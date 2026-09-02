@@ -594,7 +594,12 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       executor: "EXECUTOR-001",
       reviewer: "REVIEWER-001",
     };
-    const initialPrompts = new Map(startRecords.map((record) => [record.role, record.args[record.args.length - 1]]));
+    const initialPrompts = new Map();
+    for (const record of startRecords) {
+      const promptArgument = record.args[record.args.length - 1];
+      assert.match(promptArgument, /^@/, `${record.role} must receive its initial prompt via Pi's @file argument`);
+      initialPrompts.set(record.role, await readFile(promptArgument.slice(1), "utf8"));
+    }
     for (const record of startRecords) {
       const prompt = initialPrompts.get(record.role);
       const delegationId = roleDelegations[record.role];
@@ -655,7 +660,9 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     assert.equal(researchRecords[0].args.includes("--no-skills"), true);
     assert.equal(researchRecords[0].args[researchRecords[0].args.indexOf("--tools") + 1], RESEARCHER_TOOLS.join(","));
     assert.equal(researchRecords[0].args.includes("--session-id"), false, "on-demand Researcher does not claim a persistent pair session");
-    const researchPrompt = researchRecords[0].args[researchRecords[0].args.length - 1];
+    const researchPromptArgument = researchRecords[0].args[researchRecords[0].args.length - 1];
+    assert.match(researchPromptArgument, /^@/, "Researcher must receive its initial prompt via Pi's @file argument");
+    const researchPrompt = await readFile(researchPromptArgument.slice(1), "utf8");
     assert.match(researchPrompt, /Context mode: research/);
     assert.match(researchPrompt, /Research question: /);
     assert.match(researchPrompt, /Recommended role reads: .*answer-research-question/);
@@ -683,8 +690,10 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       assert.equal(record.args.includes("--session-id"), true, "resume must bind the persisted session ID and create it if the initial launch failed before session creation");
       assert.equal(record.args.includes("--session"), false);
       assert.equal(record.args.includes("--no-extensions"), true);
-      const prompt = record.args[record.args.length - 1];
-      assert.doesNotMatch(prompt, /^-/, `${record.role} resume prompt must not begin with a CLI option marker`);
+      const promptArgument = record.args[record.args.length - 1];
+      assert.match(promptArgument, /^@/, `${record.role} resume prompt must use Pi's @file argument`);
+      const prompt = await readFile(promptArgument.slice(1), "utf8");
+      assert.doesNotMatch(promptArgument, /^-/, `${record.role} resume prompt must not begin with a CLI option marker`);
       assert.match(prompt, /Context mode: resume/);
       assert.match(prompt, /Resume rule: preserve the existing task scope/);
       assert.doesNotMatch(prompt, /Recommended common reads:/, "resume must not repeat the shared context map");

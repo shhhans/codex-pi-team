@@ -365,7 +365,7 @@ function Snapshot-Contract([string]$Path,[string]$TaskId) {
   Copy-Item -LiteralPath $Path -Destination $snapshot -Force
   return $snapshot
 }
-function RoleArguments([string]$Role,[string]$InitialPrompt,[string]$SessionId) {
+function RoleArguments([string]$Role,[string]$InitialPromptFile,[string]$SessionId) {
   $tools = @{
     researcher = 'read,grep,find,ls,write,web_search,fetch_content,get_search_content,source_check,intercom,blackboard_update'
     executor = 'read,grep,find,ls,bash,edit,write,intercom,blackboard_update'
@@ -385,8 +385,19 @@ function RoleArguments([string]$Role,[string]$InitialPrompt,[string]$SessionId) 
   $args = @('--approve','--name',$Role,'--no-extensions','--no-skills','--tools',$tools[$Role],'--skill',$skill,'--append-system-prompt',$roleFile,'--extension',$intercom,'--extension',$roleExtension,'--extension',$blackboardExtension)
   if ($Role -eq 'researcher') { $args += @('--extension',(Join-Path (Get-PiAgentDir) 'npm/node_modules/pi-web-access/index.ts')) }
   if ($SessionId) { $args += @('--session-id',$SessionId) }
-  if ($InitialPrompt) { $args += $InitialPrompt }
+  # Pi expands an @file argument after Windows has completed command-line
+  # parsing. Passing a JSON-bearing prompt directly through pi.cmd loses its
+  # embedded double quotes; use a task-private prompt file to preserve the
+  # exact Lead contract text.
+  if ($InitialPromptFile) { $args += "@$InitialPromptFile" }
   return $args
+}
+function Write-RolePrompt([string]$TaskId,[string]$Role,[string]$LaunchId,[string]$Prompt) {
+  $directory = Join-Path (StateRoot) 'prompts'
+  New-Item -ItemType Directory -Force -Path $directory | Out-Null
+  $path = Join-Path $directory "$TaskId-$Role-$LaunchId.md"
+  Set-Content -LiteralPath $path -Value $Prompt -Encoding UTF8
+  return $path
 }
 function Launch-Role($State,[string]$Role,[string]$Prompt,[string]$SessionId,[bool]$Resume=$false) {
   $pi = if ($env:PI_CMD) {$env:PI_CMD} else {'pi.cmd'}; $wt = if ($env:WT_CMD) {$env:WT_CMD} else {'wt.exe'}
@@ -397,7 +408,8 @@ function Launch-Role($State,[string]$Role,[string]$Prompt,[string]$SessionId,[bo
   # and creates it with that exact ID when absent.
   $sessionArgs = if ($Resume) { @('--session-id',$SessionId) } else { @() }
   $roleSession = if ($Resume) { '' } else { $SessionId }
-  $args=@('-d',$State.worktree,$pi) + $sessionArgs + @(RoleArguments $Role $Prompt $roleSession)
+  $promptFile = Write-RolePrompt $State.task_id $Role $launchId $Prompt
+  $args=@('-d',$State.worktree,$pi) + $sessionArgs + @(RoleArguments $Role $promptFile $roleSession)
   $proc=Start-RoleProcess $wt $args $State.worktree $State.task_id $Role $State.sessions.$Role.agent_id $State.worktree $State.scope_id $launchId
   $State.sessions.$Role | Add-Member -NotePropertyName launcher_pid -NotePropertyValue $proc.Id -Force; $State.sessions.$Role | Add-Member -NotePropertyName launcher_started_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; Write-State $State
   $runtime=Wait-RoleReady $State $Role $launchId
