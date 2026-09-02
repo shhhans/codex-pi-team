@@ -56,7 +56,7 @@ const EVENT_FIELD_CONTRACTS = new Map([
 
 // This is deliberately the single role-facing protocol description. Role
 // prompts name the event they need to send, but never duplicate field lists or
-// wire mechanics: the registered `intercom` tool is authoritative.
+// wire mechanics: the registered `pi_team_intercom` tool is authoritative.
 export function structuredIntercomToolDescription(role, taskId) {
   const eventTypes = ROLE_EVENT_TYPES.get(role) ?? [];
   const targetRoles = [...(BOUNDED_PEERS.get(role) ?? [])];
@@ -80,7 +80,7 @@ export const RESEARCHER_CAPABILITIES = new Set([
   "fetch_content",
   "get_search_content",
   "source_check",
-  "intercom",
+  "pi_team_intercom",
   "blackboard_update",
 ]);
 // Architectural verbs used by the pre-flight heuristic in validateResearchBody.
@@ -116,7 +116,7 @@ export function makeEnvelope({ id, correlationId = id, kind, subject, body, plan
   ].join("\n");
 }
 
-// The roles submit this JSON event to intercom.  Wire concerns stay here: the
+// The roles submit this JSON event to pi_team_intercom. Wire concerns stay here: the
 // runtime owns UUID generation, envelope construction, and base64url encoding.
 export function makeStructuredEnvelope(text, taskId) {
   const structured = parseStructuredEvent(text, taskId);

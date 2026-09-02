@@ -140,9 +140,9 @@ function Write-State($State) { $p = Join-Path (StateRoot) "$($State.task_id).jso
 function New-Id { [guid]::NewGuid().ToString() }
 function Get-RoleCapabilities([string]$Role) {
   $capabilities = @{
-    researcher = @('read','grep','find','ls','write','web_search','fetch_content','get_search_content','source_check','intercom','blackboard_update')
-    executor = @('read','grep','find','ls','bash','edit','write','intercom','blackboard_update')
-    reviewer = @('read','grep','find','ls','bash','edit','write','intercom','blackboard_update')
+    researcher = @('read','grep','find','ls','write','web_search','fetch_content','get_search_content','source_check','pi_team_intercom','blackboard_update')
+    executor = @('read','grep','find','ls','bash','edit','write','pi_team_intercom','blackboard_update')
+    reviewer = @('read','grep','find','ls','bash','edit','write','pi_team_intercom','blackboard_update')
   }
   if (-not $capabilities.ContainsKey($Role)) { Fail "unknown Pi Team role: $Role" }
   return @($capabilities[$Role])
@@ -152,7 +152,13 @@ function Assert-RelativeArtifactPath([string]$Path,[string]$Field) {
 }
 function Assert-DelegationCapabilities($Delegation) {
   $role = [string]$Delegation.role; $available = Get-RoleCapabilities $role
-  foreach ($capability in @($Delegation.required_capabilities)) { if ($available -notcontains [string]$capability) { Fail "delegation $($Delegation.id) requires capability '$capability' unavailable to role $role" } }
+  foreach ($capability in @($Delegation.required_capabilities)) {
+    # Historical frozen contracts named the Pi Team wrapper `intercom`.
+    # Preserve their lifecycle readability; launches expose only the new,
+    # non-conflicting pi_team_intercom tool.
+    $effective = if ([string]$capability -eq 'intercom') { 'pi_team_intercom' } else { [string]$capability }
+    if ($available -notcontains $effective) { Fail "delegation $($Delegation.id) requires capability '$capability' unavailable to role $role" }
+  }
 }
 function Parse-Contract([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { Fail "contract not found: $Path" }
@@ -367,9 +373,9 @@ function Snapshot-Contract([string]$Path,[string]$TaskId) {
 }
 function RoleArguments([string]$Role,[string]$InitialPromptFile,[string]$SessionId) {
   $tools = @{
-    researcher = 'read,grep,find,ls,write,web_search,fetch_content,get_search_content,source_check,intercom,blackboard_update'
-    executor = 'read,grep,find,ls,bash,edit,write,intercom,blackboard_update'
-    reviewer = 'read,grep,find,ls,bash,edit,write,intercom,blackboard_update'
+    researcher = 'read,grep,find,ls,write,web_search,fetch_content,get_search_content,source_check,pi_team_intercom,blackboard_update'
+    executor = 'read,grep,find,ls,bash,edit,write,pi_team_intercom,blackboard_update'
+    reviewer = 'read,grep,find,ls,bash,edit,write,pi_team_intercom,blackboard_update'
   }
   $skills = @{
     researcher = 'answer-research-question'

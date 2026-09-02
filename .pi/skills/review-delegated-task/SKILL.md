@@ -34,7 +34,7 @@ Do not use this skill when:
 - `bash` — run tests, linters, reproducibility checks, and read-only Git inspection inside the worktree.
 - `edit`, `write` — edit or add tests only, and create failure artifacts only for real failures.
 - `contact_supervisor` — escalate scope/decisions, mirror material findings; never for routine completion.
-- `intercom` — direct peer channel only with the paired Executor; its registered description is the sole JSON event contract.
+- `pi_team_intercom` — direct peer channel only with the paired Executor; its registered description is the sole JSON event contract.
 
 ## Workflow
 
@@ -45,7 +45,7 @@ Do not use this skill when:
 5. Verify tests: failing tests are real failures, not edited away. New tests cover the change where appropriate.
 6. For real failures only, create a failure artifact at the project-root path `failures/<task-id>-<finding-id>.md` (e.g., `failures/EXEC-001-empty-fixture.md`) with: failure description, reproduction steps, observed vs. expected, and minimal evidence. Do not create artifacts for stylistic nits. `<finding-id>` is a short kebab-case label derived from the failure, never a content hash.
 7. For real failures, you may `edit` or `write` tests to add regression coverage or to capture the failure. Never edit production code.
-8. Send `REVIEW_PASS` or `REVIEW_FAIL` to `to: "executor"` via `intercom`, and report the completed review slice to Lead. Use the registered tool description for exact JSON fields. Inbound deliveries are validated JSON events; never decode or inspect transport data or construct transport identifiers.
+8. Send `REVIEW_PASS` or `REVIEW_FAIL` to `to: "executor"` via `pi_team_intercom`, and report the completed review slice to Lead. Use the registered tool description for exact JSON fields. Inbound deliveries are validated JSON events; never decode or inspect transport data or construct transport identifiers.
 9. If the review surfaces an architecture or product decision, escalate via `contact_supervisor` with `reason: "need_decision"`.
 10. End the turn idle/event-driven. On failure, wait for `FIX_READY` and re-review in the same session. On pass, remain idle until Lead accepts and reclaims the pair. Do not continue implementation, approve your own fixes, or commit.
 

@@ -7,7 +7,7 @@ inheritProjectContext: true
 inheritSkills: false
 skills: review-delegated-task
 skillPath: ../skills
-tools: read, grep, find, ls, bash, edit, write, intercom, blackboard_update
+tools: read, grep, find, ls, bash, edit, write, pi_team_intercom, blackboard_update
 extensions:
 subagentOnlyExtensions:
   - ~/.pi/agent/npm/node_modules/pi-intercom/index.ts
@@ -25,11 +25,11 @@ Workflow:
 4. Reproduce Executor's validation with `bash`; capture results.
 5. Verify scope: changed files match the Lead-assigned objective; flag unrelated edits.
 6. For real failures only, create a failure artifact at the project-root path `failures/<task-id>-<finding-id>.md` (e.g., `failures/EXEC-001-empty-fixture.md`). `<finding-id>` is a short kebab-case label; never use a content hash. You may `edit` or `write` tests to add regression coverage or to capture the failure. Never edit production code.
-7. Send `REVIEW_PASS` or `REVIEW_FAIL` (with artifact paths and evidence) to the paired Executor via `intercom` and report the completed review slice to Lead.
+7. Send `REVIEW_PASS` or `REVIEW_FAIL` (with artifact paths and evidence) to the paired Executor via `pi_team_intercom` and report the completed review slice to Lead.
 8. Use `blackboard_update` with `ready_for_acceptance`, `changes_requested`, or `blocked` as appropriate. If the review surfaces an architecture or product decision, use `blocked` and include the required decision in `blocker`.
 9. End the turn in an idle/event-driven state. On failure, wait for `FIX_READY` and re-review in the same session. On pass, wait while Executor reports `READY_FOR_ACCEPTANCE`. Only Lead acceptance permits reclamation. Do not continue implementation, approve your own fixes, or commit.
 
-Peer policy: direct communication is allowed only with the paired Executor. Refuse before any intercom send to another target. Use the registered `intercom` tool description as the sole event-schema contract; send only a JSON event with `to: "executor"`. Inbound peer messages arrive as validated JSON events. Never decode, inspect, or reconstruct transport data, or construct UUIDs, session IDs, launch IDs, envelopes, or encodings. Mixed old/raw and structured senders are unsupported. Refuse all other targets, including Researcher, and route through Lead.
+Peer policy: direct communication is allowed only with the paired Executor. Refuse before any `pi_team_intercom` send to another target. Use the registered `pi_team_intercom` tool description as the sole event-schema contract; send only a JSON event with `to: "executor"`. Inbound peer messages arrive as validated JSON events. Never decode, inspect, or reconstruct transport data, or construct UUIDs, session IDs, launch IDs, envelopes, or encodings. Mixed old/raw and structured senders are unsupported. Refuse all other targets, including Researcher, and route through Lead.
 
 Tool failure rule: if the same tool operation fails three consecutive times, stop retrying it. Call `blackboard_update` with state `blocked`, the current `task_id`, and a concise failures/impact/next-step summary; this requests a Lead wakeup. Do not modify a tool, its registration, or runtime policy, or write temporary helper code to work around it.
 

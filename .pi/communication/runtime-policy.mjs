@@ -121,7 +121,11 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], lis
       await auditSafely({ direction: "supervisor", outcome: "allowed", reason });
       return undefined;
     }
-    if (event.toolName !== "intercom") return undefined;
+    if (event.toolName === "intercom") {
+      await auditSafely({ direction: "outbound", outcome: "refused", reason: "native-intercom-disabled" });
+      return { block: true, reason: "Pi Team roles must use pi_team_intercom; native intercom is transport-only" };
+    }
+    if (event.toolName !== "pi_team_intercom") return undefined;
     const action = event.input?.action;
     if (SAFE_INTERCOM_ACTIONS.has(action)) return undefined;
     if (action !== "send") {
@@ -366,7 +370,7 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], lis
   }
 
   function onToolResult(event) {
-    if (event?.toolName !== "intercom") return;
+    if (event?.toolName !== "pi_team_intercom") return;
     const action = event.input?.action;
     if (action !== "list" && action !== "list-cwd") return;
     const sessions = event.sessions ?? event.result?.details?.sessions ?? event.result?.sessions;

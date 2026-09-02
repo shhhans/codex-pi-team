@@ -8,9 +8,9 @@ import { spawnSync } from "node:child_process";
 import { appendAgentEvent } from "../plugins/agent-blackboard/server/blackboard-core.mjs";
 const REPO = process.cwd();
 const SKILL_NAMES = ["answer-research-question", "execute-delegated-task", "review-delegated-task"];
-const RESEARCHER_TOOLS = ["read", "grep", "find", "ls", "write", "web_search", "fetch_content", "get_search_content", "source_check", "intercom", "blackboard_update"];
-const EXECUTOR_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom", "blackboard_update"];
-const REVIEWER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom", "blackboard_update"];
+const RESEARCHER_TOOLS = ["read", "grep", "find", "ls", "write", "web_search", "fetch_content", "get_search_content", "source_check", "pi_team_intercom", "blackboard_update"];
+const EXECUTOR_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "pi_team_intercom", "blackboard_update"];
+const REVIEWER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "pi_team_intercom", "blackboard_update"];
 const DEEP_RESEARCH_TOOLS = ["research_run", "deep_research_task", "deep_research_review", "research_synthesis_input", "research_report_artifact"];
 const ACTIVE_ROLES = ["researcher", "executor", "reviewer"];
 const LEGACY_ROLES = ["architect", "critic", "engineer"];
@@ -106,7 +106,7 @@ test("active role definitions exist with valid frontmatter and required tools", 
     assert.equal(fm.inheritSkills, "false", `${role} must set inheritSkills: false`);
     assert.equal(fm.skillPath, "../skills", `${role} must use the project-private skill path`);
     assert.equal(fm.extensions, "", `${role} must disable ambient extensions`);
-    assert.match(text, /^tools:.*\bintercom\b/m, `${role} must include intercom for paired peer communication`);
+    assert.match(text, /^tools:.*\bpi_team_intercom\b/m, `${role} must include the structured paired-peer tool`);
     assert.match(text, /Peer policy:/, `${role} must declare a peer policy`);
     assert.match(text, /refuse before/i, `${role} must refuse before intercom send/ask`);
     assert.match(text, /Tool failure rule:.*three consecutive times/s, `${role} must escalate a repeated tool failure`);
@@ -325,14 +325,14 @@ test("Executor and Reviewer use a persistent idle review-fix lifecycle without s
     ".pi/skills/answer-research-question/SKILL.md",
   ]) {
     const text = await readFile(join(REPO, path), "utf8");
-    assert.match(text, /sole (event-)?schema contract|sole JSON event contract|exact JSON (fields|contract) from `intercom`/i,
+    assert.match(text, /sole (event-)?schema contract|sole JSON event contract|exact JSON (fields|contract) from `pi_team_intercom`/i,
       `${path} must defer event field details to the registered intercom tool`);
     assert.doesNotMatch(text, /body_encoding|agent-team\/v1 envelope|base64url body/i,
       `${path} must not duplicate transport-envelope instructions`);
   }
 
   const roleExtension = await readFile(join(REPO, ".pi/communication/pi-policy-extension.ts"), "utf8");
-  assert.match(roleExtension, /name: "intercom"/);
+  assert.match(roleExtension, /name: "pi_team_intercom"/);
   assert.match(roleExtension, /structuredIntercomToolDescription/);
   assert.match(roleExtension, /TEAM_TRANSPORT_TYPE/);
 });

@@ -58,10 +58,11 @@ acceptance record.
 
 ## Common communication rules
 
-Use `intercom` for asynchronous peer communication:
+Use `pi_team_intercom` for asynchronous peer communication. Native `intercom`
+is transport-only and is not an active role tool:
 
 1. Send a validated JSON event to the allowed peer **role name** with the
-   direct asynchronous `intercom send` action; runtime resolves the unique
+   direct asynchronous `pi_team_intercom send` action; runtime resolves the unique
    same-task live session and constructs the wire envelope.
 2. Continue independent work after sending; do not use blocking `ask` for
    asynchronous work.

@@ -75,7 +75,7 @@ lifecycle; Pi roles can only append their own injected-identity activity with
 
 The Blackboard is not an authorization or communication bus. Use
 `blackboard_update` for Lead-facing decisions and correction, and use the
-registered Pi Team `intercom` tool only for paired peer events.
+registered Pi Team `pi_team_intercom` tool only for paired peer events.
 The plugin supplies MCP tools for task management, snapshots, cursor-based
 watching, Lead thread registration, structured wakeup listing/acknowledgement,
 and a task-lane UI that requests PiP and falls back inline. For periodic Codex

@@ -35,18 +35,18 @@ Do not use this skill when:
 - `bash` — run tests, formatters, and verification commands inside the worktree.
 - `edit`, `write` — change code and persist artifacts only inside the worktree.
 - `blackboard_update` — publish task status and request a Lead wakeup with `blocked`, `changes_requested`, or `ready_for_review` when Lead attention is required.
-- `intercom` — direct peer channel only with the paired Researcher and Reviewer. Its registered description is the sole JSON event contract; never hand-build transport data.
+- `pi_team_intercom` — direct peer channel only with the paired Researcher and Reviewer. Its registered description is the sole JSON event contract; never hand-build transport data.
 
 ## Workflow
 
 1. Confirm the Lead task ID, worktree path, and scope before any change. Refuse if any are missing.
 2. `cd` into the worktree and inspect the assigned files with `read`, `grep`, `find`, `ls`.
-3. When facts, compatibility, test design, or an implementation boundary are uncertain, send one bounded `RESEARCH_REQUEST` to the paired Researcher before guessing. Read the exact JSON contract from `intercom` at call time.
+3. When facts, compatibility, test design, or an implementation boundary are uncertain, send one bounded `RESEARCH_REQUEST` to the paired Researcher before guessing. Read the exact JSON contract from `pi_team_intercom` at call time.
 4. Continue independent work after sending; do not block or poll indefinitely. When a `RESEARCH_RESULT` or `RESEARCH_BLOCKED` arrives, inspect it and record its impact in `implementation_notes/<task-id>.md`.
 5. Make the smallest coherent change that satisfies the scope. Follow existing project conventions; do not refactor unrelated code.
 6. Run the project's validation commands (`bash`) appropriate to the change set. Capture pass/fail evidence.
 7. Persist `implementation_notes/<task-id>.md` at the worktree root with: Lead task ID, current slice state, files changed, research requests/results or blockers, validation performed, and remaining risks. Use `<task-id>` exactly as Lead supplied it.
-8. Send `READY_FOR_REVIEW` (or `FIX_READY`) to `to: "reviewer"`; obtain the exact event fields from the `intercom` tool description.
+8. Send `READY_FOR_REVIEW` (or `FIX_READY`) to `to: "reviewer"`; obtain the exact event fields from the `pi_team_intercom` tool description.
 9. Report the completed slice to Lead and end the turn idle/event-driven. Remain allocated for `REVIEW_FAIL`, fixes, re-review, and acceptance. Do not self-approve or commit unless Lead explicitly authorized it.
 ## Boundaries
 

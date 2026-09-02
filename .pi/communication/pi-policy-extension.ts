@@ -77,14 +77,15 @@ export function installRolePolicy(pi: ExtensionAPI, role: string, auditDir?: str
   (pi.events as any).on("intercom:extension-registry-ready", registerIntercomChannel);
   pi.on("session_start", registerIntercomChannel);
   registerIntercomChannel();
-  // This same-name registration is loaded after native pi-intercom. It owns
-  // the role-visible contract while the native package remains the transport.
+  // Pi rejects duplicate tool names across extensions, so the role-visible
+  // contract has its own name. The native `intercom` tool remains loaded only
+  // to provide the underlying capability channel and is not role-active.
   pi.registerTool({
-    name: "intercom",
+    name: "pi_team_intercom",
     label: "Pi Team Intercom",
     description: structuredIntercomToolDescription(role, process.env.PI_TEAM_TASK_ID),
     promptSnippet: "Send a validated Pi Team JSON event to a paired role.",
-    promptGuidelines: ["Use the Pi Team intercom JSON contract in this tool description; never construct transport envelopes."],
+    promptGuidelines: ["Use this tool's JSON contract; never construct transport envelopes."],
     parameters: Type.Object({
       action: Type.Literal("send"),
       to: Type.String(),

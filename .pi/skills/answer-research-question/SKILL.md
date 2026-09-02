@@ -27,11 +27,11 @@ Do not use this skill when:
 - `web_search`, `fetch_content`, `get_search_content`, `source_check` — web discovery and source validation.
 - `write` — persist the research artifact only.
 - `blackboard_update` — publish material findings, blockers, and scope decisions to Lead; a `blocked` state requests a Lead wakeup.
-- `intercom` — direct peer channel only with Executor; its registered description is the sole JSON event contract.
+- `pi_team_intercom` — direct peer channel only with Executor; its registered description is the sole JSON event contract.
 
 ## Workflow
 
-1. Read the current Lead task or runtime-projected Executor request. Capture its bounded objective, allowed paths, artifact reference, capabilities, and constraints. Validate scope before web access; for a refusal, use `RESEARCH_BLOCKED` according to the registered `intercom` tool description.
+1. Read the current Lead task or runtime-projected Executor request. Capture its bounded objective, allowed paths, artifact reference, capabilities, and constraints. Validate scope before web access; for a refusal, use `RESEARCH_BLOCKED` according to the registered `pi_team_intercom` tool description.
 2. State the question back in one sentence before searching so scope is explicit.
 3. Inspect the local project with `ls`, `find`, `grep`, `read` only for facts the question requires; do not scan the whole workspace.
 4. Use `web_search` to discover candidate sources; use `fetch_content` / `get_search_content` to retrieve and `source_check` to validate provenance.
@@ -43,7 +43,7 @@ Do not use this skill when:
    - Unresolved contradictions or gaps.
    - Confidence and any caveats.
 7. Write the artifact with `write` to the requested path. Default location is `research/<task-id>-<topic-slug>.md`; the slug is a unique, human-readable kebab-case topic label with no spaces or path separators. Do not overwrite another request's artifact unless explicitly instructed, and do not generate a task ID, UUID, or content hash.
-8. Send `RESEARCH_RESULT` to `to: "executor"`; runtime constructs transport. Read the exact JSON fields from `intercom`, then publish material findings with `blackboard_update`.
+8. Send `RESEARCH_RESULT` to `to: "executor"`; runtime constructs transport. Read the exact JSON fields from `pi_team_intercom`, then publish material findings with `blackboard_update`.
 9. If the request cannot safely proceed, send `RESEARCH_BLOCKED` to the paired Executor using the tool contract and report `blocked` to Lead with the reason and next decision needed.
 10. After each request, update Blackboard to `waiting` and end the turn idle/event-driven. Do not mark the session `completed` after one request and do not exit or stop waiting. Only explicit Lead completion/reclaim ends the Researcher session.
 ## Boundaries

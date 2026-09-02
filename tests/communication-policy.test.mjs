@@ -123,7 +123,7 @@ function makeContactSupervisorEvent(reason) {
 function makeIntercomEvent(action, recipient, message) {
   if (action === "send" && typeof message === "string" && message.startsWith("agent-team/v1")) {
     let parsed;
-    try { parsed = parseEnvelope(message); } catch { return { toolName: "intercom", input: { action, to: recipient.match(/--(researcher|executor|reviewer|lead)(?:--|$)/)?.[1] ?? recipient, message } }; }
+    try { parsed = parseEnvelope(message); } catch { return { toolName: "pi_team_intercom", input: { action, to: recipient.match(/--(researcher|executor|reviewer|lead)(?:--|$)/)?.[1] ?? recipient, message } }; }
     const taskId = process.env.PI_TEAM_TASK_ID ?? recipient.match(/^pi-team--(.+?)--/)?.[1] ?? "TEST";
     let event;
     try { event = JSON.parse(parsed.body); } catch {
@@ -133,7 +133,7 @@ function makeIntercomEvent(action, recipient, message) {
     recipient = recipient.match(/--(researcher|executor|reviewer|lead)(?:--|$)/)?.[1] ?? recipient;
   }
   return {
-    toolName: "intercom",
+    toolName: "pi_team_intercom",
     input: { action, to: recipient, message },
   };
 }
@@ -276,19 +276,18 @@ test("runtime policy tool_call blocks every non-allowed supervisor reason for ev
   }
 });
 
-test("intercom discovery actions list/list-cwd/status/pending are allowed; ask/reply/cancel are denied", async (t) => {
+test("pi_team_intercom permits send only and native intercom is denied", async (t) => {
   for (const role of ACTIVE_ROLE_NAMES) {
     const { auditDir, replyStoreDir } = freshRuntimePaths(t);
     const policy = createRoleRuntimePolicy(role, { auditDir, replyStoreDir });
-    for (const action of [...SAFE_INTERCOM_ACTIONS]) {
-      const result = await policy.onToolCall(makeIntercomEvent(action, "executor", undefined));
-      assert.equal(result, undefined, `${role} must be allowed discovery action=${action}`);
-    }
     for (const action of ["ask", "reply", "cancel"]) {
       const result = await policy.onToolCall(makeIntercomEvent(action, "executor", undefined));
       assert.ok(result && result.block === true, `${role} must be blocked from peer action=${action}`);
       assert.match(result.reason, /asynchronous intercom send only/);
     }
+    const native = await policy.onToolCall({ toolName: "intercom", input: { action: "send", to: "executor", message: "ignored" } });
+    assert.equal(native?.block, true, `${role} must reject native intercom`);
+    assert.match(native.reason, /pi_team_intercom/);
   }
 });
 
@@ -570,8 +569,8 @@ test("Issue #3 policy constants export the bounded research envelope surface", (
     "find",
     "get_search_content",
     "grep",
-    "intercom",
     "ls",
+    "pi_team_intercom",
     "read",
     "source_check",
     "web_search",
@@ -1366,7 +1365,7 @@ test("structured send rejects raw envelopes, session IDs, and ambiguous peers be
   try {
     const policy = createRoleRuntimePolicy("executor", { auditDir, replyStoreDir, listPeerSessions: async () => [] });
     const raw = makeEnvelope({ id: "12121212-1212-4121-8121-121212121212", kind: "progress", subject: "raw", body: "no" });
-    const rawResult = await policy.onToolCall({ toolName: "intercom", input: { action: "send", to: "reviewer", message: raw } });
+    const rawResult = await policy.onToolCall({ toolName: "pi_team_intercom", input: { action: "send", to: "reviewer", message: raw } });
     assert.ok(rawResult?.block);
     assert.match(rawResult.reason, /structured-message-invalid-json/);
     const idResult = await policy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-012--reviewer--old", JSON.stringify({ type: "READY_FOR_REVIEW", task_id: "ISSUE-012", worktree: "D:/task", implementation_notes_path: "implementation_notes/x.md" })));
