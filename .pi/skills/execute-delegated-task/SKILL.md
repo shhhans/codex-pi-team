@@ -37,6 +37,14 @@ Do not use this skill when:
 - `blackboard_update` — publish task status and request a Lead wakeup with `blocked`, `changes_requested`, or `ready_for_review` when Lead attention is required.
 - `pi_team_intercom` — direct peer channel only with the paired Researcher and Reviewer. Its registered description is the sole JSON event contract; never hand-build transport data.
 
+### Windows `bash` tool contract
+
+On this Pi Team Windows runtime, the builtin tool named `bash` runs its command
+through **PowerShell**, not Bash or `sh`. Use PowerShell syntax: `Get-ChildItem
+-Force` (or the `ls` tool) rather than `ls -la`, semicolons rather than `&&`,
+and `$env:NAME` rather than `$NAME`. Prefer `read`, `grep`, `find`, and `ls`
+for inspection; use `bash` only when a command is actually needed.
+
 ## Workflow
 
 1. Confirm the Lead task ID, worktree path, and scope before any change. Refuse if any are missing.
