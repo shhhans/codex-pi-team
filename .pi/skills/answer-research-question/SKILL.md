@@ -43,7 +43,7 @@ Do not use this skill when:
    - Unresolved contradictions or gaps.
    - Confidence and any caveats.
 7. Write the artifact with `write` to the requested path. Default location is `research/<task-id>-<topic-slug>.md`; the slug is a unique, human-readable kebab-case topic label with no spaces or path separators. Do not overwrite another request's artifact unless explicitly instructed, and do not generate a task ID, UUID, or content hash.
-8. Send a JSON `RESEARCH_RESULT` event to `to: "executor"`; runtime constructs the valid envelope. Do not use `list-cwd`, a session/launch ID, or a hand-built raw body. The body schema is:
+8. Send a JSON `RESEARCH_RESULT` event to `to: "executor"`; runtime constructs the valid envelope. Inbound deliveries are already validated JSON events; never decode or inspect envelope/base64 transport data. Do not use `list-cwd`, a session/launch ID, or a hand-built raw body. The body schema is:
 
    - `type` (literal `"RESEARCH_RESULT"`),
    - `task_id`, `delegation_id`, `request_id` (mirror the original request; `request_id` must equal the request's `request_id` and the envelope `correlation_id`),

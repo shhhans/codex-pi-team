@@ -39,11 +39,13 @@ blocks disallowed peer sends and blocks peer `ask`, `reply`, and
 
 `PolicyReceiver` and `createRoleRuntimePolicy` apply the inbound gate
 before an intercom entry reaches model context. Sender identity comes
-from transport metadata rather than message text. An unauthorized entry
-is removed without aborting the legitimate run and without reading or
-writing the reply store. An authorized entry is retained. Completed
-reply replay remains available through `receiveAndReplay`; `onContext`
-does not create eager pending reservations.
+from transport metadata rather than message text. An unauthorized or invalid
+entry is removed without aborting the legitimate run and without reading or
+writing the reply store. An authorized entry is replaced by a `pi_team_event`
+whose content is the validated JSON event; the raw envelope, `body_encoding`,
+and base64url body are never present in model context. Completed reply replay
+remains available through `receiveAndReplay`; `onContext` does not create eager
+pending reservations.
 
 Routine peer results need not be relayed through Lead. Material risk, changed
 downstream assumptions, and decision requests are published through

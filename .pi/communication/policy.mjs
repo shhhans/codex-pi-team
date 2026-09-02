@@ -86,6 +86,24 @@ export function makeEnvelope({ id, correlationId = id, kind, subject, body, plan
 // The roles submit this JSON event to intercom.  Wire concerns stay here: the
 // runtime owns UUID generation, envelope construction, and base64url encoding.
 export function makeStructuredEnvelope(text, taskId) {
+  const structured = parseStructuredEvent(text, taskId);
+  return {
+    event: structured.event,
+    envelope: makeEnvelope({
+      id: randomUUID(),
+      correlationId: structured.correlationId,
+      kind: structured.kind,
+      subject: `${structured.event.type} ${taskId}`,
+      body: JSON.stringify(structured.event),
+      artifactPath: structured.event.artifact_path,
+    }),
+  };
+}
+
+// Validate and normalize the role-facing event without touching the wire.
+// Both outbound construction and inbound projection use this exact gate, so a
+// role can only ever observe the same JSON event shape it is allowed to send.
+export function parseStructuredEvent(text, taskId) {
   if (typeof text !== "string") throw new Error("structured-message-must-be-json");
   let event;
   try { event = JSON.parse(text); } catch { throw new Error("structured-message-invalid-json"); }
@@ -110,18 +128,7 @@ export function makeStructuredEnvelope(text, taskId) {
     correlationId = randomUUID();
   }
 
-  const subject = `${event.type} ${taskId}`;
-  return {
-    event,
-    envelope: makeEnvelope({
-      id: randomUUID(),
-      correlationId,
-      kind,
-      subject,
-      body: JSON.stringify(event),
-      artifactPath: event.artifact_path,
-    }),
-  };
+  return { event, kind, correlationId };
 }
 
 function validateLifecycleEvent(event) {
@@ -548,9 +555,10 @@ export function validateResearchBody(type, body) {
 // resolveTeamPeerRole check. It enforces:
 //   1. body.task_id === taskId (cross-task refusal)
 //   2. body.delegation_id ∈ allowedDelegations (cross-task refusal)
-//   3. artifact_path matches research/<task-id>-<slug>.md; slug is kebab-case
-//   4. required_capabilities is a non-empty subset of RESEARCHER_CAPABILITIES
-//      (researcher must not request bash/edit/Deep Research tools)
+//   3. request/result artifact_path matches research/<task-id>-<slug>.md;
+//      `RESEARCH_BLOCKED` has no artifact by design
+//   4. `RESEARCH_REQUEST` required_capabilities is a non-empty subset of
+//      RESEARCHER_CAPABILITIES (a result cannot retroactively request tools)
 // Returns { ok: true } or { ok: false, reason } where reason is a ≤512 char
 // string suitable for an audit row.
 export function authorizeResearchDelegation(body, { taskId, allowedDelegations = [] } = {}) {
@@ -560,11 +568,14 @@ export function authorizeResearchDelegation(body, { taskId, allowedDelegations =
   const delegationId = stringOrUndefined(body?.delegation_id);
   if (!delegationId) return { ok: false, reason: "research-delegation-id-missing" };
   if (!allowedDelegations.includes(delegationId)) return { ok: false, reason: `research-delegation-id-unknown:${delegationId}` };
-  const capabilities = stringArrayOrUndefined(body?.required_capabilities);
-  if (!capabilities || capabilities.length === 0) return { ok: false, reason: "research-required-capabilities-missing" };
-  for (const cap of capabilities) {
-    if (!RESEARCHER_CAPABILITIES.has(cap)) return { ok: false, reason: `research-capability-blocked:${cap}` };
+  if (body?.type === "RESEARCH_REQUEST") {
+    const capabilities = stringArrayOrUndefined(body?.required_capabilities);
+    if (!capabilities || capabilities.length === 0) return { ok: false, reason: "research-required-capabilities-missing" };
+    for (const cap of capabilities) {
+      if (!RESEARCHER_CAPABILITIES.has(cap)) return { ok: false, reason: `research-capability-blocked:${cap}` };
+    }
   }
+  if (body?.type === "RESEARCH_BLOCKED") return { ok: true };
   const artifactPath = stringOrUndefined(body?.artifact_path);
   if (!artifactPath) return { ok: false, reason: "research-artifact-path-missing" };
   const expectedPrefix = `research/${taskId}-`;

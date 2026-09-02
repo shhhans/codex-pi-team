@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   PolicyReceiver,
   makeStructuredEnvelope,
+  parseStructuredEvent,
   parseEnvelope,
   resolvePeerRole,
   resolveTeamPeerRole,
@@ -389,8 +390,11 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], lis
       }
       const transportId = message.details?.message?.id;
       const decisionKey = typeof transportId === "string" ? transportId : message;
-      let accepted = inboundDecisions.get(decisionKey);
+      const cachedDecision = inboundDecisions.get(decisionKey);
+      let accepted = cachedDecision?.accepted;
       let inboundReason;
+      let structured = cachedDecision?.structured;
+      let parsed = cachedDecision?.parsed;
       if (accepted === undefined) {
         const sender = normalizedRole(message.details?.from?.name);
         const text = message.details?.bodyText;
@@ -399,14 +403,28 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], lis
           inboundReason = !sender ? "unknown-sender" : "missing-message-body";
           await auditSafely({ direction: "inbound", outcome: "refused", reason: inboundReason });
         } else {
-          let parsed;
           try { parsed = parseEnvelope(text); } catch { parsed = undefined; }
+          try {
+            if (!parsed) throw new Error("structured-message-invalid-envelope");
+            const declaredEvent = JSON.parse(parsed.body);
+            structured = parseStructuredEvent(parsed.body, declaredEvent?.task_id);
+            if (parsed.kind !== structured.kind) throw new Error("structured-message-kind-mismatch");
+            if (parsed.subject !== `${structured.event.type} ${structured.event.task_id}`) throw new Error("structured-message-subject-mismatch");
+            if (RESEARCH_MESSAGE_TYPES.has(structured.event.type) && parsed.correlationId !== structured.correlationId) throw new Error("structured-message-correlation-mismatch");
+            if (!RESEARCH_MESSAGE_TYPES.has(structured.event.type) && structured.event.task_id !== process.env.PI_TEAM_TASK_ID) throw new Error("structured-message-task-id-mismatch");
+          } catch (error) {
+            accepted = false;
+            inboundReason = error instanceof Error ? error.message : "structured-message-invalid";
+          }
           // Authorization MUST precede every reply-store side effect
           // (read/reserve/write) so an unauthorized sender-to-recipient pair
           // never triggers a persistent lookup or creates a pending record
           // that could collide with a later legitimate send.
-          const authorization = receiver.receive({ sender, text });
-          if (!authorization.accepted) {
+          const authorization = accepted === false ? undefined : receiver.receive({ sender, text });
+          if (accepted === false) {
+            // The wire representation is deliberately not retained: malformed
+            // or old raw envelopes never reach role context.
+          } else if (!authorization.accepted) {
             accepted = false;
             inboundReason = authorization.reason ?? "duplicate-or-pending";
           } else {
@@ -415,7 +433,14 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], lis
             // the window are deduped by PolicyReceiver's in-memory DedupStore.
             const previous = parsed ? await replyStore.read(normalized, parsed.id) : undefined;
             if (previous?.status === "completed") {
-              kept.push({ ...message, customType: "intercom_replay", details: { ...message.details, bodyText: `REPLAY-OF:${parsed.id}\n${previous.reply}` } });
+              let replyEvent;
+              try { replyEvent = JSON.parse(previous.reply); } catch { replyEvent = { status: "stored_reply_available" }; }
+              kept.push({
+                role: "custom",
+                customType: "pi_team_replay",
+                content: JSON.stringify({ type: "PI_TEAM_REPLAY", task_id: process.env.PI_TEAM_TASK_ID, replay_of: parsed.id, event: structured.event, reply: replyEvent }),
+                details: { sender_role: sender, message_id: parsed.id, correlation_id: parsed.correlationId },
+              });
               changed = true;
               continue;
             }
@@ -440,9 +465,26 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], lis
           });
           if (!audited) accepted = false;
         }
-        inboundDecisions.set(decisionKey, accepted);
+        inboundDecisions.set(decisionKey, { accepted, structured, parsed });
       }
-      if (accepted) kept.push(message);
+      if (accepted) {
+        // Intercom's native extension supplies a raw `bodyText` wire
+        // envelope. Replace it rather than retaining it: exposing the wire
+        // body encourages roles to decode base64url and bypass the runtime's
+        // typed protocol. This is the only inbound model-facing projection.
+        kept.push({
+          role: "custom",
+          customType: "pi_team_event",
+          content: JSON.stringify(structured.event),
+          details: {
+            sender_role: normalizedRole(message.details?.from?.name),
+            message_id: parsed.id,
+            correlation_id: parsed.correlationId,
+            event: structured.event,
+          },
+        });
+        changed = true;
+      }
     }
     // Rejection must not abort an in-flight legitimate task. The policy removes
     // the untrusted message from model context; transport/session side effects

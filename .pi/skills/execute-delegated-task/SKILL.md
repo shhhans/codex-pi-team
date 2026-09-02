@@ -35,7 +35,7 @@ Do not use this skill when:
 - `bash` — run tests, formatters, and verification commands inside the worktree.
 - `edit`, `write` — change code and persist artifacts only inside the worktree.
 - `blackboard_update` — publish task status and request a Lead wakeup with `blocked`, `changes_requested`, or `ready_for_review` when Lead attention is required.
-- `intercom` — direct peer channel only with the paired Researcher and the paired Reviewer; refuse all other peers before `intercom send` or `ask`. Use the tool directly; do not hand-build envelopes or invoke `send.mjs` for routine sends.
+- `intercom` — direct peer channel only with the paired Researcher and the paired Reviewer; refuse all other peers before `intercom send` or `ask`. Use the tool directly; do not hand-build envelopes or invoke `send.mjs` for routine sends. Inbound deliveries are already validated JSON events; never decode or inspect envelope/base64 transport data.
 
 ## Workflow
 

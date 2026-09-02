@@ -121,6 +121,19 @@ function makeIntercomEvent(action, recipient, message) {
   };
 }
 
+function makeInboundStructuredEnvelope(id, event) {
+  const kind = event.type === "RESEARCH_REQUEST" ? "request"
+    : event.type === "RESEARCH_RESULT" ? "reply"
+      : event.type === "RESEARCH_BLOCKED" ? "error" : "progress";
+  return makeEnvelope({
+    id,
+    correlationId: event.request_id ?? id,
+    kind,
+    subject: `${event.type} ${event.task_id}`,
+    body: JSON.stringify(event),
+  });
+}
+
 test("policy.mjs exposes only the three active runtime roles and legacy role names are rejected", () => {
   assert.deepEqual([...ROLES].sort(), ["executor", "lead", "researcher", "reviewer"]);
   assert.deepEqual([...ACTIVE_ROLES].sort(), ["executor", "researcher", "reviewer"]);
@@ -265,6 +278,9 @@ test("intercom discovery actions list/list-cwd/status/pending are allowed; ask/r
 test("reviewer inbound reviewer<-researcher is denied before context; reviewer<-executor is accepted", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const reviewerPolicy = createRoleRuntimePolicy("reviewer", { auditDir, replyStoreDir });
+  const previousTaskId = process.env.PI_TEAM_TASK_ID;
+  process.env.PI_TEAM_TASK_ID = "INBOUND-001";
+  try {
   // (1) Researcher -> reviewer must be denied before context.
   const deniedInbound = {
     messages: [
@@ -274,7 +290,7 @@ test("reviewer inbound reviewer<-researcher is denied before context; reviewer<-
         details: {
           from: { name: "researcher" },
           message: { id: "11111111-1111-4111-8111-111111111111" },
-          bodyText: "agent-team/v1\nid: 11111111-1111-4111-8111-111111111111\ncorrelation_id: 11111111-1111-4111-8111-111111111111\nkind: request\nbody_encoding: base64url\nreferences: {}\nsubject: hi\nbody: YQ",
+          bodyText: makeInboundStructuredEnvelope("11111111-1111-4111-8111-111111111111", { type: "READY_FOR_REVIEW", task_id: "INBOUND-001", delegation_id: "EXECUTOR-INBOUND-001", worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" }),
         },
       },
     ],
@@ -284,7 +300,7 @@ test("reviewer inbound reviewer<-researcher is denied before context; reviewer<-
   assert.ok(deniedResult, "context hook must return a result for denied researcher -> reviewer inbound");
   const deniedTypes = (deniedResult.messages ?? []).map((m) => m.customType);
   assert.equal(deniedTypes.includes("intercom_message"), false, "researcher -> reviewer inbound must be filtered before context");
-  // (2) Executor -> reviewer must be accepted: onContext returns undefined when no message is filtered.
+  // (2) Executor -> reviewer is projected into a JSON event with no wire body.
   const acceptedInbound = {
     messages: [
       {
@@ -293,19 +309,28 @@ test("reviewer inbound reviewer<-researcher is denied before context; reviewer<-
         details: {
           from: { name: "executor" },
           message: { id: "22222222-2222-4222-8222-222222222222" },
-          bodyText: "agent-team/v1\nid: 22222222-2222-4222-8222-222222222222\ncorrelation_id: 22222222-2222-4222-8222-222222222222\nkind: progress\nbody_encoding: base64url\nreferences: {}\nsubject: hi\nbody: YQ",
+          bodyText: makeInboundStructuredEnvelope("22222222-2222-4222-8222-222222222222", { type: "READY_FOR_REVIEW", task_id: "INBOUND-001", delegation_id: "EXECUTOR-INBOUND-001", worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" }),
         },
       },
     ],
   };
   const acceptedCtx = { messages: acceptedInbound.messages };
   const acceptedResult = await reviewerPolicy.onContext(acceptedInbound, acceptedCtx);
-  assert.equal(acceptedResult, undefined, "executor -> reviewer inbound must be accepted (no filtering); onContext returns undefined when no message is removed");
+  assert.equal(acceptedResult.messages[0].customType, "pi_team_event");
+  assert.deepEqual(JSON.parse(acceptedResult.messages[0].content), { type: "READY_FOR_REVIEW", task_id: "INBOUND-001", delegation_id: "EXECUTOR-INBOUND-001", worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" });
+  assert.equal(JSON.stringify(acceptedResult.messages[0]).includes("base64"), false);
+  assert.equal(JSON.stringify(acceptedResult.messages[0]).includes("agent-team/v1"), false);
+  } finally {
+    if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
+  }
 });
 
 test("denied inbound reviewer<-researcher must not create a pending reply-store reservation; allowed executor->reviewer must be accepted", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const reviewerPolicy = createRoleRuntimePolicy("reviewer", { auditDir, replyStoreDir });
+  const previousTaskId = process.env.PI_TEAM_TASK_ID;
+  process.env.PI_TEAM_TASK_ID = "INBOUND-002";
+  try {
 
   // Build a structurally valid envelope that the policy will accept past
   // `parseEnvelope`, but with a sender (researcher) that PolicyReceiver.authorizePeer
@@ -351,16 +376,7 @@ test("denied inbound reviewer<-researcher must not create a pending reply-store 
   const { auditDir: acceptedAudit, replyStoreDir: acceptedReply } = freshRuntimePaths(t);
   const acceptedPolicy = createRoleRuntimePolicy("reviewer", { auditDir: acceptedAudit, replyStoreDir: acceptedReply });
   const acceptedId = "44444444-4444-4444-8444-444444444444";
-  const acceptedEnvelope = [
-    "agent-team/v1",
-    `id: ${acceptedId}`,
-    `correlation_id: ${acceptedId}`,
-    "kind: progress",
-    "body_encoding: base64url",
-    "references: {}",
-    "subject: hi",
-    "body: YQ",
-  ].join("\n");
+  const acceptedEnvelope = makeInboundStructuredEnvelope(acceptedId, { type: "READY_FOR_REVIEW", task_id: "INBOUND-002", delegation_id: "EXECUTOR-INBOUND-002", worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" });
   const acceptedInbound = {
     messages: [
       {
@@ -375,7 +391,7 @@ test("denied inbound reviewer<-researcher must not create a pending reply-store 
     ],
   };
   const acceptedResult = await acceptedPolicy.onContext(acceptedInbound, { messages: acceptedInbound.messages });
-  assert.equal(acceptedResult, undefined, "executor -> reviewer inbound must be accepted; onContext returns undefined when no message is filtered");
+  assert.equal(acceptedResult.messages[0].customType, "pi_team_event", "executor -> reviewer inbound must be exposed only as a structured event");
   // No reply-store file is required for an accepted inbound; the reservation
   // contract is enforced by read() at the next inbound. Either way, accepting
   // must not have written a file in this single-message scenario because
@@ -383,6 +399,9 @@ test("denied inbound reviewer<-researcher must not create a pending reply-store 
   const acceptedPath = join(acceptedReply, "reviewer", `${acceptedId}.json`);
   const acceptedExists = await stat(acceptedPath).then(() => true, () => false);
   assert.equal(acceptedExists, false, `accepted executor -> reviewer inbound must not persist a reply-store file from onContext alone; ${acceptedPath}`);
+  } finally {
+    if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
+  }
 });
 
 test("runtime policy preserves envelope, dedup, reply-store, lifecycle mechanics unchanged", async (t) => {
@@ -747,8 +766,7 @@ test("Issue #3 N15: inbound cross-task RESEARCH_RESULT is filtered at onContext 
   try {
     const policy = createRoleRuntimePolicy("executor", { auditDir, replyStoreDir });
     const requestId = "99999999-9999-4999-8999-999999999999";
-    const body = JSON.stringify(makeResearchResultBody({ task_id: "ISSUE-001", request_id: requestId }));
-    const envelope = makeEnvelope({ id: requestId, correlationId: requestId, kind: "progress", subject: "RESEARCH_RESULT cross-task", body });
+    const envelope = makeInboundStructuredEnvelope(requestId, makeResearchResultBody({ task_id: "ISSUE-001", request_id: requestId }));
     const inbound = {
       messages: [
         {
@@ -1048,20 +1066,16 @@ test.skip("Issue #11 N3: malformed envelope refusal path does not expose the bas
   }
 });
 
-test("Issue #11 N5: accepted inbound carries redacted envelope fields and never carries the base64 body in the audit row", async (t) => {
+test("accepted inbound projects only the structured event and never carries the wire envelope", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
+  const previousDelegations = process.env.PI_TEAM_ALLOWED_DELEGATIONS;
   process.env.PI_TEAM_TASK_ID = "ISSUE-011";
+  process.env.PI_TEAM_ALLOWED_DELEGATIONS = "RESEARCH-ISSUE-011";
   try {
     const policy = createRoleRuntimePolicy("executor", { auditDir, replyStoreDir });
-    const inboundBody = "researcher inbound body content for ISSUE-011 N5";
-    const envelopeText = makeEnvelope({
-      id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-      correlationId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-      kind: "progress",
-      subject: "researcher inbound",
-      body: inboundBody,
-    });
+    const eventBody = makeResearchResultBody({ task_id: "ISSUE-011", delegation_id: "RESEARCH-ISSUE-011", request_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", artifact_path: "research/ISSUE-011-inbound-result.md" });
+    const envelopeText = makeInboundStructuredEnvelope("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", eventBody);
     const inbound = {
       messages: [
         {
@@ -1076,7 +1090,10 @@ test("Issue #11 N5: accepted inbound carries redacted envelope fields and never 
       ],
     };
     const result = await policy.onContext(inbound, { messages: inbound.messages });
-    assert.equal(result, undefined, "accepted inbound from paired researcher must be retained");
+    assert.equal(result.messages[0].customType, "pi_team_event", "accepted inbound must be projected to a structured event");
+    assert.deepEqual(JSON.parse(result.messages[0].content), eventBody);
+    assert.equal(JSON.stringify(result.messages[0]).includes("base64"), false, "model-facing event must not mention base64");
+    assert.equal(JSON.stringify(result.messages[0]).includes("agent-team/v1"), false, "model-facing event must not include the envelope header");
     const rows = await readAuditRows(auditDir, "executor");
     const accepted = rows.find((row) => row.direction === "inbound" && row.outcome === "accepted");
     assert.ok(accepted, "audit row must record the accepted inbound");
@@ -1084,13 +1101,15 @@ test("Issue #11 N5: accepted inbound carries redacted envelope fields and never 
     assert.equal(serialized.includes("base64"), false, "inbound audit row must NOT mention base64");
     assert.equal(serialized.includes("body_encoding"), false, "inbound audit row must NOT mention body_encoding");
     // The redacted fields must be present.
-    assert.equal(accepted.kind, "progress");
-    assert.equal(accepted.subject, "researcher inbound");
-    assert.equal(accepted.bodySummary, inboundBody);
-    assert.equal(accepted.bodyLength, Buffer.byteLength(inboundBody, "utf8"));
+    assert.equal(accepted.kind, "reply");
+    assert.equal(accepted.subject, "RESEARCH_RESULT ISSUE-011");
+    assert.ok(accepted.bodySummary.startsWith('{"type":"RESEARCH_RESULT"'), "audit may retain only a bounded decoded-body summary");
+    assert.equal(accepted.bodySummary.endsWith("…"), true, "long event bodies must be truncated in the audit summary");
+    assert.equal(accepted.bodyLength, Buffer.byteLength(JSON.stringify(eventBody), "utf8"));
     assert.ok(/^[0-9a-f]{16}$/.test(accepted.bodyFingerprint), "inbound audit row must carry the 16-hex body fingerprint");
   } finally {
     if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
+    if (previousDelegations === undefined) delete process.env.PI_TEAM_ALLOWED_DELEGATIONS; else process.env.PI_TEAM_ALLOWED_DELEGATIONS = previousDelegations;
   }
 });
 
