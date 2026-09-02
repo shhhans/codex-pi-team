@@ -630,9 +630,10 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       assert.match(prompt, /Artifact: /, `${record.role} prompt must declare its artifact path`);
       assert.match(prompt, /Required capabilities: /, `${record.role} prompt must declare its required capabilities`);
       assert.match(prompt, /Objective: /, `${record.role} prompt must declare its objective`);
-      assert.match(prompt, /Tool runtime metadata: os_family=Windows;/, `${record.role} prompt must include launch-time OS metadata`);
-      assert.match(prompt, /Windows bash-tool contract:.*executes its command with Windows PowerShell/s, `${record.role} prompt must define the Windows execution semantics of the builtin bash tool`);
-      assert.match(prompt, /Get-ChildItem -Force.*rather than ls -la/s, `${record.role} prompt must provide a PowerShell syntax example for bash`);
+      assert.match(prompt, /Tool runtime metadata: os_family=/, `${record.role} prompt must include launch-time OS metadata`);
+      assert.match(prompt, /command_interpreter=/, `${record.role} prompt must expose the detected command interpreter`);
+      assert.match(prompt, /command_syntax_examples=/, `${record.role} prompt must expose syntax examples for that interpreter`);
+      assert.match(prompt, /Builtin bash-tool contract: its legacy name does not define command syntax/, `${record.role} prompt must reject inference from the builtin bash tool name`);
       assert.match(prompt, /Done criteria: /, `${record.role} prompt must declare its own done criteria`);
       assert.doesNotMatch(prompt, /^-/, `${record.role} prompt must not begin with a CLI option marker`);
       assert.match(prompt, /--- PI TEAM TASK CONTEXT v1 ---/, `${record.role} prompt must include the dynamic task context marker`);

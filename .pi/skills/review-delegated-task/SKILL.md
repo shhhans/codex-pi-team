@@ -36,13 +36,13 @@ Do not use this skill when:
 - `contact_supervisor` — escalate scope/decisions, mirror material findings; never for routine completion.
 - `pi_team_intercom` — direct peer channel only with the paired Executor; its registered description is the sole JSON event contract.
 
-### Windows `bash` tool contract
+### Command tool contract
 
-On this Pi Team Windows runtime, the builtin tool named `bash` runs its command
-through **PowerShell**, not Bash or `sh`. Use PowerShell syntax: `Get-ChildItem
--Force` (or the `ls` tool) rather than `ls -la`, semicolons rather than `&&`,
-and `$env:NAME` rather than `$NAME`. Prefer `read`, `grep`, `find`, and `ls`
-for inspection; use `bash` only when a command is actually needed.
+Do not infer command syntax from the builtin tool name `bash`. Before invoking
+it, follow the launch-time `Tool runtime metadata` fields
+`command_interpreter` and `command_syntax_examples`; the launcher detects them
+from the active runtime. Prefer `read`, `grep`, `find`, and `ls` for
+inspection; use `bash` only when a command is actually needed.
 
 ## Workflow
 

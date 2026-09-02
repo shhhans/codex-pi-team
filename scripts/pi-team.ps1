@@ -431,8 +431,10 @@ function New-RoleAssignment($Contract,[string]$Role) {
 function Get-ToolRuntimeMetadata {
   $version = [Environment]::OSVersion.VersionString
   $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-  $powershell = "$($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)"
-  return "Tool runtime metadata: os_family=Windows; os_version=$version; os_architecture=$architecture; shell=PowerShell $powershell; path_separator=\\; POSIX shell utilities are not assumed; WSL requires explicit Lead authorization. Windows bash-tool contract: despite its legacy name, the builtin tool named bash executes its command with Windows PowerShell, not Bash or sh. When calling bash, use PowerShell syntax: Get-ChildItem -Force (or the ls tool) rather than ls -la; use semicolons rather than &&; use `$env:NAME rather than `$NAME."
+  $platform = if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)) { 'Windows' } elseif ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Linux)) { 'Linux' } elseif ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::OSX)) { 'macOS' } else { [Environment]::OSVersion.Platform.ToString() }
+  $interpreter = if ($PSVersionTable) { "PowerShell $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)" } elseif ($env:SHELL) { [string]$env:SHELL } elseif ($env:ComSpec) { Split-Path -Leaf $env:ComSpec } else { 'unknown' }
+  $examples = if ($PSVersionTable) { 'Get-ChildItem -Force (or the ls tool), semicolons, $env:NAME; avoid ls -la, &&, and $NAME' } else { 'follow the detected interpreter syntax; prefer the dedicated ls, read, grep, and find tools for inspection' }
+  return "Tool runtime metadata: os_family=$platform; os_version=$version; os_architecture=$architecture; command_interpreter=$interpreter; path_separator=$([IO.Path]::DirectorySeparatorChar); command_syntax_examples=$examples. Builtin bash-tool contract: its legacy name does not define command syntax; use command_interpreter and command_syntax_examples above."
 }
 function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question='') {
   $delegation = @($Contract.delegations | Where-Object { $_.role -eq $Role })
