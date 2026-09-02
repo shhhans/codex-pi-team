@@ -315,6 +315,26 @@ test("Executor and Reviewer use a persistent idle review-fix lifecycle without s
   assert.match(reviewer, /REVIEW_FAIL/);
   assert.match(reviewer, /Read-only Git operations/i);
   assert.match(reviewer, /stash, reset, checkout, rebase/i);
+
+  for (const path of [
+    ".pi/agents/executor.md",
+    ".pi/agents/reviewer.md",
+    ".pi/agents/researcher.md",
+    ".pi/skills/execute-delegated-task/SKILL.md",
+    ".pi/skills/review-delegated-task/SKILL.md",
+    ".pi/skills/answer-research-question/SKILL.md",
+  ]) {
+    const text = await readFile(join(REPO, path), "utf8");
+    assert.match(text, /sole (event-)?schema contract|sole JSON event contract|exact JSON (fields|contract) from `intercom`/i,
+      `${path} must defer event field details to the registered intercom tool`);
+    assert.doesNotMatch(text, /body_encoding|agent-team\/v1 envelope|base64url body/i,
+      `${path} must not duplicate transport-envelope instructions`);
+  }
+
+  const roleExtension = await readFile(join(REPO, ".pi/communication/pi-policy-extension.ts"), "utf8");
+  assert.match(roleExtension, /name: "intercom"/);
+  assert.match(roleExtension, /structuredIntercomToolDescription/);
+  assert.match(roleExtension, /TEAM_TRANSPORT_TYPE/);
 });
 
 test("legacy role material is preserved under .pi/legacy/", async () => {

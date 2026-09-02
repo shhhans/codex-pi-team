@@ -1,26 +1,25 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { structuredIntercomToolDescription } from "./policy.mjs";
 import { createRoleRuntimePolicy } from "./runtime-policy.mjs";
 
+type PeerSession = { id?: string; name?: string };
+type IntercomChannel = {
+  listSessions: () => Promise<PeerSession[]>;
+  publish: (payload: unknown, options?: { audience?: "owner" | "capable"; ownerOnly?: boolean }) => void;
+};
+
+const TEAM_TRANSPORT_TYPE = "pi-team-structured-envelope/v1";
+
+function roleForSession(session: PeerSession | undefined, taskId: string | undefined) {
+  const identity = [session?.id, session?.name].find(value => typeof value === "string")?.toLowerCase();
+  const escapedTask = taskId?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").toLowerCase();
+  const match = identity?.match(new RegExp(`^pi-team--${escapedTask}--(researcher|executor|reviewer)--`));
+  return match?.[1];
+}
+
 export function installRolePolicy(pi: ExtensionAPI, role: string, auditDir?: string) {
-  let intercomChannel: { listSessions: () => Promise<unknown[]> } | undefined;
-  const registerIntercomChannel = () => {
-    if (intercomChannel) return;
-    // The role extension can be evaluated before pi-intercom has installed its
-    // registration listener. Retry once the registry and session runtimes are
-    // ready; `onReady` is synchronous, so it also prevents duplicate setup.
-    (pi.events as any).emit("intercom:extension-register", {
-      namespace: "pi-team.runtime-policy",
-      ownerEligible: false,
-      onEvent() {},
-      onReady(channel: { listSessions: () => Promise<unknown[]> }) { intercomChannel = channel; },
-    });
-  };
-  // pi-intercom owns its connected client. Registering on its public local
-  // extension bus lets this policy resolve a fresh peer roster without opening
-  // a second transport connection or exposing transport IDs to the role.
-  (pi.events as any).on("intercom:extension-registry-ready", registerIntercomChannel);
-  pi.on("session_start", registerIntercomChannel);
-  registerIntercomChannel();
+  let intercomChannel: IntercomChannel | undefined;
   const policy = createRoleRuntimePolicy(role, {
     auditDir: auditDir ?? process.env.HARNESS_POLICY_AUDIT_DIR,
     replyStoreDir: process.env.HARNESS_REPLY_STORE_DIR,
@@ -30,6 +29,74 @@ export function installRolePolicy(pi: ExtensionAPI, role: string, auditDir?: str
     memoryPath: process.env.HARNESS_MEMORY_PATH,
     artifactDir: process.env.HARNESS_ARTIFACT_DIR,
     listPeerSessions: async () => intercomChannel ? intercomChannel.listSessions() : [],
+    deliverStructuredEnvelope: async ({ target, envelope }: { target: string; envelope: string }) => {
+      if (!intercomChannel) return { delivered: false, reason: "peer-discovery-unavailable" };
+      try {
+        // pi-intercom's capability channel is the underlying transport. The
+        // target ID remains inside runtime-only payload metadata and never
+        // reaches the role model or the registered tool contract.
+        intercomChannel.publish({ type: TEAM_TRANSPORT_TYPE, to_session_id: target, envelope }, { audience: "capable" });
+        return { delivered: true };
+      } catch {
+        return { delivered: false, reason: "transport-unavailable" };
+      }
+    },
+  });
+  const receiveTransportEvent = async (event: any) => {
+    if (event?.type !== "message" || !event.payload || typeof event.payload !== "object") return;
+    const payload = event.payload as { type?: string; to_session_id?: string; envelope?: string };
+    if (payload.type !== TEAM_TRANSPORT_TYPE || payload.to_session_id !== process.env.PI_INTERCOM_SESSION_ID || typeof payload.envelope !== "string") return;
+    let sessions: PeerSession[];
+    try { sessions = await intercomChannel?.listSessions() ?? []; } catch { return; }
+    const sender = roleForSession(sessions.find(session => session.id === event.fromSessionId), process.env.PI_TEAM_TASK_ID);
+    if (!sender) return;
+    // Feed a deliberately non-wire custom entry through the existing inbound
+    // gate. onContext replaces it with pi_team_event before the model sees it.
+    pi.sendMessage({
+      customType: "intercom_message",
+      content: "Pi Team structured event received.",
+      display: false,
+      details: { from: { name: sender }, bodyText: payload.envelope },
+    }, { triggerTurn: true, deliverAs: "followUp" });
+  };
+  const registerIntercomChannel = () => {
+    if (intercomChannel) return;
+    // The role extension can be evaluated before pi-intercom has installed its
+    // registration listener. Retry once the registry and session runtimes are
+    // ready; `onReady` is synchronous, so it also prevents duplicate setup.
+    (pi.events as any).emit("intercom:extension-register", {
+      namespace: "pi-team.runtime-policy",
+      ownerEligible: false,
+      onEvent: receiveTransportEvent,
+      onReady(channel: IntercomChannel) { intercomChannel = channel; },
+    });
+  };
+  // pi-intercom owns its connected client. Registering on its public local
+  // extension bus lets this policy resolve a fresh peer roster without opening
+  // a second transport connection or exposing transport IDs to the role.
+  (pi.events as any).on("intercom:extension-registry-ready", registerIntercomChannel);
+  pi.on("session_start", registerIntercomChannel);
+  registerIntercomChannel();
+  // This same-name registration is loaded after native pi-intercom. It owns
+  // the role-visible contract while the native package remains the transport.
+  pi.registerTool({
+    name: "intercom",
+    label: "Pi Team Intercom",
+    description: structuredIntercomToolDescription(role, process.env.PI_TEAM_TASK_ID),
+    promptSnippet: "Send a validated Pi Team JSON event to a paired role.",
+    promptGuidelines: ["Use the Pi Team intercom JSON contract in this tool description; never construct transport envelopes."],
+    parameters: Type.Object({
+      action: Type.Literal("send"),
+      to: Type.String(),
+      message: Type.String(),
+    }, { additionalProperties: false }),
+    async execute() {
+      // onToolCall has already validated, enveloped, audited, and published
+      // the event through the channel. Keeping transport out of this execute
+      // function makes it impossible for a role-visible raw tool to bypass
+      // the structured policy.
+      return { content: [{ type: "text", text: "Pi Team event sent." }], details: { delivered: true } };
+    },
   });
   pi.on("tool_call", policy.onToolCall);
   pi.on("tool_result", policy.onToolResult);

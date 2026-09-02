@@ -81,7 +81,7 @@ export async function appendPolicyAudit(role, event, auditDir = join(HERE, "audi
   await appendFile(join(auditDir, `${role}.jsonl`), `${JSON.stringify(record)}\n`, "utf8");
 }
 
-export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], listPeerSessions, replyStoreDir, lifecycleRoot, runId, planVersion, memoryPath, artifactDir, client } = {}) {
+export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], listPeerSessions, replyStoreDir, lifecycleRoot, runId, planVersion, memoryPath, artifactDir, client, deliverStructuredEnvelope } = {}) {
   const normalized = normalizedRole(role);
   if (!normalized || normalized === "lead") throw new Error(`invalid runtime policy role: ${role}`);
   const receiver = new PolicyReceiver(normalized);
@@ -171,8 +171,14 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], lis
     const leadAudit = { record(entry) { this.entry = entry; return entry; } };
     let result;
     try {
+      // The role-facing tool is a Pi Team wrapper. In production the wrapper
+      // publishes this canonical envelope through pi-intercom's extension
+      // transport; unit callers retain the injectable client seam.
+      const transportClient = typeof deliverStructuredEnvelope === "function"
+        ? { send: async (_recipient, options) => deliverStructuredEnvelope({ recipient, target, envelope: options.text }) }
+        : sendClient;
       result = await sendWithPolicy({
-        client: sendClient,
+        client: transportClient,
         sender: normalized,
         recipient: recipient ?? String(event.input?.to ?? ""),
         trace,

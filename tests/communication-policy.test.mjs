@@ -24,6 +24,7 @@ import {
   makeEnvelope,
   makeStructuredEnvelope,
   parseEnvelope,
+  structuredIntercomToolDescription,
 } from "../.pi/communication/policy.mjs";
 import { createRoleRuntimePolicy } from "../.pi/communication/runtime-policy.mjs";
 import { classifyClientResult } from "../.pi/communication/send.mjs";
@@ -32,6 +33,22 @@ const REPO = process.cwd();
 const ACTIVE_ROLE_NAMES = ["researcher", "executor", "reviewer"];
 const EXPECTED_SUPERVISOR_REASONS = new Set(["need_decision", "progress_update", "interview_request"]);
 const SAFE_INTERCOM_ACTIONS = new Set(["list", "list-cwd", "status", "pending"]);
+
+test("Pi Team intercom tool description is the authoritative role-facing event contract", () => {
+  const executor = structuredIntercomToolDescription("executor", "TOOL-001");
+  assert.match(executor, /task_id must equal "TOOL-001"/);
+  assert.match(executor, /RESEARCH_REQUEST/);
+  assert.match(executor, /READY_FOR_REVIEW/);
+  assert.match(executor, /quote every key and string value/i);
+  assert.match(executor, /raw agent-team\/v1 envelope/i);
+  assert.doesNotMatch(executor, /"lead"/);
+
+  const reviewer = structuredIntercomToolDescription("reviewer", "TOOL-001");
+  assert.match(reviewer, /REVIEW_PASS/);
+  assert.match(reviewer, /REVIEW_FAIL/);
+  assert.match(reviewer, /"executor"/);
+  assert.doesNotMatch(reviewer, /READY_FOR_REVIEW/);
+});
 
 function parseFrontmatter(text) {
   // Accept optional carriage returns on the frontmatter delimiters so CRLF

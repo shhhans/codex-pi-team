@@ -36,6 +36,39 @@ export const RESEARCH_BLOCK_REASON_CODES = new Set([
   "duplicate",
   "no_response_within_window",
 ]);
+
+const ROLE_EVENT_TYPES = new Map([
+  ["researcher", ["RESEARCH_RESULT", "RESEARCH_BLOCKED"]],
+  ["executor", ["RESEARCH_REQUEST", "READY_FOR_REVIEW", "FIX_READY", "READY_FOR_ACCEPTANCE"]],
+  ["reviewer", ["REVIEW_PASS", "REVIEW_FAIL"]],
+]);
+
+const EVENT_FIELD_CONTRACTS = new Map([
+  ["RESEARCH_REQUEST", "type, task_id, delegation_id, request_id (UUID), decision_supported, objective, allowed_paths (string[]), artifact_path, required_capabilities (string[]), frozen_contract_version; optional deadline_hint, context_refs"],
+  ["RESEARCH_RESULT", "type, task_id, delegation_id, request_id (the request UUID), artifact_path, headline, findings ({claim, sources, confidence}[]), confidence, decision_impact; optional gaps"],
+  ["RESEARCH_BLOCKED", "type, task_id, delegation_id, request_id (the request UUID), reason_code, detail; next_decision_needed is required for architectural, out_of_scope, or under_specified"],
+  ["READY_FOR_REVIEW", "type, task_id, delegation_id, worktree, implementation_notes_path or artifact_path"],
+  ["FIX_READY", "type, task_id, delegation_id, worktree, implementation_notes_path or artifact_path"],
+  ["REVIEW_PASS", "type, task_id, delegation_id, evidence_paths (non-empty string[]); optional artifact_path"],
+  ["REVIEW_FAIL", "type, task_id, delegation_id, failure_paths (non-empty string[]); optional evidence_paths, artifact_path"],
+  ["READY_FOR_ACCEPTANCE", "type, task_id, delegation_id, worktree, implementation_notes_path or artifact_path"],
+]);
+
+// This is deliberately the single role-facing protocol description. Role
+// prompts name the event they need to send, but never duplicate field lists or
+// wire mechanics: the registered `intercom` tool is authoritative.
+export function structuredIntercomToolDescription(role, taskId) {
+  const eventTypes = ROLE_EVENT_TYPES.get(role) ?? [];
+  const targetRoles = [...(BOUNDED_PEERS.get(role) ?? [])];
+  const typeLines = eventTypes.map(type => `- ${type}: ${EVENT_FIELD_CONTRACTS.get(type)}`).join("\n");
+  return `Send one Pi Team structured event to a current same-task peer.\n\n`
+    + `Only action \"send\" is available. Set to to exactly one allowed role: ${targetRoles.map(value => `\"${value}\"`).join(", ") || "none"}. `
+    + `The runtime resolves that role to its unique live session.\n\n`
+    + `message must be a JSON string containing exactly one event object. task_id must equal ${JSON.stringify(taskId ?? "the current PI_TEAM_TASK_ID")}. `
+    + `Do not send plain text, a raw agent-team/v1 envelope, base64/base64url, UUID/correlation ID, session ID, launch ID, or unknown top-level fields. The runtime generates transport metadata and the canonical envelope.\n\n`
+    + `Allowed event types for this role:\n${typeLines}\n\n`
+    + `Use JSON syntax: quote every key and string value. Follow the exact field contract for the selected type; runtime rejects missing, extra, or invalid fields.`;
+}
 // Mirrors tests/team-contract.test.mjs RESEARCHER_TOOLS exactly.
 export const RESEARCHER_CAPABILITIES = new Set([
   "read",
