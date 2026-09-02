@@ -60,10 +60,14 @@ acceptance record.
 
 Use `intercom` for asynchronous peer communication:
 
-1. Discover the same-task peer with `intercom list-cwd`.
-2. Send with the direct asynchronous `intercom send` action.
-3. Continue independent work after sending; do not use blocking `ask` for
+1. Send a validated JSON event to the allowed peer **role name** with the
+   direct asynchronous `intercom send` action; runtime resolves the unique
+   same-task live session and constructs the wire envelope.
+2. Continue independent work after sending; do not use blocking `ask` for
    asynchronous work.
+3. Treat inbound peer deliveries as runtime-projected JSON events. Do not
+   decode, inspect, or reconstruct a transport envelope, base64url body,
+   session ID, or launch ID.
 4. Route Lead-facing progress, blockers, and changed assumptions through the
    configured Lead reporting path.
 
