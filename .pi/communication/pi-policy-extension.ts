@@ -50,14 +50,13 @@ export function installRolePolicy(pi: ExtensionAPI, role: string, auditDir?: str
     try { sessions = await intercomChannel?.listSessions() ?? []; } catch { return; }
     const sender = roleForSession(sessions.find(session => session.id === event.fromSessionId), process.env.PI_TEAM_TASK_ID);
     if (!sender) return;
-    // Feed a deliberately non-wire custom entry through the existing inbound
-    // gate. onContext replaces it with pi_team_event before the model sees it.
-    pi.sendMessage({
-      customType: "intercom_message",
-      content: "Pi Team structured event received.",
-      display: false,
-      details: { from: { name: sender }, bodyText: payload.envelope },
-    }, { triggerTurn: true, deliverAs: "followUp" });
+    // Project at the transport boundary, before Pi persists a custom session
+    // message. Sending an intermediate bodyText entry would keep the raw
+    // agent-team/v1 envelope (including base64url body) in the JSONL session
+    // transcript even though onContext later hid it from the model.
+    const projected = await policy.projectInboundStructuredEnvelope({ sender, text: payload.envelope });
+    if (!projected.accepted) return;
+    pi.sendMessage(projected.message, { triggerTurn: true, deliverAs: "followUp" });
   };
   const registerIntercomChannel = () => {
     if (intercomChannel) return;

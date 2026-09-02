@@ -1129,6 +1129,27 @@ test("accepted inbound projects only the structured event and never carries the 
   }
 });
 
+test("transport-boundary projection never constructs a persisted raw-envelope message", async (t) => {
+  const { auditDir, replyStoreDir } = freshRuntimePaths(t);
+  const previousTaskId = process.env.PI_TEAM_TASK_ID;
+  process.env.PI_TEAM_TASK_ID = "ISSUE-013";
+  try {
+    const policy = createRoleRuntimePolicy("reviewer", { auditDir, replyStoreDir });
+    const eventBody = { type: "READY_FOR_REVIEW", task_id: "ISSUE-013", delegation_id: "EXECUTOR-ISSUE-013", worktree: "D:/task", implementation_notes_path: "implementation_notes/ISSUE-013.md" };
+    const envelopeText = makeInboundStructuredEnvelope("13131313-1313-4131-8131-131313131313", eventBody);
+    const projected = await policy.projectInboundStructuredEnvelope({ sender: "executor", text: envelopeText });
+    assert.equal(projected.accepted, true);
+    assert.equal(projected.message.customType, "pi_team_event");
+    assert.deepEqual(JSON.parse(projected.message.content), eventBody);
+    const serialized = JSON.stringify(projected.message);
+    assert.equal(serialized.includes("agent-team/v1"), false);
+    assert.equal(serialized.includes("body_encoding"), false);
+    assert.equal(serialized.includes("base64"), false);
+  } finally {
+    if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
+  }
+});
+
 test("Issue #11 N6: denied inbound (unauthorized sender) audit row never carries the base64 body", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const previousTaskId = process.env.PI_TEAM_TASK_ID;

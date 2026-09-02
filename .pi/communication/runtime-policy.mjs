@@ -377,6 +377,101 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], lis
     if (Array.isArray(sessions)) knownPeerSessions = sessions;
   }
 
+  // Validate and project a transport envelope before it becomes a Pi session
+  // message.  The extension calls this at the transport boundary, which is
+  // intentionally earlier than `onContext`: Pi persists custom messages when
+  // they are injected, so placing the envelope in a temporary bodyText field
+  // and filtering it later still leaks the wire representation to JSONL.
+  async function projectInboundStructuredEnvelope({ sender: rawSender, text, transportId } = {}) {
+    const sender = normalizedRole(rawSender);
+    if (!sender || typeof text !== "string") {
+      const reason = !sender ? "unknown-sender" : "missing-message-body";
+      await auditSafely({ direction: "inbound", outcome: "refused", reason });
+      return { accepted: false, reason };
+    }
+
+    let parsed;
+    try { parsed = parseEnvelope(text); }
+    catch {
+      const reason = "structured-message-invalid-envelope";
+      await auditSafely({ direction: "inbound", sender, outcome: "refused", reason });
+      return { accepted: false, reason };
+    }
+    // The canonical envelope id is valid transport metadata and is enough to
+    // identify a delivery decision. Never use the wire text itself as a cache
+    // key: that would retain the base64url body in process memory needlessly.
+    const decisionKey = typeof transportId === "string" ? transportId : `${sender}:${parsed.id}`;
+    const cachedDecision = inboundDecisions.get(decisionKey);
+    if (cachedDecision) return cachedDecision;
+
+    let structured;
+    let accepted = false;
+    let reason;
+    try {
+      const declaredEvent = JSON.parse(parsed.body);
+      structured = parseStructuredEvent(parsed.body, declaredEvent?.task_id);
+      if (parsed.kind !== structured.kind) throw new Error("structured-message-kind-mismatch");
+      if (parsed.subject !== `${structured.event.type} ${structured.event.task_id}`) throw new Error("structured-message-subject-mismatch");
+      if (RESEARCH_MESSAGE_TYPES.has(structured.event.type) && parsed.correlationId !== structured.correlationId) throw new Error("structured-message-correlation-mismatch");
+      if (!RESEARCH_MESSAGE_TYPES.has(structured.event.type) && structured.event.task_id !== process.env.PI_TEAM_TASK_ID) throw new Error("structured-message-task-id-mismatch");
+    } catch (error) {
+      reason = error instanceof Error ? error.message : "structured-message-invalid";
+    }
+
+    // Authorization must precede every reply-store side effect.  Keep this
+    // exact gate shared by direct transport projection and the legacy context
+    // adapter below.
+    const authorization = reason ? undefined : receiver.receive({ sender, text });
+    if (reason) {
+      accepted = false;
+    } else if (!authorization.accepted) {
+      reason = authorization.reason ?? "duplicate-or-pending";
+    } else {
+      const previous = await replyStore.read(normalized, parsed.id);
+      if (previous?.status === "completed") {
+        let replyEvent;
+        try { replyEvent = JSON.parse(previous.reply); } catch { replyEvent = { status: "stored_reply_available" }; }
+        const replay = {
+          accepted: true,
+          message: {
+            role: "custom",
+            customType: "pi_team_replay",
+            content: JSON.stringify({ type: "PI_TEAM_REPLAY", task_id: process.env.PI_TEAM_TASK_ID, replay_of: parsed.id, event: structured.event, reply: replyEvent }),
+            details: { sender_role: sender, message_id: parsed.id, correlation_id: parsed.correlationId },
+          },
+        };
+        inboundDecisions.set(decisionKey, replay);
+        return replay;
+      }
+      const inboundGate = researchBodyGate(parsed, { sender, recipient: normalized });
+      if (!inboundGate.ok) reason = inboundGate.reason;
+      else accepted = true;
+    }
+
+    const audited = await auditSafely({
+      direction: "inbound",
+      sender,
+      outcome: accepted ? "accepted" : "refused",
+      ...(accepted ? { messageId: parsed.id, correlationId: parsed.correlationId } : { reason: reason ?? "duplicate-or-pending" }),
+      envelope: parsed,
+    });
+    if (!audited) {
+      accepted = false;
+      reason = "audit-unavailable";
+    }
+    const decision = accepted ? {
+      accepted: true,
+      message: {
+        role: "custom",
+        customType: "pi_team_event",
+        content: JSON.stringify(structured.event),
+        details: { sender_role: sender, message_id: parsed.id, correlation_id: parsed.correlationId, event: structured.event },
+      },
+    } : { accepted: false, reason: reason ?? "duplicate-or-pending" };
+    inboundDecisions.set(decisionKey, decision);
+    return decision;
+  }
+
   async function onContext(event, ctx) {
     const kept = [];
     let changed = false;
@@ -398,101 +493,13 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], lis
         kept.push(message);
         continue;
       }
-      const transportId = message.details?.message?.id;
-      const decisionKey = typeof transportId === "string" ? transportId : message;
-      const cachedDecision = inboundDecisions.get(decisionKey);
-      let accepted = cachedDecision?.accepted;
-      let inboundReason;
-      let structured = cachedDecision?.structured;
-      let parsed = cachedDecision?.parsed;
-      if (accepted === undefined) {
-        const sender = normalizedRole(message.details?.from?.name);
-        const text = message.details?.bodyText;
-        if (!sender || typeof text !== "string") {
-          accepted = false;
-          inboundReason = !sender ? "unknown-sender" : "missing-message-body";
-          await auditSafely({ direction: "inbound", outcome: "refused", reason: inboundReason });
-        } else {
-          try { parsed = parseEnvelope(text); } catch { parsed = undefined; }
-          try {
-            if (!parsed) throw new Error("structured-message-invalid-envelope");
-            const declaredEvent = JSON.parse(parsed.body);
-            structured = parseStructuredEvent(parsed.body, declaredEvent?.task_id);
-            if (parsed.kind !== structured.kind) throw new Error("structured-message-kind-mismatch");
-            if (parsed.subject !== `${structured.event.type} ${structured.event.task_id}`) throw new Error("structured-message-subject-mismatch");
-            if (RESEARCH_MESSAGE_TYPES.has(structured.event.type) && parsed.correlationId !== structured.correlationId) throw new Error("structured-message-correlation-mismatch");
-            if (!RESEARCH_MESSAGE_TYPES.has(structured.event.type) && structured.event.task_id !== process.env.PI_TEAM_TASK_ID) throw new Error("structured-message-task-id-mismatch");
-          } catch (error) {
-            accepted = false;
-            inboundReason = error instanceof Error ? error.message : "structured-message-invalid";
-          }
-          // Authorization MUST precede every reply-store side effect
-          // (read/reserve/write) so an unauthorized sender-to-recipient pair
-          // never triggers a persistent lookup or creates a pending record
-          // that could collide with a later legitimate send.
-          const authorization = accepted === false ? undefined : receiver.receive({ sender, text });
-          if (accepted === false) {
-            // The wire representation is deliberately not retained: malformed
-            // or old raw envelopes never reach role context.
-          } else if (!authorization.accepted) {
-            accepted = false;
-            inboundReason = authorization.reason ?? "duplicate-or-pending";
-          } else {
-            // Authorized: look up any prior completed reply for replay only.
-            // No "pending" reservation is written on accept; duplicates within
-            // the window are deduped by PolicyReceiver's in-memory DedupStore.
-            const previous = parsed ? await replyStore.read(normalized, parsed.id) : undefined;
-            if (previous?.status === "completed") {
-              let replyEvent;
-              try { replyEvent = JSON.parse(previous.reply); } catch { replyEvent = { status: "stored_reply_available" }; }
-              kept.push({
-                role: "custom",
-                customType: "pi_team_replay",
-                content: JSON.stringify({ type: "PI_TEAM_REPLAY", task_id: process.env.PI_TEAM_TASK_ID, replay_of: parsed.id, event: structured.event, reply: replyEvent }),
-                details: { sender_role: sender, message_id: parsed.id, correlation_id: parsed.correlationId },
-              });
-              changed = true;
-              continue;
-            }
-            // Issue #3 — body-level gate for inbound RESEARCH_* messages. A
-            // structurally invalid RESEARCH_RESULT or RESEARCH_BLOCKED arriving
-            // from the paired Researcher must be filtered without affecting the
-            // legitimate in-flight request. Non-research messages pass through.
-            const inboundGate = researchBodyGate(parsed, { sender, recipient: normalized });
-            if (!inboundGate.ok) {
-              accepted = false;
-              inboundReason = inboundGate.reason;
-            } else {
-              accepted = true;
-            }
-          }
-          const audited = await auditSafely({
-            direction: "inbound",
-            sender,
-            outcome: accepted ? "accepted" : "refused",
-            ...(accepted && parsed ? { messageId: parsed.id, correlationId: parsed.correlationId } : { reason: inboundReason ?? "duplicate-or-pending" }),
-            envelope: parsed ?? null,
-          });
-          if (!audited) accepted = false;
-        }
-        inboundDecisions.set(decisionKey, { accepted, structured, parsed });
-      }
-      if (accepted) {
-        // Intercom's native extension supplies a raw `bodyText` wire
-        // envelope. Replace it rather than retaining it: exposing the wire
-        // body encourages roles to decode base64url and bypass the runtime's
-        // typed protocol. This is the only inbound model-facing projection.
-        kept.push({
-          role: "custom",
-          customType: "pi_team_event",
-          content: JSON.stringify(structured.event),
-          details: {
-            sender_role: normalizedRole(message.details?.from?.name),
-            message_id: parsed.id,
-            correlation_id: parsed.correlationId,
-            event: structured.event,
-          },
-        });
+      const projected = await projectInboundStructuredEnvelope({
+        sender: message.details?.from?.name,
+        text: message.details?.bodyText,
+        transportId: message.details?.message?.id,
+      });
+      if (projected.accepted) {
+        kept.push(projected.message);
         changed = true;
       }
     }
@@ -518,5 +525,5 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], lis
     return { accepted: true, envelope: accepted.envelope, reply };
   }
 
-  return { onToolCall, onToolResult, onContext, receiveAndReplay };
+  return { onToolCall, onToolResult, onContext, receiveAndReplay, projectInboundStructuredEnvelope };
 }

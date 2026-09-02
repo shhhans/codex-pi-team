@@ -335,6 +335,8 @@ test("Executor and Reviewer use a persistent idle review-fix lifecycle without s
   assert.match(roleExtension, /name: "pi_team_intercom"/);
   assert.match(roleExtension, /structuredIntercomToolDescription/);
   assert.match(roleExtension, /TEAM_TRANSPORT_TYPE/);
+  assert.match(roleExtension, /projectInboundStructuredEnvelope/);
+  assert.doesNotMatch(roleExtension, /customType:\s*"intercom_message"/);
 });
 
 test("legacy role material is preserved under .pi/legacy/", async () => {
