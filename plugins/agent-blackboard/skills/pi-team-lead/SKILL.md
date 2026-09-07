@@ -60,6 +60,28 @@ Keep the Blackboard task name and description aligned with the current
 Lead-owned contract. Blackboard events are observations and reminders, not
 authorization, completion evidence, or a communication channel.
 
+## Issue preflight and proposal gate
+
+Before creating or starting a code task for a GitHub issue, run:
+
+```powershell
+<project-root>\pi-team.cmd preflight <issue-number> [<proposal-path>]
+```
+
+The preflight must verify that the issue exists, inspect its open/closed state,
+record the current `develop` revision, and produce a redacted
+`plans/ISSUE-<number>-proposal.md`. The Lead must then verify the reported
+behavior or current evidence on `develop`; GitHub state alone is not proof that
+an issue is still real.
+
+Do not start a task when the issue is missing, already fixed, stale, or cannot
+be fact-checked. Record the reason in the proposal and ask the User when the
+result is ambiguous. Issues that conflict with an ADR, require a new ADR,
+change product/security/compatibility behavior, or require an irreversible
+decision require explicit User review before `publish`/`start`. A bounded fix
+that is reproducible and consistent with the existing ADR may proceed after the
+proposal is recorded; the proposal is still required for every issue.
+
 ## Publish and explicitly start
 
 1. Run `<project-root>\pi-team.cmd publish <absolute-contract-path>`. This is
@@ -139,13 +161,24 @@ If both gates pass:
 1. Write acceptance evidence that covers every frozen criterion ID and its
    required artifacts, then run `<project-root>\pi-team.cmd accept <task-id>
    <acceptance-file>`.
-2. Run `<project-root>\pi-team.cmd reclaim <task-id>`.
-3. Use `blackboard_archive_task` after resources are reclaimed; the entrypoint
-   synchronizes the accepted outcome before reclamation.
-4. Run `<project-root>\pi-team.cmd cleanup <task-id>` only when the reclaimed
-   worktree is clean and its committed work has been preserved as intended.
+2. Run `<project-root>\pi-team.cmd finalize <task-id>` exactly once as the
+   canonical delivery operation. The command verifies the accepted state,
+   stages only contract-scoped changes, creates the integration commit,
+   merges it into the target branch, runs integration tests, reclaims owned
+   role/Terminal processes, removes the task worktree and merged branch,
+   synchronizes the GitHub issue, and only then archives the Blackboard task.
+3. Treat the finalizer's JSON result as the lifecycle report. Do not manually
+   interleave `reclaim`, `cleanup`, Blackboard archive, or GitHub close with
+   finalization. A blocked finalizer preserves the remaining evidence and
+   requires Lead/user handling of the reported conflict; it is safe to retry.
 
 For unmet criteria, write a closure with the missing criterion IDs and run
-`<project-root>\pi-team.cmd close-incomplete <task-id> <closure-file>` before
-reclamation. Use `reconcile` only for legacy state and with an explicit outcome.
+`<project-root>\pi-team.cmd close-incomplete <task-id> <closure-file>`, then run
+`<project-root>\pi-team.cmd finalize <task-id>` if the incomplete task has no
+uncommitted changes and can be safely reclaimed. Use `reconcile` only for
+legacy state and with an explicit outcome.
 Do not infer live role status solely from the most recent Blackboard event.
+
+During the lifecycle migration, run code-changing issue tasks serially. Do not
+clean historical worktrees or branches automatically: first use Doctor to
+produce an inventory, then process an explicitly reviewed manifest in batches.

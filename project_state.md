@@ -25,8 +25,9 @@ append-only Agent events never live in the worktree.
   ref rather than from the invoking worktree's incidental `HEAD`.
 - The main worktree is reserved for the stable branch and Lead-controlled
   integration. Task worktrees are sibling directories with one focused branch
-  per task; a cleanup removes a clean task worktree but does not delete its
-  branch.
+  per task; `pi-team.cmd finalize <task-id>` integrates accepted changes and
+  removes the task worktree and successfully merged branch as one retryable
+  lifecycle operation.
 
 ## Defect and runtime artifact policy
 

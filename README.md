@@ -8,8 +8,9 @@ the Lead; Pi supplies the Researcher, Executor, and Reviewer sessions.
 `master` is the stable integration baseline. Each delegated task owns one
 focused branch and one isolated worktree; the task branch is merged back only
 after Lead acceptance and review. A worktree is a checkout location, not a
-separate source of truth, and cleanup removes the worktree but does not delete
-its branch.
+separate source of truth. The canonical `finalize <task-id>` command performs
+the reviewed integration and then removes the task worktree and successfully
+merged task branch.
 
 When a task discovers an unrelated defect, the Agent reports it to Lead and the
 current task remains within its frozen scope. Once this repository has a
@@ -62,6 +63,51 @@ repository.
 `start`, `research`, and `resume` fail before launching a Pi session when the
 shared packages are missing, have the wrong version, or Web Access is globally
 autoloaded.
+
+### Role-specific providers and models
+
+Pi credentials are managed by provider in the user-level `auth.json` (or the
+provider environment variables); never put API keys in this repository. The
+auth file intentionally contains credentials only (`type`, `key`/`env`, or OAuth
+tokens); it has no `baseUrl` field. Built-in providers already carry their
+endpoint. For a custom or proxy provider, define its endpoint and API type in
+the user-level `models.json` at `~/.pi/agent/models.json`:
+
+```json
+{
+  "providers": {
+    "reviewer-provider": {
+      "baseUrl": "https://api.example.com/v1",
+      "api": "openai-completions",
+      "models": [{ "id": "reviewer-model", "name": "Reviewer model" }]
+    }
+  }
+}
+```
+
+Then store only the matching provider credential in `~/.pi/agent/auth.json`
+(or provide its environment variable):
+
+```json
+{
+  "reviewer-provider": { "type": "api_key", "key": "$REVIEWER_PROVIDER_API_KEY" }
+}
+```
+
+Each active role definition declares its runtime selection in frontmatter:
+
+```yaml
+provider: minimax-cn
+model: MiniMax-M3
+```
+
+The launcher reads those fields and passes explicit `--provider` and `--model`
+arguments to every Executor, Reviewer, and Researcher process. The selected
+provider/model is frozen in task state so `resume` does not silently switch to
+the project default. Use `pi.cmd auth check --provider <provider> --model
+<model> --json --no-refresh` to verify credentials without printing them.
+The model must support the role's configured tools; `--tools` only controls the
+allowlist and does not add tool-calling support to a model.
 
 ## Agent Blackboard
 
@@ -135,6 +181,17 @@ uses `close-incomplete <task-id> <closure-file>`; it records a reason and the
 missing criterion IDs, synchronizes the Blackboard as `incomplete`, and may
 then be reclaimed. `reconcile` is limited to legacy state and requires an
 explicit `accepted` or `incomplete` outcome; it never infers historic success.
+After acceptance, `finalize <task-id>` is the single delivery operation: it
+creates the integration commit, merges the task branch, runs the integration
+tests, reclaims owned Terminal resources, removes the worktree and merged
+branch, synchronizes the GitHub issue, and archives Blackboard only after those
+steps succeed. A blocked finalizer preserves the task evidence and returns a
+retryable JSON status.
+
+Before a GitHub issue becomes a task, `preflight <issue-number>` creates a
+redacted proposal and records the issue state and current `develop` revision.
+The Lead must still verify the behavior on `develop`; issue state alone is not
+proof that a defect remains.
 
 The plugin's MCP server is local stdio and has no authentication flow, so
 `/mcp` may label authentication as unsupported. That label is expected. A

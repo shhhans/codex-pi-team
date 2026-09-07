@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFile, stat, writeFile, mkdir, rm } from "node:fs/promises";
+import { readFile, stat, writeFile, mkdir, rm, copyFile } from "node:fs/promises";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -13,6 +13,11 @@ const EXECUTOR_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "
 const REVIEWER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "pi_team_intercom", "blackboard_update"];
 const DEEP_RESEARCH_TOOLS = ["research_run", "deep_research_task", "deep_research_review", "research_synthesis_input", "research_report_artifact"];
 const ACTIVE_ROLES = ["researcher", "executor", "reviewer"];
+const ROLE_RUNTIME = {
+  researcher: { provider: "minimax-cn", model: "MiniMax-M3" },
+  executor: { provider: "minimax-cn", model: "MiniMax-M3" },
+  reviewer: { provider: "volcengine-ark", model: "deepseek-v4-flash" },
+};
 const LEGACY_ROLES = ["architect", "critic", "engineer"];
 const SHARED_INTERCOM = "~/.pi/agent/npm/node_modules/pi-intercom/index.ts";
 const SHARED_WEB_ACCESS = "~/.pi/agent/npm/node_modules/pi-web-access/index.ts";
@@ -102,6 +107,9 @@ test("active role definitions exist with valid frontmatter and required tools", 
     const text = await readFile(path, "utf8");
     const fm = parseFrontmatter(text);
     assert.equal(fm.name, role, `${role} frontmatter name must match`);
+    assert.equal(fm.provider, ROLE_RUNTIME[role].provider, `${role} must declare its provider`);
+    assert.equal(fm.model, ROLE_RUNTIME[role].model, `${role} must declare its model`);
+    assert.doesNotMatch(text, /^\s*(?:api[_-]?key|auth[_-]?token|secret)\s*:/im, `${role} must not contain credentials`);
     assert.equal(fm.inheritProjectContext, "true", `${role} must inherit the shared AGENTS.md context`);
     assert.equal(fm.inheritSkills, "false", `${role} must set inheritSkills: false`);
     assert.equal(fm.skillPath, "../skills", `${role} must use the project-private skill path`);
@@ -387,8 +395,14 @@ test("setup is isolated, pinned, idempotent, preserves settings, and doctor is r
   try {
     await mkdir(agentDir, { recursive: true });
     await writeFile(join(agentDir, "settings.json"), JSON.stringify({ theme: "light", packages: ["npm:unrelated@1.0.0"] }, null, 2));
-    await writeFile(fakePi, String.raw`param([string]$Command,[string]$Source)
-if ($Command -ne 'install') { Write-Error "unexpected command: $Command source: $Source"; exit 2 }
+    await writeFile(fakePi, String.raw`param([string]$Command,[Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)
+if ($Command -eq 'auth') {
+  if ($Args[0] -ne 'check' -or -not ($Args -contains '--provider') -or -not ($Args -contains '--model') -or -not ($Args -contains '--no-refresh')) { Write-Error "unexpected auth check arguments: $($Args -join ' ')"; exit 4 }
+  @{ok=$true; provider=$Args[$Args.IndexOf('--provider') + 1]; model=$Args[$Args.IndexOf('--model') + 1]} | ConvertTo-Json -Compress
+  exit 0
+}
+if ($Command -ne 'install') { Write-Error "unexpected command: $Command"; exit 2 }
+$Source=$Args[0]
 if ($Source -notmatch '^npm:(pi-(?:subagents|intercom|web-access))@(.+)$') { Write-Error "unexpected source: $Source"; exit 3 }
 $name=$Matches[1]; $version=$Matches[2]
 if ($env:FAKE_PI_FAIL -eq $name) { exit 17 }
@@ -504,6 +518,11 @@ test("role launchers inject common-dir identity and isolate Executor/Reviewer en
       await writeFile(join(packageDir, "package.json"), JSON.stringify({ name, version }));
     }
     await writeFile(fakePiScript, String.raw`param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)
+if ($Args.Count -gt 0 -and $Args[0] -eq 'auth') {
+  if ($Args[1] -ne 'check' -or -not ($Args -contains '--provider') -or -not ($Args -contains '--model') -or -not ($Args -contains '--no-refresh')) { Write-Error "unexpected auth check arguments: $($Args -join ' ')"; exit 4 }
+  @{ok=$true; provider=$Args[$Args.IndexOf('--provider') + 1]; model=$Args[$Args.IndexOf('--model') + 1]} | ConvertTo-Json -Compress
+  exit 0
+}
 # Defense in depth: a watchdog kills this fake if a parent test forgot to clean it up.
 # Production real wt.exe does not honor this env var.
 $watchdogRaw=[Environment]::GetEnvironmentVariable('PI_TEAM_FAKE_TIMEOUT_SEC')
@@ -593,6 +612,21 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     assert.equal(startState.scope_id.length > 0, true);
     assert.equal(startState.worktree, worktree);
     assert.equal(startState.contract_path, contractSnapshot);
+    assert.deepEqual(
+      { provider: startState.sessions.executor.provider, model: startState.sessions.executor.model },
+      { provider: "minimax-cn", model: "MiniMax-M3" },
+      "Executor provider/model must be frozen in task state",
+    );
+    assert.deepEqual(
+      { provider: startState.sessions.reviewer.provider, model: startState.sessions.reviewer.model },
+      ROLE_RUNTIME.reviewer,
+      "Reviewer provider/model must be frozen in task state",
+    );
+    assert.deepEqual(
+      { provider: startState.role_configs.researcher.provider, model: startState.role_configs.researcher.model },
+      { provider: "minimax-cn", model: "MiniMax-M3" },
+      "Researcher provider/model must be frozen in task state before on-demand launch",
+    );
     assert.equal(await readFile(contractSnapshot, "utf8"), await readFile(contract, "utf8"), "launcher must freeze the exact task contract outside the worktree");
     for (const record of startRecords) {
       assert.equal(record.task_id, taskId);
@@ -602,6 +636,8 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       assert.equal(record.agent_id, record.role === "executor" ? startState.sessions.executor.agent_id : startState.sessions.reviewer.agent_id);
       const expectedTools = record.role === "executor" ? EXECUTOR_TOOLS : REVIEWER_TOOLS;
       assert.equal(record.args.includes("--agent"), false, "Pi CLI has no --agent option");
+      assert.equal(record.args[record.args.indexOf("--provider") + 1], ROLE_RUNTIME[record.role].provider);
+      assert.equal(record.args[record.args.indexOf("--model") + 1], ROLE_RUNTIME[record.role].model);
       assert.equal(record.args.includes("--no-extensions"), true, "ambient extensions including pi-subagents/runs.run must be disabled");
       assert.equal(record.args.includes("--no-skills"), true, "ambient skills must be disabled");
       assert.equal(record.args[record.args.indexOf("--tools") + 1], expectedTools.join(","));
@@ -664,9 +700,14 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     await writeFile(stateFile, JSON.stringify({
       version: 1, task_id: taskId, name: "Runtime identity test", description: "Exercise all role launch paths.", status: "active",
       worktree, contract_path: contractSnapshot, scope_id: scopeId,
+      role_configs: {
+        researcher: { provider: "minimax-cn", model: "MiniMax-M3" },
+        executor: { provider: "minimax-cn", model: "MiniMax-M3" },
+        reviewer: { provider: "volcengine-ark", model: "deepseek-v4-flash" },
+      },
       sessions: {
-        executor: { agent_id: executorAgentId, session_id: executorSessionId, role: "executor" },
-        reviewer: { agent_id: reviewerAgentId, session_id: reviewerSessionId, role: "reviewer" },
+        executor: { agent_id: executorAgentId, session_id: executorSessionId, role: "executor", provider: "minimax-cn", model: "MiniMax-M3" },
+        reviewer: { agent_id: reviewerAgentId, session_id: reviewerSessionId, role: "reviewer", provider: "volcengine-ark", model: "deepseek-v4-flash" },
       },
     }));
     await rm(launchLog, { force: true });
@@ -681,6 +722,8 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     assert.equal(researchRecords[0].worktree, worktree);
     assert.equal(researchRecords[0].scope_id, scopeId);
     assert.equal(researchRecords[0].state_root, stateRoot);
+    assert.equal(researchRecords[0].args[researchRecords[0].args.indexOf("--provider") + 1], ROLE_RUNTIME.researcher.provider);
+    assert.equal(researchRecords[0].args[researchRecords[0].args.indexOf("--model") + 1], ROLE_RUNTIME.researcher.model);
     assert.equal(researchRecords[0].args.includes("--no-extensions"), true);
     assert.equal(researchRecords[0].args.includes("--no-skills"), true);
     assert.equal(researchRecords[0].args[researchRecords[0].args.indexOf("--tools") + 1], RESEARCHER_TOOLS.join(","));
@@ -709,6 +752,10 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     assert.equal(resumedReviewer.scope_id, scopeId);
     assert.equal(resumedExecutor.state_root, stateRoot);
     assert.equal(resumedReviewer.state_root, stateRoot);
+    assert.equal(resumedExecutor.args[resumedExecutor.args.indexOf("--provider") + 1], "minimax-cn");
+    assert.equal(resumedExecutor.args[resumedExecutor.args.indexOf("--model") + 1], "MiniMax-M3");
+    assert.equal(resumedReviewer.args[resumedReviewer.args.indexOf("--provider") + 1], ROLE_RUNTIME.reviewer.provider);
+    assert.equal(resumedReviewer.args[resumedReviewer.args.indexOf("--model") + 1], ROLE_RUNTIME.reviewer.model);
     assert.match(resumeRecords.map((record) => record.args.join(" ")).join("\n"), new RegExp(executorSessionId));
     assert.match(resumeRecords.map((record) => record.args.join(" ")).join("\n"), new RegExp(reviewerSessionId));
     for (const record of resumeRecords) {
@@ -867,6 +914,78 @@ test("acceptance requires each frozen criterion ID and synchronizes the Blackboa
   }
 });
 
+test("finalize integrates an accepted task and reclaims its worktree and branch", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-team-finalize-"));
+  const clone = join(root, "repo");
+  const worktree = join(root, "task-worktree");
+  const contract = join(root, "contract.md");
+  const taskId = "FIN-001";
+  const branch = `pi-team/test-finalize-${process.pid}`;
+  const cloneResult = spawnSync("git", ["clone", "--no-local", REPO, clone], { encoding: "utf8" });
+  assert.equal(cloneResult.status, 0, cloneResult.stderr);
+  try {
+    await copyFile(join(REPO, "scripts/pi-team.ps1"), join(clone, "scripts/pi-team.ps1"));
+    await writeFile(join(clone, "tests/run-tests.ps1"), "$ErrorActionPreference='Stop'\nexit 0\n");
+    spawnSync("git", ["-C", clone, "config", "user.email", "test@example.invalid"], { encoding: "utf8" });
+    spawnSync("git", ["-C", clone, "config", "user.name", "Pi Team Test"], { encoding: "utf8" });
+    const fixtureAdd = spawnSync("git", ["-C", clone, "add", "--", "scripts/pi-team.ps1", "tests/run-tests.ps1"], { encoding: "utf8" });
+    assert.equal(fixtureAdd.status, 0, fixtureAdd.stderr || fixtureAdd.stdout);
+    const fixtureCommit = spawnSync("git", ["-C", clone, "commit", "--quiet", "-m", "test fixture"], { encoding: "utf8" });
+    assert.equal(fixtureCommit.status, 0, fixtureCommit.stderr || fixtureCommit.stdout);
+    const addWorktree = spawnSync("git", ["-C", clone, "worktree", "add", "--quiet", "-b", branch, worktree, "develop"], { encoding: "utf8" });
+    assert.equal(addWorktree.status, 0, addWorktree.stderr);
+    await mkdir(join(worktree, "implementation_notes"), { recursive: true });
+    await writeFile(join(worktree, "implementation_notes", `${taskId}.md`), "integrated evidence\n");
+    const value = {
+      version: 2, task_id: taskId, name: "Finalizer integration", description: "Test deterministic finalization.",
+      base_ref: "develop", branch, worktree, in_scope: [`implementation_notes/${taskId}.md`], out_of_scope: ["other files"],
+      done_criteria: [{ id: "C-001", description: "The change is integrated.", owner: "executor", artifacts: [`implementation_notes/${taskId}.md`] }],
+      delegations: [
+        { id: "EXECUTOR-FIN-001", role: "executor", objective: "Prepare the integration change.", artifact_path: `implementation_notes/${taskId}.md`, required_capabilities: ["write"] },
+        { id: "REVIEW-FIN-001", role: "reviewer", objective: "Review the integration change.", artifact_path: `reports/${taskId}-review.md`, required_capabilities: ["read"] },
+      ], constraints: ["finalizer test"],
+    };
+    await writeFile(contract, `# Finalizer test\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n`);
+    const commonDir = spawnSync("git", ["-C", clone, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
+    const stateRoot = join(commonDir, "pi-team", "v1");
+    const blackboardRoot = join(commonDir, "harness-blackboard", "v1");
+    const contractSnapshot = join(stateRoot, "contracts", `${taskId}.md`);
+    await mkdir(join(stateRoot, "contracts"), { recursive: true });
+    await copyFile(contract, contractSnapshot);
+    await mkdir(blackboardRoot, { recursive: true });
+    const cli = join(clone, "plugins/agent-blackboard/server/blackboard-cli.mjs");
+    const publish = spawnSync("node", [cli, "publish", clone, contract], { encoding: "utf8" });
+    assert.equal(publish.status, 0, publish.stderr || publish.stdout);
+    const acceptBoard = spawnSync("node", [cli, "accept", clone, taskId], { encoding: "utf8" });
+    assert.equal(acceptBoard.status, 0, acceptBoard.stderr || acceptBoard.stdout);
+    const state = {
+      version: 2, task_id: taskId, name: value.name, description: value.description,
+      execution_status: "active", outcome: "accepted", worktree, contract_path: contractSnapshot,
+      sessions: {},
+    };
+    await writeFile(join(stateRoot, `${taskId}.json`), JSON.stringify(state, null, 2));
+    const script = join(clone, "scripts/pi-team.ps1");
+    const finalized = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "finalize", taskId], { cwd: clone, encoding: "utf8" });
+    assert.equal(finalized.status, 0, finalized.stderr || finalized.stdout);
+    const finalState = parseJsonText(await readFile(join(stateRoot, `${taskId}.json`), "utf8"));
+    assert.equal(finalState.finalization.status, "succeeded");
+    assert.equal(finalState.finalization.merged_to_target, true);
+    assert.equal(finalState.finalization.worktree_removed, true);
+    assert.equal(finalState.finalization.branch_removed, true);
+    assert.equal(finalState.finalization.blackboard_archived, true);
+    assert.equal(finalState.execution_status, "cleaned");
+    assert.equal((spawnSync("git", ["-C", clone, "branch", "--list", branch], { encoding: "utf8" }).stdout.trim()), "");
+    assert.equal((spawnSync("git", ["-C", clone, "show", `develop:implementation_notes/${taskId}.md`], { encoding: "utf8" }).stdout.trim()), "integrated evidence");
+    await stat(join(commonDir, "harness-blackboard", "v1", `${taskId}.json`));
+    const archived = parseJsonText(await readFile(join(commonDir, "harness-blackboard", "v1", `${taskId}.json`), "utf8"));
+    assert.equal(archived.status, "archived");
+  } finally {
+    spawnSync("git", ["-C", clone, "worktree", "remove", "--force", worktree], { encoding: "utf8" });
+    spawnSync("git", ["-C", clone, "branch", "-D", branch], { encoding: "utf8" });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("tests directory contains the deterministic contract and communication-policy tests", async () => {
   const { readdir } = await import("node:fs/promises");
   const entries = (await readdir(join(REPO, "tests"))).filter((name) => !name.startsWith(".")).sort();
@@ -896,5 +1015,13 @@ test("shared AGENTS context and Lead skill keep separate responsibilities", asyn
   const leadSkill = await readFile(join(REPO, "plugins/agent-blackboard/skills/pi-team-lead/SKILL.md"), "utf8");
   assert.match(leadSkill, /pi-team\.cmd codex-setup/);
   assert.match(leadSkill, /pi-team\.cmd publish <absolute-contract-path>/);
+  assert.match(leadSkill, /pi-team\.cmd preflight <issue-number>/);
+  assert.match(leadSkill, /pi-team\.cmd finalize <task-id>/);
   assert.match(leadSkill, /task-specific contamination/i);
+  const launcher = await readFile(join(REPO, "scripts/pi-team.ps1"), "utf8");
+  assert.match(launcher, /function Preflight/);
+  assert.match(launcher, /function Finalize-Task/);
+  assert.match(launcher, /'finalize' \{Finalize-Task \$Arg1\}/);
+  assert.match(launcher, /merged_to_target/);
+  assert.match(launcher, /github_issue_synced/);
 });
