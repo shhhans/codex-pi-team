@@ -144,6 +144,7 @@ test("agent events are role-scoped, append-only, validated, and cursor-watchable
     const concurrent = await Promise.all(Array.from({ length: 12 }, (_, index) => appendAgentEvent(fixture.repo, identity, { state: "working", activity: `phase ${index}` })));
     assert.deepEqual(concurrent.map(({ event }) => event.sequence).sort((a, b) => a - b), Array.from({ length: 12 }, (_, index) => index + 2));
     await assert.rejects(appendAgentEvent(fixture.repo, identity, { state: "reviewing", activity: "invalid executor state" }), /not allowed/);
+    await assert.rejects(appendAgentEvent(fixture.repo, identity, { state: "ready_for_acceptance", activity: "reviewer-only state" }), /not allowed/);
     await assert.rejects(appendAgentEvent(fixture.repo, identity, { state: "working", activity: "two\nlines" }), /single line/);
     const current = await snapshot(fixture.repo);
     assert.equal(current.tasks[0].agents.find((agent) => agent.role === "executor").sequence, 13);

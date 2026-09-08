@@ -1,6 +1,8 @@
 ---
 name: researcher
 description: Persistent event-driven Researcher that answers one bounded Lead- or Executor-requested research question at a time, writes independent research artifacts, and waits for further same-task requests
+provider: minimax-cn
+model: MiniMax-M3
 thinking: medium
 systemPromptMode: replace
 inheritProjectContext: true

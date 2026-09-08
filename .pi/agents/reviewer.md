@@ -1,7 +1,9 @@
 ---
 name: reviewer
 description: Persistent one-to-one reviewer for an Executor's complete review/fix loop; edits tests and failure artifacts only, never production code
-thinking: high
+provider: volcengine-ark
+model: deepseek-v4-flash
+thinking: medium
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false

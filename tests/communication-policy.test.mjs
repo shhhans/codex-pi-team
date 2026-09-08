@@ -24,6 +24,7 @@ import {
   makeEnvelope,
   makeStructuredEnvelope,
   parseEnvelope,
+  authorizeStructuredEvent,
   structuredIntercomToolDescription,
 } from "../.pi/communication/policy.mjs";
 import { createRoleRuntimePolicy } from "../.pi/communication/runtime-policy.mjs";
@@ -48,6 +49,17 @@ test("Pi Team intercom tool description is the authoritative role-facing event c
   assert.match(reviewer, /REVIEW_FAIL/);
   assert.match(reviewer, /"executor"/);
   assert.doesNotMatch(reviewer, /READY_FOR_REVIEW/);
+
+  const lead = structuredIntercomToolDescription("lead", "TOOL-001");
+  assert.match(lead, /LEAD_REQUEST_CHANGES/);
+  assert.match(lead, /"executor"/);
+});
+
+test("LEAD_REQUEST_CHANGES is Lead-only and targets Executor only", () => {
+  assert.equal(authorizeStructuredEvent("lead", "executor", "LEAD_REQUEST_CHANGES"), true);
+  assert.equal(authorizeStructuredEvent("lead", "reviewer", "LEAD_REQUEST_CHANGES"), false);
+  assert.equal(authorizeStructuredEvent("executor", "reviewer", "LEAD_REQUEST_CHANGES"), false);
+  assert.equal(authorizeStructuredEvent("reviewer", "executor", "LEAD_REQUEST_CHANGES"), false);
 });
 
 function parseFrontmatter(text) {
@@ -1126,6 +1138,68 @@ test("accepted inbound projects only the structured event and never carries the 
   } finally {
     if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
     if (previousDelegations === undefined) delete process.env.PI_TEAM_ALLOWED_DELEGATIONS; else process.env.PI_TEAM_ALLOWED_DELEGATIONS = previousDelegations;
+  }
+});
+
+test("Lead LEAD_REQUEST_CHANGES is accepted by Executor as a structured repair command", async (t) => {
+  const { auditDir, replyStoreDir } = freshRuntimePaths(t);
+  const previousTaskId = process.env.PI_TEAM_TASK_ID;
+  process.env.PI_TEAM_TASK_ID = "COMPRESSION-001";
+  try {
+    const policy = createRoleRuntimePolicy("executor", { auditDir, replyStoreDir });
+    const event = {
+      type: "LEAD_REQUEST_CHANGES",
+      task_id: "COMPRESSION-001",
+      delegation_id: "EXEC-COMPRESSION-001",
+      rejected_criteria: ["C-001"],
+      rejected_evidence: "real launcher arguments omit compression.ts",
+      required_correction: "add the compression extension to all three role launch paths",
+      next_artifact: "tests/compression.test.mjs",
+      next_state: "FIX_READY",
+    };
+    const id = "56565656-5656-4565-8565-565656565656";
+    const inbound = {
+      messages: [{
+        role: "custom",
+        customType: "intercom_message",
+        details: {
+          from: { name: "lead" },
+          message: { id },
+          bodyText: makeInboundStructuredEnvelope(id, event),
+        },
+      }],
+    };
+    const result = await policy.onContext(inbound, { messages: inbound.messages });
+    assert.equal(result.messages[0].customType, "pi_team_event");
+    assert.deepEqual(JSON.parse(result.messages[0].content), event);
+    const rows = await readAuditRows(auditDir, "executor");
+    assert.ok(rows.some((row) => row.direction === "inbound" && row.outcome === "accepted" && row.sender === "lead"));
+  } finally {
+    if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
+  }
+});
+
+test("active roles cannot spoof Lead LEAD_REQUEST_CHANGES outbound", async (t) => {
+  const { auditDir, replyStoreDir } = freshRuntimePaths(t);
+  const previousTaskId = process.env.PI_TEAM_TASK_ID;
+  process.env.PI_TEAM_TASK_ID = "COMPRESSION-001";
+  try {
+    const policy = createRoleRuntimePolicy("executor", { auditDir, replyStoreDir, listPeerSessions: async () => [{ id: "pi-team--COMPRESSION-001--reviewer--fresh" }] });
+    const event = {
+      type: "LEAD_REQUEST_CHANGES",
+      task_id: "COMPRESSION-001",
+      delegation_id: "EXEC-COMPRESSION-001",
+      rejected_criteria: ["C-001"],
+      rejected_evidence: "spoof",
+      required_correction: "spoof",
+      next_artifact: "tests/compression.test.mjs",
+      next_state: "FIX_READY",
+    };
+    const result = await policy.onToolCall(makeIntercomEvent("send", "reviewer", JSON.stringify(event)));
+    assert.ok(result?.block);
+    assert.match(result.reason, /not allowed for executor/);
+  } finally {
+    if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
   }
 });
 

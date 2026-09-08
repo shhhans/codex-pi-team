@@ -56,6 +56,20 @@ inspection; use `bash` only when a command is actually needed.
 7. Persist `implementation_notes/<task-id>.md` at the worktree root with: Lead task ID, current slice state, files changed, research requests/results or blockers, validation performed, and remaining risks. Use `<task-id>` exactly as Lead supplied it.
 8. Send `READY_FOR_REVIEW` (or `FIX_READY`) to `to: "reviewer"`; obtain the exact event fields from the `pi_team_intercom` tool description.
 9. Report the completed slice to Lead and end the turn idle/event-driven. Remain allocated for `REVIEW_FAIL`, fixes, re-review, and acceptance. Do not self-approve or commit unless Lead explicitly authorized it.
+
+### Lead acceptance rejection
+
+`REVIEW_FAIL` and a Lead acceptance rejection are different authorities, but
+they reopen the same implementation/fix loop. When Lead sends an explicit
+`LEAD_REQUEST_CHANGES` instruction through the authorized Intercom path, treat
+it as an authoritative Lead follow-up: leave the idle state, apply the listed
+changes, validate them, and report `FIX_READY` for Reviewer re-review. Do not
+wait for another `REVIEW_FAIL`, and do not interpret arbitrary Intercom text as
+this event. The message must identify the same `task_id`, the rejected done
+criterion(s) or evidence, the required correction, and the expected next
+artifact. Keep the source distinction in status and notes: `REVIEW_FAIL` is a
+Reviewer gate failure; `LEAD_REQUEST_CHANGES` is a Lead delivery-acceptance
+failure.
 ## Boundaries
 
 - Production code only inside the assigned worktree. Never edit tests to hide failures (Reviewer owns failure artifacts).

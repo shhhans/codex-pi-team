@@ -1,9 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { appendAgentEvent } from "../../../plugins/agent-blackboard/server/blackboard-core.mjs";
+import { appendAgentEvent, ROLE_STATES } from "../../../plugins/agent-blackboard/server/blackboard-core.mjs";
 import { registerRoleRuntime } from "../role-events.mjs";
-
-const states = ["working", "waiting", "blocked", "completed", "ready_for_review", "reviewing", "changes_requested", "ready_for_acceptance"] as const;
 
 export default function (pi: ExtensionAPI) {
   const taskId = process.env.PI_TEAM_TASK_ID;
@@ -12,6 +10,12 @@ export default function (pi: ExtensionAPI) {
   const stateRoot = process.env.PI_TEAM_STATE_ROOT;
   const launchId = process.env.PI_TEAM_LAUNCH_ID;
   const intercomId = process.env.PI_INTERCOM_STABLE_ID;
+  // The Blackboard server is the source of truth for role-scoped states. Do
+  // not advertise states that appendAgentEvent will reject for this role.
+  const roleStateNames = role && Object.hasOwn(ROLE_STATES, role)
+    ? Array.from(ROLE_STATES[role as keyof typeof ROLE_STATES])
+    : ["blocked"];
+  const stateSchemas = roleStateNames.map((state) => Type.Literal(state));
   // This extension is present in every active role. It owns runtime readiness
   // now that the retired report_to_lead extension is no longer loaded.
   if (taskId && role && agentId && stateRoot && launchId && intercomId) {
@@ -23,7 +27,7 @@ export default function (pi: ExtensionAPI) {
     description: "Publish the current Agent activity to the Lead-owned task Blackboard. blocked, changes_requested, ready_for_review, ready_for_acceptance, and completed enqueue a Lead wakeup when the task has a Lead binding.",
     parameters: Type.Object({
       task_id: Type.String({ maxLength: 128 }),
-      state: Type.Union(states.map((state) => Type.Literal(state))),
+      state: Type.Union(stateSchemas),
       activity: Type.String({ maxLength: 240 }),
       blocker: Type.Optional(Type.String({ maxLength: 500 })),
       next: Type.Optional(Type.String({ maxLength: 500 })),

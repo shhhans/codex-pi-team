@@ -23,6 +23,7 @@ export const LIFECYCLE_MESSAGE_TYPES = new Set([
   "REVIEW_PASS",
   "REVIEW_FAIL",
   "READY_FOR_ACCEPTANCE",
+  "LEAD_REQUEST_CHANGES",
 ]);
 export const STRUCTURED_MESSAGE_TYPES = new Set([...RESEARCH_MESSAGE_TYPES, ...LIFECYCLE_MESSAGE_TYPES]);
 export const RESEARCH_BLOCK_REASON_CODES = new Set([
@@ -38,6 +39,7 @@ export const RESEARCH_BLOCK_REASON_CODES = new Set([
 ]);
 
 const ROLE_EVENT_TYPES = new Map([
+  ["lead", ["LEAD_REQUEST_CHANGES"]],
   ["researcher", ["RESEARCH_RESULT", "RESEARCH_BLOCKED"]],
   ["executor", ["RESEARCH_REQUEST", "READY_FOR_REVIEW", "FIX_READY", "READY_FOR_ACCEPTANCE"]],
   ["reviewer", ["REVIEW_PASS", "REVIEW_FAIL"]],
@@ -52,6 +54,11 @@ const EVENT_FIELD_CONTRACTS = new Map([
   ["REVIEW_PASS", "type, task_id, delegation_id, evidence_paths (non-empty string[]); optional artifact_path"],
   ["REVIEW_FAIL", "type, task_id, delegation_id, failure_paths (non-empty string[]); optional evidence_paths, artifact_path"],
   ["READY_FOR_ACCEPTANCE", "type, task_id, delegation_id, worktree, implementation_notes_path or artifact_path"],
+  ["LEAD_REQUEST_CHANGES", "type, task_id, delegation_id, rejected_criteria (non-empty string[]), rejected_evidence, required_correction, next_artifact, next_state=FIX_READY"],
+]);
+
+const STRUCTURED_EVENT_TARGETS = new Map([
+  ["LEAD_REQUEST_CHANGES", new Set(["executor"])],
 ]);
 
 // This is deliberately the single role-facing protocol description. Role
@@ -59,7 +66,9 @@ const EVENT_FIELD_CONTRACTS = new Map([
 // wire mechanics: the registered `pi_team_intercom` tool is authoritative.
 export function structuredIntercomToolDescription(role, taskId) {
   const eventTypes = ROLE_EVENT_TYPES.get(role) ?? [];
-  const targetRoles = [...(BOUNDED_PEERS.get(role) ?? [])];
+  const targetRoles = role === "lead"
+    ? [...(STRUCTURED_EVENT_TARGETS.get("LEAD_REQUEST_CHANGES") ?? [])]
+    : [...(BOUNDED_PEERS.get(role) ?? [])];
   const typeLines = eventTypes.map(type => `- ${type}: ${EVENT_FIELD_CONTRACTS.get(type)}`).join("\n");
   return `Send one Pi Team structured event to a current same-task peer.\n\n`
     + `Only action \"send\" is available. Set to to exactly one allowed role: ${targetRoles.map(value => `\"${value}\"`).join(", ") || "none"}. `
@@ -68,6 +77,22 @@ export function structuredIntercomToolDescription(role, taskId) {
     + `Do not send plain text, a raw agent-team/v1 envelope, base64/base64url, UUID/correlation ID, session ID, launch ID, or unknown top-level fields. The runtime generates transport metadata and the canonical envelope.\n\n`
     + `Allowed event types for this role:\n${typeLines}\n\n`
     + `Use JSON syntax: quote every key and string value. Follow the exact field contract for the selected type; runtime rejects missing, extra, or invalid fields.`;
+}
+
+export function allowedStructuredEventTypes(role) {
+  return new Set(ROLE_EVENT_TYPES.get(role) ?? []);
+}
+
+export function allowedStructuredRecipients(role, eventType) {
+  if (role === "lead" && eventType === "LEAD_REQUEST_CHANGES") return new Set(["executor"]);
+  return new Set(BOUNDED_PEERS.get(role) ?? []);
+}
+
+export function authorizeStructuredEvent(sender, recipient, eventType) {
+  if (typeof sender !== "string" || typeof recipient !== "string" || typeof eventType !== "string") return false;
+  const role = sender.trim().toLowerCase();
+  const target = recipient.trim().toLowerCase();
+  return allowedStructuredEventTypes(role).has(eventType) && allowedStructuredRecipients(role, eventType).has(target);
 }
 // Mirrors tests/team-contract.test.mjs RESEARCHER_TOOLS exactly.
 export const RESEARCHER_CAPABILITIES = new Set([
@@ -171,6 +196,7 @@ function validateLifecycleEvent(event) {
     ["REVIEW_PASS", new Set(["type", "task_id", "delegation_id", "evidence_paths", "artifact_path"])],
     ["REVIEW_FAIL", new Set(["type", "task_id", "delegation_id", "failure_paths", "evidence_paths", "artifact_path"])],
     ["READY_FOR_ACCEPTANCE", new Set(["type", "task_id", "delegation_id", "worktree", "implementation_notes_path", "artifact_path"])],
+    ["LEAD_REQUEST_CHANGES", new Set(["type", "task_id", "delegation_id", "rejected_criteria", "rejected_evidence", "required_correction", "next_artifact", "next_state"])],
   ]);
   const known = allowed.get(event.type);
   if (!known || Object.keys(event).some(key => !known.has(key))) throw new Error("structured-message-unknown-field");
@@ -178,6 +204,14 @@ function validateLifecycleEvent(event) {
     const paths = event.type === "REVIEW_PASS" ? event.evidence_paths : event.failure_paths;
     if (!Array.isArray(paths) || paths.length === 0 || paths.some(path => typeof path !== "string" || !path)) throw new Error("structured-message-invalid-evidence-paths");
     if (event.evidence_paths !== undefined && (!Array.isArray(event.evidence_paths) || event.evidence_paths.some(path => typeof path !== "string" || !path))) throw new Error("structured-message-invalid-evidence-paths");
+    return;
+  }
+  if (event.type === "LEAD_REQUEST_CHANGES") {
+    if (!Array.isArray(event.rejected_criteria) || event.rejected_criteria.length === 0 || event.rejected_criteria.some(value => typeof value !== "string" || !value.trim())) throw new Error("structured-message-invalid-rejected-criteria");
+    for (const field of ["rejected_evidence", "required_correction", "next_artifact"]) {
+      if (typeof event[field] !== "string" || !event[field].trim()) throw new Error(`structured-message-invalid-${field}`);
+    }
+    if (event.next_state !== "FIX_READY") throw new Error("structured-message-invalid-next-state");
     return;
   }
   if (typeof event.worktree !== "string" || !event.worktree || (typeof event.implementation_notes_path !== "string" && typeof event.artifact_path !== "string")) {
@@ -286,9 +320,16 @@ export class LeadAudit {
 export class PolicyReceiver {
   constructor(role, dedup = new DedupStore()) { this.role = role; this.dedup = dedup; }
   receive({ sender, text, expiresAt }, sideEffect = () => {}) {
-    if (!authorizePeer(sender, this.role)) return { accepted: false, reason: "unauthorized" };
     let envelope;
     try { envelope = parseEnvelope(text, { expiresAt }); } catch (error) { return { accepted: false, reason: error.message }; }
+    let structured;
+    try {
+      const event = JSON.parse(envelope.body);
+      structured = parseStructuredEvent(envelope.body, event?.task_id);
+    } catch (error) {
+      return { accepted: false, reason: error instanceof Error ? error.message : "structured-message-invalid" };
+    }
+    if (!authorizeStructuredEvent(sender, this.role, structured.event.type)) return { accepted: false, reason: "unauthorized" };
     if (!this.dedup.accept(envelope.id, this.role)) return { accepted: false, reason: "duplicate" };
     sideEffect(envelope);
     return { accepted: true, envelope };

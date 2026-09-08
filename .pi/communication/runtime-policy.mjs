@@ -10,6 +10,7 @@ import {
   resolveTeamPeerRole,
   validateResearchBody,
   authorizeResearchDelegation,
+  authorizeStructuredEvent,
   summarizeEnvelopeForAgent,
   formatAuditEvent,
   RESEARCH_MESSAGE_TYPES,
@@ -142,6 +143,10 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], lis
     catch (error) {
       await auditSafely({ direction: "outbound", action, recipient: requestedRole, outcome: "refused", reason: error.message });
       return { block: true, reason: `Pi Team intercom send refused: ${error.message}` };
+    }
+    if (!authorizeStructuredEvent(normalized, requestedRole, structured.event.type)) {
+      await auditSafely({ direction: "outbound", action, recipient: requestedRole, outcome: "refused", reason: "structured-event-not-allowed-for-sender", envelope: parseEnvelope(structured.envelope) });
+      return { block: true, reason: `Pi Team intercom send refused: ${structured.event.type} is not allowed for ${normalized} -> ${requestedRole}` };
     }
     let sessions;
     try { sessions = await livePeerSessions(); }
