@@ -53,9 +53,10 @@ accept a tool change until a live smoke exercises the changed path.
 
 Write a tracked Markdown v2 task contract with exactly one JSON contract block.
 Each done criterion has a stable `C-###` ID, owner, and artifact path; each
-role delegation declares its stable ID, artifact path, and required
-capabilities. Reject a Researcher delegation needing unavailable capabilities
-(such as shell or profiler access) before launching it.
+role delegation declares its stable ID, artifact path, and capabilities as
+task context. Do not compare those declarations against a static capability
+allow-list; actual tool access is enforced by the role launcher and runtime
+policy, which may evolve independently of task contracts.
 Keep the Blackboard task name and description aligned with the current
 Lead-owned contract. Blackboard events are observations and reminders, not
 authorization, completion evidence, or a communication channel.

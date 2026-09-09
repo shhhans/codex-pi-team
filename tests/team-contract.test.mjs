@@ -823,7 +823,7 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
   }
 });
 
-test("v2 contracts bind stable criteria and reject Researcher work that needs unavailable capabilities", async () => {
+test("v2 contracts preserve declared capabilities without static availability preflight", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-team-v2-contract-"));
   const contract = join(root, "contract.md");
   const script = join(REPO, "scripts/pi-team.ps1");
@@ -831,13 +831,13 @@ test("v2 contracts bind stable criteria and reject Researcher work that needs un
     version: 2,
     task_id: "CAP-001",
     name: "Capability preflight",
-    description: "Reject a Researcher delegation that requires an unavailable capability.",
+    description: "Preserve a Researcher delegation that names project-specific capabilities.",
     base_ref: "master",
     branch: `pi-team/test-capabilities-${process.pid}`,
     worktree: join(root, "worktree"),
     in_scope: ["contract validation"],
     out_of_scope: ["live performance measurement"],
-    done_criteria: [{ id: "C-001", description: "The contract validates role capabilities.", owner: "executor", artifacts: ["implementation_notes/CAP-001.md"] }],
+    done_criteria: [{ id: "C-001", description: "The contract preserves declared capabilities.", owner: "executor", artifacts: ["implementation_notes/CAP-001.md"] }],
     delegations: [
       { id: "EXECUTOR-001", role: "executor", objective: "Validate the contract.", artifact_path: "implementation_notes/CAP-001.md", required_capabilities: ["bash", "write"] },
       { id: "REVIEWER-001", role: "reviewer", objective: "Review the contract.", artifact_path: "failures/CAP-001-review.md", required_capabilities: ["read", "write"] },
@@ -852,11 +852,11 @@ test("v2 contracts bind stable criteria and reject Researcher work that needs un
     assert.equal(valid.status, 0, valid.stderr || valid.stdout);
     assert.match(valid.stdout, /VALID CAP-001/);
 
-    base.delegations[2].required_capabilities = ["shell", "profiler"];
+    base.delegations[2].required_capabilities = ["shell", "profiler", "future_web_tool"];
     await writeFile(contract, `# Invalid contract\n\n\`\`\`json\n${JSON.stringify(base, null, 2)}\n\`\`\`\n`);
-    const rejected = run();
-    assert.notEqual(rejected.status, 0, "Researcher must not be launched for a shell/profiler delegation");
-    assert.match(rejected.stderr, /unavailable to role researcher/);
+    const projectSpecific = run();
+    assert.equal(projectSpecific.status, 0, projectSpecific.stderr || projectSpecific.stdout);
+    assert.match(projectSpecific.stdout, /VALID CAP-001/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -170,9 +170,10 @@ context is generated at runtime and is not added to reusable prompts or skills.
 New task contracts use JSON `version: 2`. Each `done_criteria` entry has a
 stable `C-###` ID, owner role, description, and worktree-relative artifact
 path. `delegations` name the assigned role, stable delegation ID, objective,
-artifact path, and required capabilities. The launcher validates those
-capabilities before launch; Researcher delegations needing shell or profiler
-access are rejected before a Researcher is started.
+artifact path, and declared capabilities. Declared capabilities are task
+context, not a static allow-list: projects may define new role/tool names as
+the Pi runtime evolves. Actual tool access remains enforced by the role's
+launcher, extensions, and runtime policy.
 
 `accept <task-id> <acceptance-file>` requires a Reviewer
 `ready_for_acceptance` event and one evidence entry for every frozen criterion

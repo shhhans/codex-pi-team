@@ -151,27 +151,11 @@ function New-Id { [guid]::NewGuid().ToString() }
 function New-FinalizationState([string]$TargetBranch) {
   return [pscustomobject]@{status='pending';integration_commit=$null;merged_to_target=$false;target_branch=$TargetBranch;worktree_removed=$false;branch_removed=$false;terminals_reclaimed=$false;blackboard_archived=$false;github_issue_synced=$false;github_issue_number=$null;github_sync_mode=$null;tests_passed=$false;failure_reason=$null}
 }
-function Get-RoleCapabilities([string]$Role) {
-  $capabilities = @{
-    researcher = @('read','grep','find','ls','write','web_search','fetch_content','get_search_content','source_check','pi_team_intercom','blackboard_update')
-    executor = @('read','grep','find','ls','bash','edit','write','pi_team_intercom','blackboard_update')
-    reviewer = @('read','grep','find','ls','bash','edit','write','pi_team_intercom','blackboard_update')
-  }
-  if (-not $capabilities.ContainsKey($Role)) { Fail "unknown Pi Team role: $Role" }
-  return @($capabilities[$Role])
+function Assert-KnownRole([string]$Role) {
+  if (@('researcher','executor','reviewer') -notcontains $Role) { Fail "unknown Pi Team role: $Role" }
 }
 function Assert-RelativeArtifactPath([string]$Path,[string]$Field) {
   if ([string]::IsNullOrWhiteSpace($Path) -or [IO.Path]::IsPathRooted($Path) -or $Path -match '(^|[\\/])\.\.([\\/]|$)') { Fail "$Field must be a non-empty worktree-relative path" }
-}
-function Assert-DelegationCapabilities($Delegation) {
-  $role = [string]$Delegation.role; $available = Get-RoleCapabilities $role
-  foreach ($capability in @($Delegation.required_capabilities)) {
-    # Historical frozen contracts named the Pi Team wrapper `intercom`.
-    # Preserve their lifecycle readability; launches expose only the new,
-    # non-conflicting pi_team_intercom tool.
-    $effective = if ([string]$capability -eq 'intercom') { 'pi_team_intercom' } else { [string]$capability }
-    if ($available -notcontains $effective) { Fail "delegation $($Delegation.id) requires capability '$capability' unavailable to role $role" }
-  }
 }
 function Parse-Contract([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { Fail "contract not found: $Path" }
@@ -191,7 +175,7 @@ function Parse-Contract([string]$Path) {
     if ($null -eq $criterion.id -or [string]$criterion.id -notmatch '^C-[0-9]{3,}$') { Fail 'each done criterion needs a stable C-### id' }
     if ($criterionIds.ContainsKey([string]$criterion.id)) { Fail "duplicate done criterion id: $($criterion.id)" }; $criterionIds[[string]$criterion.id] = $true
     if ([string]::IsNullOrWhiteSpace([string]$criterion.description)) { Fail "done criterion $($criterion.id) needs a description" }
-    Get-RoleCapabilities ([string]$criterion.owner) | Out-Null
+    Assert-KnownRole ([string]$criterion.owner)
     if (@($criterion.artifacts).Count -eq 0) { Fail "done criterion $($criterion.id) needs at least one artifact" }
     foreach ($artifact in @($criterion.artifacts)) { Assert-RelativeArtifactPath ([string]$artifact) "done criterion $($criterion.id) artifact" }
   }
@@ -200,11 +184,10 @@ function Parse-Contract([string]$Path) {
   foreach ($delegation in @($c.delegations)) {
     if ($null -eq $delegation.id -or [string]$delegation.id -notmatch '^[A-Z][A-Z0-9_-]{2,63}$') { Fail 'each delegation needs a stable ID' }
     if ($delegationIds.ContainsKey([string]$delegation.id)) { Fail "duplicate delegation id: $($delegation.id)" }; $delegationIds[[string]$delegation.id] = $true
-    $role = [string]$delegation.role; Get-RoleCapabilities $role | Out-Null; $delegatedRoles[$role] = $true
+    $role = [string]$delegation.role; Assert-KnownRole $role; $delegatedRoles[$role] = $true
     if ([string]::IsNullOrWhiteSpace([string]$delegation.objective)) { Fail "delegation $($delegation.id) needs an objective" }
     Assert-RelativeArtifactPath ([string]$delegation.artifact_path) "delegation $($delegation.id) artifact_path"
     if ($null -eq $delegation.required_capabilities -or @($delegation.required_capabilities).Count -eq 0) { Fail "delegation $($delegation.id) needs required_capabilities" }
-    Assert-DelegationCapabilities $delegation
   }
   foreach ($requiredRole in @('executor','reviewer')) { if (-not $delegatedRoles.ContainsKey($requiredRole)) { Fail "contract needs a $requiredRole delegation" } }
   return $c
@@ -674,7 +657,6 @@ function Research([string]$TaskId,[string]$QuestionId,[string]$QuestionFile) {
   $contract=Parse-Contract $s.contract_path
   $delegation=@($contract.delegations | Where-Object { $_.id -eq $QuestionId -and $_.role -eq 'researcher' })
   if ($delegation.Count -ne 1) { Fail "unknown Researcher delegation: $QuestionId" }
-  Assert-DelegationCapabilities $delegation[0]
   $out=Join-Path $s.worktree $delegation[0].artifact_path; New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
   $q=Get-Content -Raw -Encoding UTF8 $QuestionFile
   $researcherId = New-Id
