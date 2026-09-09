@@ -25,6 +25,40 @@ review/fix, and re-review. `READY_FOR_REVIEW`, `REVIEW_PASS`,
 an event, the role reports its completed slice to Lead and becomes idle;
 normal handoff does not stop or resume the sessions.
 
+## Bounded Executor -> Researcher delegation (Issue #3)
+
+The paired Executor may ask the paired Researcher for one bounded,
+same-task research slice. This is a peer capability, not a transfer of
+Lead authority: the Lead owns the frozen objective and scope, observes
+material updates through `blackboard_update`, and makes the final
+acceptance or rejection decision.
+
+Before transport, the runtime authorizes the request against the frozen
+task state. The request must use the current task ID and an allowed
+delegation ID, target the Researcher role, request only capabilities the
+Researcher has, and name a research artifact under
+`research/<task-id>-<topic-slug>.md`. The artifact path is the ownership
+boundary: Researcher writes the artifact, uses a unique human-readable
+slug, and must not overwrite another request's artifact unless explicitly
+instructed.
+
+The request event is `RESEARCH_REQUEST` and carries the objective,
+allowed paths, artifact path, required capabilities, decision-supported
+flag, and frozen contract version. A successful `RESEARCH_RESULT` carries
+the artifact path, headline, sourced findings with confidence, overall
+confidence, and decision impact. A `RESEARCH_BLOCKED` result carries the
+same correlation fields plus a reason and detail. Architectural,
+out-of-scope, and under-specified requests must also state the next
+decision needed from Lead. Requests that widen scope, require unavailable
+capabilities, or target a busy/completed pairing are refused or escalated;
+they are not silently converted into implementation work.
+
+Researcher returns to waiting/idle after the bounded response. Transport,
+audit, or a successfully written artifact is evidence of communication,
+not proof of task completion. The Lead must still inspect the reported
+decision impact and accept the task only through the normal acceptance
+contract.
+
 Each active role loads `blackboard-update.ts`; `report_to_lead` is not
 registered. `blackboard_update` records explicit Agent activity in the
 Lead-owned common-dir Blackboard. `blocked`, `changes_requested`,
