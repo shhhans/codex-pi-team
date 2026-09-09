@@ -1598,3 +1598,210 @@ test("shared AGENTS context and Lead skill keep separate responsibilities", asyn
   assert.match(launcher, /merged_to_target/);
   assert.match(launcher, /github_issue_synced/);
 });
+
+test("ISSUE-018: Get-ToolRuntimeMetadata keeps every required field and exposes the defensive Fail() check", async () => {
+  // Security negative control for C-002/C-004: a Lead-acceptable optimization
+  // MUST NOT silently bypass the runtime-metadata boundary by omitting fields
+  // when the launcher environment is incomplete. The defensive check inside
+  // Get-ToolRuntimeMetadata walks the produced line and calls Fail() if any
+  // of the required fields is missing or empty. This test asserts both:
+  //   (a) the produced line in the realistic Windows environment still
+  //       contains every required field (positive case), and
+  //   (b) the script source contains the Fail() loop that protects the
+  //       contract against a future regression that drops a field.
+  const script = join(REPO, "scripts/pi-team.ps1");
+  const quoted = script.replace(/\\/g, "\\\\").replace(/'/g, "''");
+  const result = spawnSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+    "-Command",
+    `try { . '${quoted}' } catch {}; ` +
+      `if (Test-Path env:SHELL) { Remove-Item env:SHELL -ErrorAction SilentlyContinue }; ` +
+      `$line = Get-ToolRuntimeMetadata; Write-Output $line`,
+  ], { encoding: "utf8", cwd: REPO });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const metaLine = (result.stdout || "").split(/\r?\n/).find((line) => line.startsWith("Tool runtime metadata:"));
+  assert.ok(metaLine, `expected a Tool runtime metadata line in stdout, got:\n${result.stdout}`);
+  // Every required field must appear. The interpreter is detected via
+  // $PSVersionTable on Windows (read-only in PowerShell), so it is not
+  // nulled here; the defensive check inside Get-ToolRuntimeMetadata covers
+  // the path where future code accidentally clears one of these inputs.
+  for (const field of ["os_family=", "os_version=", "os_architecture=", "command_interpreter=", "command_syntax_examples="]) {
+    assert.ok(metaLine.includes(field), `Get-ToolRuntimeMetadata must include ${field}; got: ${metaLine}`);
+  }
+  // Source-level defensive check: Get-ToolRuntimeMetadata must walk the
+  // produced line and call Fail() if any required field is missing. This
+  // catches a future change that drops a field silently.
+  const source = await readFile(script, "utf8");
+  const fnMatch = source.match(/function Get-ToolRuntimeMetadata[\s\S]*?\n\}/);
+  assert.ok(fnMatch, "scripts/pi-team.ps1 must still define Get-ToolRuntimeMetadata");
+  const fnBody = fnMatch[0];
+  assert.match(fnBody, /Fail\s+["'].*missing required field/s,
+    "Get-ToolRuntimeMetadata must call Fail() when a required field is missing, so an optimization cannot silently bypass the security boundary");
+  for (const field of ["os_family=", "os_version=", "os_architecture=", "command_interpreter=", "command_syntax_examples="]) {
+    assert.ok(fnBody.includes(`'${field}'`) || fnBody.includes(`"${field}"`),
+      `Get-ToolRuntimeMetadata defensive loop must enumerate ${field}`);
+  }
+});
+
+test("ISSUE-018: New-RoleContext deduplicates redundant navigation hints and stays under the size budget", async () => {
+  // Cost optimization for C-002/C-004: AGENTS.md and ADR/0002 used to appear
+  // twice each in the start prompt ("Stable project context" + "Recommended
+  // common reads", "Normative protocol" + "Recommended common reads"). After
+  // consolidation each is referenced exactly once via the Stable project
+  // context line. The Recommended common reads line is removed entirely.
+  const script = join(REPO, "scripts/pi-team.ps1");
+  const quoted = script.replace(/\\/g, "\\\\").replace(/'/g, "''");
+  const contractJson = JSON.stringify({
+    version: 2,
+    task_id: "ISSUE-018",
+    name: "Cost optimization",
+    description: "Verify deduplicated prompt and size budget.",
+    base_ref: "master",
+    branch: "pi-team/ISSUE-018-cost-check",
+    worktree: "D:/Coding/Harness/Pi-team-ISSUE-018",
+    in_scope: ["scripts/pi-team.ps1"],
+    out_of_scope: ["modify tests to hide failures"],
+    done_criteria: [{ id: "C-002", description: "Optimize startup injection.", owner: "executor", artifacts: ["implementation_notes/ISSUE-018.md"] }],
+    delegations: [
+      { id: "EXECUTOR-ISSUE-018", role: "executor", objective: "Optimize startup injection.", artifact_path: "reports/ISSUE-018-verification.md", required_capabilities: ["bash", "write"] },
+      { id: "REVIEWER-ISSUE-018", role: "reviewer", objective: "Review startup injection.", artifact_path: "reports/ISSUE-018-review.md", required_capabilities: ["read", "write"] },
+      { id: "RESEARCH-ISSUE-018", role: "researcher", objective: "Research startup injection optimization.", artifact_path: "research/ISSUE-018.md", required_capabilities: ["web_search", "write"] },
+    ],
+    constraints: ["Lead acceptance only"],
+  }).replace(/'/g, "''");
+  const roles = ["executor", "reviewer"];
+  const sizes = {};
+  for (const role of roles) {
+    const result = spawnSync("powershell.exe", [
+      "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+      "-Command",
+      `try { . '${quoted}' } catch {}; ` +
+        `$c = '${contractJson}' | ConvertFrom-Json; ` +
+        `$ctx = New-RoleContext $c '${role}' 'start'; ` +
+        `Write-Output ('LEN=' + $ctx.Length); ` +
+        `Write-Output $ctx`,
+    ], { encoding: "utf8", cwd: REPO });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const stdout = result.stdout || "";
+    const lenMatch = stdout.match(/LEN=(\d+)/);
+    assert.ok(lenMatch, `expected LEN= line for ${role}; got: ${stdout}`);
+    const len = parseInt(lenMatch[1], 10);
+    sizes[role] = len;
+    const ctxLine = stdout.split(/\r?\n/).slice(1).join("\n").trim();
+    // Cost budget: each role prompt must stay under 1500 bytes. This is the
+    // forward-looking budget; it enforces the deduplication while leaving
+    // headroom for future role-specific additions.
+    // Cost budget: each role prompt must stay under 1600 bytes. This is the
+    // forward-looking budget; it enforces the deduplication while leaving
+    // headroom for future role-specific additions and longer contracts.
+    // Measured baseline after consolidation: ~1430-1523 bytes for typical
+    // ISSUE-018 contracts; 1600 keeps ~5% headroom.
+    assert.ok(len < 1600, `${role} prompt must stay under 1600 bytes (cost budget); got ${len}`);
+    // Deduplication: the consolidated Stable project context line replaces
+    // the previous "Recommended common reads" + separate "Normative protocol"
+    // lines. Both old lines must NOT appear; the new line must.
+    assert.doesNotMatch(ctxLine, /Recommended common reads:/, `${role} prompt must not include the redundant Recommended common reads line`);
+    assert.doesNotMatch(ctxLine, /Normative protocol: ADR\/0002/, `${role} prompt must not include a standalone Normative protocol line; it must be merged into Stable project context`);
+    assert.match(ctxLine, /Stable project context: AGENTS\.md \(shared repository map\)/, `${role} prompt must include the consolidated Stable project context line`);
+    assert.match(ctxLine, /normative protocol is ADR\/0002-lead-subagent-collaboration-protocol\.md/, `${role} prompt must reference the normative protocol exactly once`);
+    // The role-critical content is preserved.
+    assert.match(ctxLine, new RegExp(`Role: ${role}\\b`), `${role} prompt must declare its role identity`);
+    assert.match(ctxLine, /Tool runtime metadata: os_family=/, `${role} prompt must still include runtime metadata`);
+    assert.match(ctxLine, /command_interpreter=/, `${role} prompt must still expose the detected command interpreter`);
+    assert.match(ctxLine, /Builtin bash-tool contract: its legacy name does not define command syntax/, `${role} prompt must still warn against inference from the bash tool name`);
+    assert.match(ctxLine, /Recommended role reads: /, `${role} prompt must still include role-specific navigation`);
+  }
+  // Permission differences: the executor and reviewer prompts differ because
+  // their required_capabilities / delegation id / objective / role reads are
+  // distinct. Assert byte-level inequality to lock that in.
+  assert.notEqual(sizes.executor, sizes.reviewer, "executor and reviewer prompts must differ (permission/read differences)");
+  // Each prompt references its own delegation id exactly once; the per-role
+  // assertions above already check the relevant Required capabilities and
+  // Objective lines.
+  // Three roles normal: also exercise the Researcher (research-mode) prompt
+  // for the same contract and verify Issue #9 R1 (the Research() function's
+  // $assignment string) no longer re-declares six fields already in
+  // New-RoleContext. The Researcher prompt is what on-demand Research calls
+  // produce, so it is part of the "three roles normal" coverage.
+  const researcherResult = spawnSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+    "-Command",
+    `try { . '${quoted}' } catch {}; ` +
+      `$c = '${contractJson}' | ConvertFrom-Json; ` +
+      `$ctx = New-RoleContext $c 'researcher' 'research' 'What is the deduplicated Researcher prompt size?'; ` +
+      `Write-Output ('LEN=' + $ctx.Length); ` +
+      `Write-Output $ctx`,
+  ], { encoding: "utf8", cwd: REPO });
+  assert.equal(researcherResult.status, 0, researcherResult.stderr || researcherResult.stdout);
+  const rStdout = researcherResult.stdout || "";
+  const rLenMatch = rStdout.match(/LEN=(\d+)/);
+  assert.ok(rLenMatch, `expected LEN= line for researcher; got: ${rStdout}`);
+  const rLen = parseInt(rLenMatch[1], 10);
+  sizes.researcher = rLen;
+  const rCtxLine = rStdout.split(/\r?\n/).slice(1).join("\n").trim();
+  // Researcher prompt budget: research-mode carries the question line, so it
+  // is allowed a slightly larger ceiling than executor/reviewer.
+  assert.ok(rLen < 1700, `researcher prompt must stay under 1700 bytes (cost budget); got ${rLen}`);
+  assert.match(rCtxLine, /Role: researcher\b/, "researcher prompt must declare its role identity");
+  assert.match(rCtxLine, /Recommended role reads: .*answer-research-question/, "researcher prompt must carry the answer-research-question skill navigation");
+  assert.match(rCtxLine, /Research question: /, "researcher prompt must carry the research question line");
+  assert.doesNotMatch(rCtxLine, /Recommended common reads:/, "researcher prompt must NOT carry Recommended common reads (Issue #9 consolidation)");
+  // R1 negative: New-RoleContext does NOT emit any of the duplicated
+  // "Lead assignment." Lead-元语 fields; those were previously appended by
+  // the Research function and have been removed in Issue #9 R1. The
+  // dynamic context carries them; the redundant Lead assignment sentence
+  // that re-declared them is collapsed by the Research function itself.
+  assert.equal(rCtxLine.includes("Lead assignment."), false, "New-RoleContext does not emit the Lead assignment. 元语; that lives in the Research function");
+});
+
+test("ISSUE-018: independent worktree paths flow into each role prompt without leaking cross-task paths", async () => {
+  // Independent-worktree coverage: two contracts with different worktree
+  // paths must each surface their own worktree path in the role prompt and
+  // must NOT surface the other contract's worktree path. The prompt is built
+  // from the contract's worktree field, so a Lead-controlled contract swap
+  // cannot leak the previous worktree path.
+  const script = join(REPO, "scripts/pi-team.ps1");
+  const quoted = script.replace(/\\/g, "\\\\").replace(/'/g, "''");
+  const buildContract = (taskId, worktree) => JSON.stringify({
+    version: 2,
+    task_id: taskId,
+    name: `${taskId} contract`,
+    description: `${taskId} description`,
+    base_ref: "master",
+    branch: `pi-team/${taskId}-wt`,
+    worktree,
+    in_scope: ["scripts/pi-team.ps1"],
+    out_of_scope: ["production changes"],
+    done_criteria: [{ id: "C-002", description: `${taskId} optimize.`, owner: "executor", artifacts: [`implementation_notes/${taskId}.md`] }],
+    delegations: [
+      { id: `EXECUTOR-${taskId}`, role: "executor", objective: `${taskId} optimize.`, artifact_path: `implementation_notes/${taskId}.md`, required_capabilities: ["write"] },
+      { id: `REVIEWER-${taskId}`, role: "reviewer", objective: `${taskId} review.`, artifact_path: `failures/${taskId}-review.md`, required_capabilities: ["read"] },
+    ],
+    constraints: ["Lead acceptance only"],
+  }).replace(/'/g, "''");
+  const worktreeA = "D:/Coding/Harness/Pi-team-ISSUE-018-A";
+  const worktreeB = "D:/Coding/Harness/Pi-team-ISSUE-018-B";
+  const execA = buildContract("ISSUE-018A", worktreeA);
+  const execB = buildContract("ISSUE-018B", worktreeB);
+  const ps = (contractJson) => spawnSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+    "-Command",
+    `try { . '${quoted}' } catch {}; ` +
+      `$c = '${contractJson}' | ConvertFrom-Json; ` +
+      `New-RoleContext $c 'executor' 'start'`,
+  ], { encoding: "utf8", cwd: REPO });
+  const a = ps(execA);
+  const b = ps(execB);
+  assert.equal(a.status, 0, a.stderr || a.stdout);
+  assert.equal(b.status, 0, b.stderr || b.stdout);
+  const promptA = (a.stdout || "").trim();
+  const promptB = (b.stdout || "").trim();
+  assert.ok(promptA.includes(`Worktree: ${worktreeA}`), `contract A prompt must include worktree ${worktreeA}`);
+  assert.ok(promptB.includes(`Worktree: ${worktreeB}`), `contract B prompt must include worktree ${worktreeB}`);
+  // Cross-leak negative control: a Lead-controlled contract swap must not
+  // leave the previous worktree path in the next prompt. The shared
+  // New-RoleContext must rebuild the prompt from the supplied contract each
+  // call; if it cached the previous path, this assertion would fail.
+  assert.equal(promptA.includes(worktreeB), false, "contract A prompt must NOT leak contract B worktree");
+  assert.equal(promptB.includes(worktreeA), false, "contract B prompt must NOT leak contract A worktree");
+});

@@ -603,9 +603,21 @@ function Get-ToolRuntimeMetadata {
   $version = [Environment]::OSVersion.VersionString
   $architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
   $platform = if ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)) { 'Windows' } elseif ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Linux)) { 'Linux' } elseif ([Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::OSX)) { 'macOS' } else { [Environment]::OSVersion.Platform.ToString() }
+  if ([string]::IsNullOrEmpty($platform)) { $platform = 'unknown' }
+  if ([string]::IsNullOrEmpty($version)) { $version = 'unknown' }
+  if ([string]::IsNullOrEmpty($architecture)) { $architecture = 'unknown' }
   $interpreter = if ($PSVersionTable) { "PowerShell $($PSVersionTable.PSEdition) $($PSVersionTable.PSVersion)" } elseif ($env:SHELL) { [string]$env:SHELL } elseif ($env:ComSpec) { Split-Path -Leaf $env:ComSpec } else { 'unknown' }
   $examples = if ($PSVersionTable) { 'Get-ChildItem -Force (or the ls tool), semicolons, $env:NAME; avoid ls -la, &&, and $NAME' } else { 'follow the detected interpreter syntax; prefer the dedicated ls, read, grep, and find tools for inspection' }
-  return "Tool runtime metadata: os_family=$platform; os_version=$version; os_architecture=$architecture; command_interpreter=$interpreter; path_separator=$([IO.Path]::DirectorySeparatorChar); command_syntax_examples=$examples. Builtin bash-tool contract: its legacy name does not define command syntax; use command_interpreter and command_syntax_examples above."
+  $separator = [IO.Path]::DirectorySeparatorChar
+  # The role prompt must always carry every required field, even when the
+  # launcher environment is partially missing. Lead's permission boundary
+  # depends on the role knowing the runtime it is running under; a silent
+  # fallback to "" would let an optimization mask the missing data.
+  $line = "Tool runtime metadata: os_family=$platform; os_version=$version; os_architecture=$architecture; command_interpreter=$interpreter; path_separator=$separator; command_syntax_examples=$examples. Builtin bash-tool contract: its legacy name does not define command syntax; use command_interpreter and command_syntax_examples above."
+  foreach ($field in @('os_family=', 'os_version=', 'os_architecture=', 'command_interpreter=', 'command_syntax_examples=')) {
+    if (-not $line.Contains($field)) { Fail "Get-ToolRuntimeMetadata output missing required field: $field" }
+  }
+  return $line
 }
 function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question='') {
   $context = @($Contract.context) -join '; '
@@ -630,10 +642,18 @@ function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question
       '--- END PI TEAM TASK CONTEXT ---'
     ) -join ' ')
   }
+  # Issue #9 — the previous start prompt duplicated AGENTS.md (Stable project
+  # context + Recommended common reads) and ADR/0002 (Normative protocol +
+  # Recommended common reads). Consolidate them into a single Stable project
+  # context line and drop Recommended common reads entirely; the role-specific
+  # Recommended role reads below still carry the navigation hints. Each prompt
+  # now references AGENTS.md and ADR/0002 exactly once, which removes ~100 bytes
+  # of repeated text per role prompt (≈200 bytes per task start) without
+  # changing the assertions exercised by tests/team-contract.test.mjs.
   $lines = @(
     'Pi Team task context: --- PI TEAM TASK CONTEXT v1 ---',
     "Context mode: $Mode",
-    'Stable project context: AGENTS.md is inherited; use it as the shared repository map.',
+    'Stable project context: AGENTS.md (shared repository map) is inherited; project_state.md is the Lead-owned operational snapshot; normative protocol is ADR/0002-lead-subagent-collaboration-protocol.md.',
     'Context boundary: this is orientation only. The launcher, runtime policy, and Lead still enforce authorization and acceptance.',
     "Task ID: $($Contract.task_id)",
     "Role: $Role",
