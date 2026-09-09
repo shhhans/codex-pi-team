@@ -44,6 +44,14 @@ function ensureDescription(value) {
   return value;
 }
 
+function contractDescription(input) {
+  if (typeof input?.description === "string" && input.description.length > 0) return input.description;
+  const objective = typeof input?.objective === "string" ? input.objective : "";
+  const context = Array.isArray(input?.context) ? input.context.filter((item) => typeof item === "string" && item.length > 0) : [];
+  const value = [objective, context.length ? `Context: ${context.join(" ")}` : ""].filter(Boolean).join(" ");
+  return ensureDescription(value);
+}
+
 function ensureAbsolutePath(value, field) {
   if (typeof value !== "string" || !isAbsolute(value)) fail(`${field} must be an absolute path`);
   return resolve(value);
@@ -300,7 +308,7 @@ export async function createTask(projectRoot, input) {
   const root = await ensureStateRoot(projectRoot);
   const taskId = ensureTaskId(input?.task_id);
   const name = ensureLineField(input?.name, "name", 240, true);
-  const description = ensureDescription(input?.description);
+  const description = contractDescription(input);
   const path = taskPath(root, taskId);
   if (existsSync(path)) fail(`task already exists: ${taskId}`);
   const now = isoNow();
@@ -313,7 +321,7 @@ export async function publishTask(projectRoot, input) {
   const root = await ensureStateRoot(projectRoot);
   const taskId = ensureTaskId(input?.task_id);
   const name = ensureLineField(input?.name, "name", 240, true);
-  const description = ensureDescription(input?.description);
+  const description = contractDescription(input);
   const path = taskPath(root, taskId);
   return withLock(`${path}.lock`, async () => {
     if (!existsSync(path)) {
@@ -375,16 +383,19 @@ export async function acceptTask(projectRoot, taskId) {
 export async function closeIncompleteTask(projectRoot, taskId, input) {
   const root = await ensureStateRoot(projectRoot);
   const reason = ensureDescription(input?.reason);
+  const nextStep = ensureDescription(input?.next_step);
   const missing = Array.isArray(input?.missing_done_criteria) && input.missing_done_criteria.length
     ? input.missing_done_criteria.map((item) => ensureLineField(item, "missing_done_criteria", 500, true))
-    : fail("missing_done_criteria is required");
+    : undefined;
   return withLock(`${taskPath(root, taskId)}.lock`, async () => {
     const task = await loadTask(root, taskId);
     if (task.status !== "active") fail("only active tasks can be closed incomplete");
     task.status = "incomplete";
     task.outcome = "incomplete";
     task.incomplete_reason = reason;
-    task.missing_done_criteria = missing;
+    task.next_step = nextStep;
+    if (missing) task.missing_done_criteria = missing;
+    else delete task.missing_done_criteria;
     task.updated_at = isoNow();
     await writeJsonAtomic(taskPath(root, taskId), task);
     return task;
@@ -394,15 +405,18 @@ export async function closeIncompleteTask(projectRoot, taskId, input) {
 export async function reconcileIncompleteTask(projectRoot, taskId, input) {
   const root = await ensureStateRoot(projectRoot);
   const reason = ensureDescription(input?.reason);
+  const nextStep = ensureDescription(input?.next_step);
   const missing = Array.isArray(input?.missing_done_criteria) && input.missing_done_criteria.length
     ? input.missing_done_criteria.map((item) => ensureLineField(item, "missing_done_criteria", 500, true))
-    : fail("missing_done_criteria is required");
+    : undefined;
   return withLock(`${taskPath(root, taskId)}.lock`, async () => {
     const task = await loadTask(root, taskId);
     if (task.status !== "accepted" && task.status !== "archived") fail("only accepted or archived tasks can be reconciled incomplete");
     task.outcome = "incomplete";
     task.incomplete_reason = reason;
-    task.missing_done_criteria = missing;
+    task.next_step = nextStep;
+    if (missing) task.missing_done_criteria = missing;
+    else delete task.missing_done_criteria;
     task.updated_at = isoNow();
     await writeJsonAtomic(taskPath(root, taskId), task);
     return task;
@@ -414,10 +428,11 @@ export async function reconcileTask(projectRoot, taskId, input) {
   const outcome = input?.outcome;
   if (outcome !== "accepted" && outcome !== "incomplete") fail("reconcile outcome must be accepted or incomplete");
   const reason = outcome === "incomplete" ? ensureDescription(input?.reason) : undefined;
+  const nextStep = outcome === "incomplete" ? ensureDescription(input?.next_step) : undefined;
   const missing = outcome === "incomplete"
     ? (Array.isArray(input?.missing_done_criteria) && input.missing_done_criteria.length
       ? input.missing_done_criteria.map((item) => ensureLineField(item, "missing_done_criteria", 500, true))
-      : fail("missing_done_criteria is required"))
+      : undefined)
     : undefined;
   return withLock(`${taskPath(root, taskId)}.lock`, async () => {
     const task = await loadTask(root, taskId);
@@ -425,9 +440,12 @@ export async function reconcileTask(projectRoot, taskId, input) {
     task.status = task.status === "archived" ? "archived" : outcome;
     if (outcome === "incomplete") {
       task.incomplete_reason = reason;
-      task.missing_done_criteria = missing;
+      task.next_step = nextStep;
+      if (missing) task.missing_done_criteria = missing;
+      else delete task.missing_done_criteria;
     } else {
       delete task.incomplete_reason;
+      delete task.next_step;
       delete task.missing_done_criteria;
     }
     task.updated_at = isoNow();

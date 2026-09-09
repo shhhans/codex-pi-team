@@ -25,7 +25,7 @@ Historical files under `.pi/legacy/` remain non-normative and unchanged.
 Lead (Codex) is the only task authority and the only role that communicates
 with the User. Lead owns:
 
-- task ID, task name, task description, scope, constraints, and done criteria;
+- task ID, task name, objective, acceptance decision, and task lifecycle;
 - role selection, Researcher assignment, Executor/Reviewer pairing, and the
   isolated worktree;
 - acceptance, rejection, follow-up direction, and resource reclamation;
@@ -35,11 +35,13 @@ Architecture and product decisions belong to Lead and User. Accepted
 decisions are recorded in `ADR/` and reflected in `architect.md`; a
 Subagent may provide evidence or alternatives but must not decide them.
 
-A task contract needs only the information required to avoid ambiguity:
-task ID, name, objective, in-scope boundary, done criteria, worktree (for
-development tasks), pairing, and material constraints. A Subagent may not
-rewrite the contract, create a Scout, split off an unassigned task, or widen
-scope. It asks Lead when one of these fields is missing or contradictory.
+A v3 task contract contains only the information required to avoid ambiguity:
+task ID, name, objective, optional explanatory context, observable acceptance
+results, base ref, branch, and worktree. It may also name optional deliverable
+types. It does not encode file scope, role delegation, capability, ownership,
+or artifact mappings. Lead uses `inspect` to decide whether actual changes are
+out of scope. A Subagent may not rewrite the contract, create a Scout, split
+off an unassigned task, or widen the objective.
 
 ### Task boundaries, issue tracking, and branch isolation
 
@@ -102,10 +104,10 @@ The lifecycle is:
    reports the completed review slice to Lead and becomes idle.
 5. On failure, Executor fixes production/documentation, sends `FIX_READY`,
    and the same Reviewer re-reviews. The pair repeats without stop/resume.
-6. After a pass, Executor reports `READY_FOR_ACCEPTANCE`. Lead independently
-   verifies the done criteria and either requests another slice or accepts.
-7. After Lead acceptance, Lead runs `pi-team.cmd inspect <task-id>` as an
-   evidence collection step and then invokes `pi-team.cmd finalize <task-id>`.
+6. After a pass, Executor reports `READY_FOR_ACCEPTANCE`. Lead runs
+   `pi-team.cmd inspect <task-id>`, independently verifies the objective and
+   acceptance results, and either requests another slice or accepts.
+7. After Lead acceptance, Lead invokes `pi-team.cmd finalize <task-id>`.
    Finalize reclaims task-owned sessions and cleans up the worktree according
    to the worktree policy. Blackboard projection lag is reported to Lead but
    does not revoke an accepted decision.

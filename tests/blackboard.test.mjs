@@ -105,6 +105,7 @@ test("Lead can close incomplete work and explicitly reconcile legacy outcomes wi
     await createTask(fixture.repo, { task_id: "BB-006", name: "Incomplete", description: "Needs a missing criterion record" });
     const incomplete = await closeIncompleteTask(fixture.repo, "BB-006", {
       reason: "Research evidence was not produced.",
+      next_step: "Collect the missing research evidence.",
       missing_done_criteria: ["C-003"],
     });
     assert.equal(incomplete.status, "incomplete");
@@ -116,6 +117,7 @@ test("Lead can close incomplete work and explicitly reconcile legacy outcomes wi
     const corrected = await reconcileTask(fixture.repo, "BB-006", {
       outcome: "incomplete",
       reason: "Historical completion was not supported by the retained evidence.",
+      next_step: "Review the retained evidence manually.",
       missing_done_criteria: ["C-003"],
     });
     assert.equal(corrected.status, "archived");
@@ -161,6 +163,23 @@ test("agent events are role-scoped, append-only, validated, and cursor-watchable
     await archiveTask(fixture.repo, "BB-002");
     assert.equal((await snapshot(fixture.repo)).tasks.length, 0);
     assert.equal((await snapshot(fixture.repo, true)).tasks[0].status, "archived");
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
+test("v3 incomplete closure requires only a reason and next step", async () => {
+  const fixture = await makeRepo();
+  try {
+    await createTask(fixture.repo, { task_id: "BB-007", name: "Incomplete v3", description: "Needs a next step" });
+    const incomplete = await closeIncompleteTask(fixture.repo, "BB-007", {
+      reason: "The current evidence is insufficient.",
+      next_step: "Run inspect again after the missing test is added.",
+    });
+    assert.equal(incomplete.status, "incomplete");
+    assert.equal(incomplete.outcome, "incomplete");
+    assert.equal(incomplete.next_step, "Run inspect again after the missing test is added.");
+    assert.equal(Object.hasOwn(incomplete, "missing_done_criteria"), false);
   } finally {
     await removeRepo(fixture);
   }

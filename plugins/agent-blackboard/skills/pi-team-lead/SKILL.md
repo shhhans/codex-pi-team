@@ -25,14 +25,15 @@ WSL, Git Bash, `runs.run`, Codex subagents, `--agent`, or ambient Pi extensions
 to launch Pi roles.
 
 `AGENTS.md` is the stable, task-agnostic context inherited by active roles.
-The launcher supplies task-specific scope and delegation details at runtime;
-do not copy those details into reusable prompts, skills, or `AGENTS.md`.
+The launcher supplies only the v3 task objective, context, acceptance results,
+and runtime identity at launch; do not copy task details into reusable prompts,
+skills, or `AGENTS.md`.
 
 ## Own the task as Lead
 
 The User and Lead own architecture and product decisions. The Lead owns the
-task ID, name, description, scope, done criteria, Executor-Reviewer pairing,
-acceptance, and resource reclamation. Keep decisions in `ADR/` and align
+task ID, name, objective, context, acceptance results, Executor-Reviewer
+pairing, acceptance, and resource reclamation. Keep decisions in `ADR/` and align
 `architect.md`, `goal.md`, and `project_state.md` when their content changes.
 
 Reusable role prompts and skills must remain task-agnostic unless the contract
@@ -51,12 +52,13 @@ than assuming a POSIX shell or hard-coding a host. Restart every active role
 for the task after deployment; mixed tool contracts are unsupported. Do not
 accept a tool change until a live smoke exercises the changed path.
 
-Write a tracked Markdown v2 task contract with exactly one JSON contract block.
-Each done criterion has a stable `C-###` ID, owner, and artifact path; each
-role delegation declares its stable ID, artifact path, and capabilities as
-task context. Do not compare those declarations against a static capability
-allow-list; actual tool access is enforced by the role launcher and runtime
-policy, which may evolve independently of task contracts.
+Write a tracked Markdown v3 task contract with exactly one JSON contract block.
+The contract contains the task objective, optional explanatory context, a
+short list of observable acceptance results, explicit `base_ref`, branch, and
+worktree fields, and optional deliverable labels. It does not contain file
+scope lists, role delegations, capability declarations, criterion owners, or
+artifact mappings. Lead decides whether actual changes are out of scope after
+reading `inspect`; the launcher does not enforce semantic scope from prose.
 Keep the Blackboard task name and description aligned with the current
 Lead-owned contract. Blackboard events are observations and reminders, not
 authorization, completion evidence, or a communication channel.
@@ -114,7 +116,7 @@ entry, then restart the Codex session.
 For a bounded question, write the Researcher question file and run:
 
 ```powershell
-<project-root>\pi-team.cmd research <task-id> <question-id> <absolute-question-file>
+<project-root>\pi-team.cmd research <task-id> <absolute-question-file>
 ```
 
 Researcher answers the specific question and maintains `research/`. Executor
@@ -150,7 +152,7 @@ When Reviewer reports `ready_for_acceptance`, treat the Reviewer result as
 evidence, then perform an independent Lead acceptance gate. If the Reviewer
 projection is stale or unavailable, the Lead may proceed after recording that
 warning in the acceptance evidence. The Reviewer verifies implementation
-quality, scope, regressions, and evidence; the Lead alone verifies the frozen contract and authorizes delivery. Inspect
+quality, regressions, and evidence; the Lead alone decides whether the actual changes satisfy the objective and authorizes delivery. Inspect
 the actual diff, artifacts, and test results against the contract. As part of
 that inspection, review every changed reusable prompt and skill for
 task-specific contamination, including task IDs, Issue numbers, task-only
@@ -160,14 +162,15 @@ such content was added without an explicit task-scoped contract.
 
 If both gates pass:
 
-1. Write acceptance evidence that covers every frozen criterion ID and its
-   required artifacts, then run `<project-root>\pi-team.cmd accept <task-id>
+1. Run `<project-root>\pi-team.cmd inspect <task-id>` to collect the final
+   read-only evidence. The report lists actual changes and evidence; it does
+   not decide whether a change is out of scope.
+2. Decide whether the objective and acceptance results are satisfied and
+   whether any actual change is out of scope. Record that single Lead decision
+   in an acceptance file and run `<project-root>\pi-team.cmd accept <task-id>
    <acceptance-file>`.
-2. Run `<project-root>\pi-team.cmd inspect <task-id>` to collect the final
-   read-only evidence. Blackboard lag is a warning, not a replacement for
-   Lead judgment.
 3. Run `<project-root>\pi-team.cmd finalize <task-id>` as the canonical
-   delivery operation. It stages only contract-scoped changes, creates the
+   delivery operation. It stages the accepted task worktree changes, creates the
    integration commit, merges it into the selected target branch, runs
    integration tests, reclaims owned role/Terminal processes, removes the task
    worktree and merged branch, synchronizes the GitHub issue, and attempts
@@ -178,11 +181,11 @@ If both gates pass:
    to retry from its last completed phase. Use `--target-branch` only for an
    explicit Lead decision when a historical contract has a stale base ref.
 
-For unmet criteria, write a closure with the missing criterion IDs and run
+For an unfinished task, write a closure with a reason and next step and run
 `<project-root>\pi-team.cmd close-incomplete <task-id> <closure-file>`, then run
-`<project-root>\pi-team.cmd finalize <task-id>` if the incomplete task has no
-uncommitted changes and can be safely reclaimed. Use `reconcile` only for
-legacy state and with an explicit outcome.
+`<project-root>\pi-team.cmd finalize <task-id>` only when the incomplete task
+has no uncommitted changes and can be safely reclaimed. Use `reconcile` only
+for legacy state and with an explicit outcome.
 Do not infer live role status solely from the most recent Blackboard event.
 
 During the lifecycle migration, run code-changing issue tasks serially. Do not

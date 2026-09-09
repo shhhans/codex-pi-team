@@ -11,23 +11,25 @@ lagging Blackboard projections or stale runtime observations.
 
 ## Decision
 
-`inspect <task-id>` is a read-only evidence collector. It reports contract,
-worktree, branch, scope, artifacts, tests, process ownership, reusable-content
-hygiene, GitHub issue state, and Blackboard observations. It does not accept a
-task, change task state, or infer that the task is complete. Blackboard
-non-convergence is a warning.
+`inspect <task-id>` is a read-only evidence collector. It reports the v3
+contract, worktree, branch, actual changes, artifacts, tests, process
+ownership, reusable-content hygiene, GitHub issue state, and Blackboard
+observations. It does not decide whether an actual change is out of scope,
+accept a task, change task state, or infer that the task is complete.
+Blackboard non-convergence is a warning.
 
 `accept <task-id>` records the Lead's decision after reviewing available
 Reviewer evidence and an independent Lead inspection. If a Reviewer projection
 is stale or unavailable, the Lead may accept after recording that warning in
 task state. `finalize <task-id>` executes that decision: it
-integrates only contract-scoped changes, runs tests, reclaims task-owned
+  integrates the accepted task worktree changes, runs tests, reclaims task-owned
 resources, removes the task worktree and merged branch, synchronizes the issue,
 and attempts Blackboard archival.
 
 The finalizer has hard safety gates for task identity, target branch, clean
-target worktree, scope, merge conflicts, and failed integration tests. It does
-not require Blackboard to have converged to a particular agent state. Such
+target worktree, merge conflicts, and failed integration tests. Semantic scope
+is a Lead acceptance decision, not a finalizer gate. The finalizer does not
+require Blackboard to have converged to a particular agent state. Such
 observations are returned as warnings. A target branch override is explicit,
 recorded in finalization state, and frozen for retries.
 

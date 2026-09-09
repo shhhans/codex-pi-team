@@ -180,39 +180,34 @@ function Assert-KnownRole([string]$Role) {
 function Assert-RelativeArtifactPath([string]$Path,[string]$Field) {
   if ([string]::IsNullOrWhiteSpace($Path) -or [IO.Path]::IsPathRooted($Path) -or $Path -match '(^|[\\/])\.\.([\\/]|$)') { Fail "$Field must be a non-empty worktree-relative path" }
 }
+function Assert-StringArray($Value,[string]$Field,[int]$Minimum=0,[int]$Maximum=2147483647) {
+  if ($Value -is [string] -or $null -eq $Value) { Fail "$Field must be an array of strings" }
+  $items = @($Value)
+  if ($items.Count -lt $Minimum -or $items.Count -gt $Maximum) { Fail "$Field must contain between $Minimum and $Maximum items" }
+  foreach ($item in $items) { if ($item -isnot [string] -or [string]::IsNullOrWhiteSpace($item)) { Fail "$Field must contain only non-empty strings" } }
+  return $items
+}
 function Parse-Contract([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { Fail "contract not found: $Path" }
   $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $Path
   $blocks = [regex]::Matches($text,'(?ms)```json\s*(.*?)\s*```')
   if ($blocks.Count -ne 1) { Fail 'contract must contain exactly one JSON fenced block' }
   try { $c = $blocks[0].Groups[1].Value | ConvertFrom-Json } catch { Fail "invalid contract JSON: $($_.Exception.Message)" }
-  foreach ($n in @('version','task_id','name','description','base_ref','branch','worktree','in_scope','out_of_scope','done_criteria','delegations','constraints')) { if ($null -eq $c.$n) { Fail "contract missing field: $n" } }
-  if ($c.version -ne 2) { Fail 'contract version must be 2' }
+  foreach ($n in @('version','task_id','name','objective','base_ref','branch','worktree','acceptance')) { if ($null -eq $c.$n) { Fail "contract missing field: $n" } }
+  if ($c.version -ne 3) { Fail 'contract version must be 3' }
+  foreach ($legacy in @('description','in_scope','out_of_scope','done_criteria','delegations','constraints')) {
+    if ($c.PSObject.Properties.Name -contains $legacy) { Fail "v3 contract must not contain legacy field: $legacy" }
+  }
   if ($c.task_id -notmatch '^[A-Z][A-Z0-9]*-[0-9]{3,}$') { Fail 'invalid task ID' }
+  if ([string]::IsNullOrWhiteSpace([string]$c.name)) { Fail 'contract name must be non-empty' }
+  if ([string]::IsNullOrWhiteSpace([string]$c.objective)) { Fail 'contract objective must be non-empty' }
+  Assert-StringArray $c.acceptance 'acceptance' 2 5 | Out-Null
+  if ($c.PSObject.Properties.Name -contains 'context') { Assert-StringArray $c.context 'context' | Out-Null }
+  if ($c.PSObject.Properties.Name -contains 'deliverables') { Assert-StringArray $c.deliverables 'deliverables' | Out-Null }
   if ($c.branch -notmatch '^pi-team/[A-Za-z0-9._/-]+$') { Fail 'invalid branch' }
   if (-not ([IO.Path]::IsPathRooted($c.worktree))) { Fail 'worktree must be absolute' }
   $w = [IO.Path]::GetFullPath($c.worktree); $root = [IO.Path]::GetFullPath($ProjectRoot)
   if ($w.TrimEnd('\') -ieq $root.TrimEnd('\') -or $w -like "$root\*" -or $w -like "$(Get-CommonDir)\*") { Fail 'dangerous worktree path' }
-  $criterionIds = @{}
-  foreach ($criterion in @($c.done_criteria)) {
-    if ($null -eq $criterion.id -or [string]$criterion.id -notmatch '^C-[0-9]{3,}$') { Fail 'each done criterion needs a stable C-### id' }
-    if ($criterionIds.ContainsKey([string]$criterion.id)) { Fail "duplicate done criterion id: $($criterion.id)" }; $criterionIds[[string]$criterion.id] = $true
-    if ([string]::IsNullOrWhiteSpace([string]$criterion.description)) { Fail "done criterion $($criterion.id) needs a description" }
-    Assert-KnownRole ([string]$criterion.owner)
-    if (@($criterion.artifacts).Count -eq 0) { Fail "done criterion $($criterion.id) needs at least one artifact" }
-    foreach ($artifact in @($criterion.artifacts)) { Assert-RelativeArtifactPath ([string]$artifact) "done criterion $($criterion.id) artifact" }
-  }
-  if ($criterionIds.Count -eq 0) { Fail 'contract needs at least one done criterion' }
-  $delegationIds = @{}; $delegatedRoles = @{}
-  foreach ($delegation in @($c.delegations)) {
-    if ($null -eq $delegation.id -or [string]$delegation.id -notmatch '^[A-Z][A-Z0-9_-]{2,63}$') { Fail 'each delegation needs a stable ID' }
-    if ($delegationIds.ContainsKey([string]$delegation.id)) { Fail "duplicate delegation id: $($delegation.id)" }; $delegationIds[[string]$delegation.id] = $true
-    $role = [string]$delegation.role; Assert-KnownRole $role; $delegatedRoles[$role] = $true
-    if ([string]::IsNullOrWhiteSpace([string]$delegation.objective)) { Fail "delegation $($delegation.id) needs an objective" }
-    Assert-RelativeArtifactPath ([string]$delegation.artifact_path) "delegation $($delegation.id) artifact_path"
-    if ($null -eq $delegation.required_capabilities -or @($delegation.required_capabilities).Count -eq 0) { Fail "delegation $($delegation.id) needs required_capabilities" }
-  }
-  foreach ($requiredRole in @('executor','reviewer')) { if (-not $delegatedRoles.ContainsKey($requiredRole)) { Fail "contract needs a $requiredRole delegation" } }
   return $c
 }
 function Event($State,[string]$Role,[string]$StateName,[string]$Activity,[string]$Blocker,[string]$Next) {
@@ -575,12 +570,15 @@ function Launch-Role($State,[string]$Role,[string]$Prompt,[string]$SessionId,[st
   $runtime=Wait-RoleReady $State $Role $launchId
   $State.sessions.$Role | Add-Member -NotePropertyName runtime_pid -NotePropertyValue $runtime.runtime_pid -Force; $State.sessions.$Role | Add-Member -NotePropertyName runtime_started_at -NotePropertyValue $runtime.ready_at -Force; $State.sessions.$Role | Add-Member -NotePropertyName intercom_id -NotePropertyValue $runtime.intercom_id -Force; Write-State $State
 }
+function New-ContractDescription($Contract) {
+  $context = @($Contract.context) -join ' '
+  $text = [string]$Contract.objective
+  if (-not [string]::IsNullOrWhiteSpace($context)) { $text = "$text Context: $context" }
+  return $text
+}
 function New-RoleAssignment($Contract,[string]$Role) {
-  $delegation = @($Contract.delegations | Where-Object { $_.role -eq $Role })
-  if ($delegation.Count -ne 1) { Fail "contract must declare exactly one delegation for role $Role" }
-  $criteria = @($Contract.done_criteria | Where-Object { $_.owner -eq $Role } | ForEach-Object { "$($_.id): $($_.description) [artifacts=$($_.artifacts -join ',')]" }) -join '; '
   $context = New-RoleContext $Contract $Role 'start'
-  return "$context Lead assignment. Task ID: $($Contract.task_id). Worktree: $($Contract.worktree). Role: $Role. Delegation: $($delegation[0].id). Artifact: $($delegation[0].artifact_path). Required capabilities: $($delegation[0].required_capabilities -join ', '). Objective: $($delegation[0].objective). Done criteria: $criteria."
+  return "$context Lead assignment. Perform the general $Role responsibility for this task and report evidence through the configured tools."
 }
 function Get-ToolRuntimeMetadata {
   $version = [Environment]::OSVersion.VersionString
@@ -591,11 +589,9 @@ function Get-ToolRuntimeMetadata {
   return "Tool runtime metadata: os_family=$platform; os_version=$version; os_architecture=$architecture; command_interpreter=$interpreter; path_separator=$([IO.Path]::DirectorySeparatorChar); command_syntax_examples=$examples. Builtin bash-tool contract: its legacy name does not define command syntax; use command_interpreter and command_syntax_examples above."
 }
 function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question='') {
-  $delegation = @($Contract.delegations | Where-Object { $_.role -eq $Role })
-  if ($delegation.Count -ne 1) { Fail "contract must declare exactly one delegation for role $Role" }
-  $ownedCriteria = @($Contract.done_criteria | Where-Object { $_.owner -eq $Role } | ForEach-Object { "$($_.id): $($_.description)" })
-  $scope = @($Contract.in_scope | ForEach-Object { [string]$_ }) -join '; '
-  $outOfScope = @($Contract.out_of_scope | ForEach-Object { [string]$_ }) -join '; '
+  $context = @($Contract.context) -join '; '
+  $acceptance = @($Contract.acceptance) -join '; '
+  $deliverables = @($Contract.deliverables) -join '; '
   if ($Mode -eq 'resume') {
     return (@(
       'Pi Team task context: --- PI TEAM TASK CONTEXT v1 ---',
@@ -605,11 +601,13 @@ function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question
       "Role: $Role",
       "Branch: $($Contract.branch)",
       "Worktree: $($Contract.worktree)",
-      "Delegation: $($delegation[0].id)",
-      "Owned artifact: $($delegation[0].artifact_path)",
+      "Base ref: $($Contract.base_ref)",
+      "Objective: $($Contract.objective)",
+      "Context: $context",
+      "Acceptance: $acceptance",
+      "Deliverables: $deliverables",
       (Get-ToolRuntimeMetadata),
-      "Visible scope: $scope",
-      'Resume rule: preserve the existing task scope and session history; continue from the next uncompleted slice without rediscovering the whole repository.',
+      'Resume rule: preserve the existing task objective and session history; continue from the next uncompleted slice without rediscovering the whole repository.',
       '--- END PI TEAM TASK CONTEXT ---'
     ) -join ' ')
   }
@@ -622,13 +620,11 @@ function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question
     "Role: $Role",
     "Branch: $($Contract.branch)",
     "Worktree: $($Contract.worktree)",
-    "Delegation: $($delegation[0].id)",
-    "Owned artifact: $($delegation[0].artifact_path)",
-    "Required capabilities: $($delegation[0].required_capabilities -join ', ')",
-    "Objective: $($delegation[0].objective)",
-    "Visible scope: $scope",
-    "Out of scope: $outOfScope",
-    "Owned done criteria: $($ownedCriteria -join '; ')",
+    "Base ref: $($Contract.base_ref)",
+    "Objective: $($Contract.objective)",
+    "Context: $context",
+    "Acceptance: $acceptance",
+    "Deliverables: $deliverables",
     (Get-ToolRuntimeMetadata),
     'Normative protocol: ADR/0002-lead-subagent-collaboration-protocol.md',
     'Recommended common reads: AGENTS.md, ADR/0002-lead-subagent-collaboration-protocol.md, project_state.md'
@@ -661,36 +657,41 @@ function Start-Task([string]$Path) {
   Invoke-Native git.exe @('-C',$ProjectRoot,'worktree','add',$c.worktree,$c.branch)
   $contractSnapshot = Snapshot-Contract $Path $c.task_id
   $frozenRoleConfigs = [pscustomobject]@{ researcher=[pscustomobject]@{provider=$roleConfigs['researcher'].provider;model=$roleConfigs['researcher'].model}; executor=[pscustomobject]@{provider=$roleConfigs['executor'].provider;model=$roleConfigs['executor'].model}; reviewer=[pscustomobject]@{provider=$roleConfigs['reviewer'].provider;model=$roleConfigs['reviewer'].model} }
-  $state = [pscustomobject]@{version=2;task_id=$c.task_id;name=$c.name;description=$c.description;execution_status='active';outcome='pending';worktree=$c.worktree;contract_path=$contractSnapshot;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');role_configs=$frozenRoleConfigs;finalization=(New-FinalizationState $c.base_ref);sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor';provider=$frozenRoleConfigs.executor.provider;model=$frozenRoleConfigs.executor.model};reviewer=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='reviewer';provider=$frozenRoleConfigs.reviewer.provider;model=$frozenRoleConfigs.reviewer.model}}}
+  $runtimeDelegations = [pscustomobject]@{executor="EXECUTOR-$($c.task_id)";reviewer="REVIEWER-$($c.task_id)"}
+  $state = [pscustomobject]@{version=3;task_id=$c.task_id;name=$c.name;description=(New-ContractDescription $c);execution_status='active';outcome='pending';worktree=$c.worktree;contract_path=$contractSnapshot;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');role_configs=$frozenRoleConfigs;runtime_delegations=$runtimeDelegations;research_sequence=0;finalization=(New-FinalizationState $c.base_ref);sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor';provider=$frozenRoleConfigs.executor.provider;model=$frozenRoleConfigs.executor.model};reviewer=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='reviewer';provider=$frozenRoleConfigs.reviewer.provider;model=$frozenRoleConfigs.reviewer.model}}}
   Write-State $state; foreach ($r in @('executor','reviewer')) { Event $state $r 'working' 'task started' '' '' }
   $executorAssignment = New-RoleAssignment $c 'executor'
   $reviewerAssignment = New-RoleAssignment $c 'reviewer'
-  $allowedDelegations = @($c.delegations | ForEach-Object { [string]$_.id }) -join ','
+  $allowedDelegations = @($runtimeDelegations.executor,$runtimeDelegations.reviewer) -join ','
   try { Launch-Role $state 'executor' "$executorAssignment You are Executor. Perform only the assigned slice and report progress through the configured tools." $state.sessions.executor.session_id $state.sessions.executor.provider $state.sessions.executor.model $false $allowedDelegations; Launch-Role $state 'reviewer' "$reviewerAssignment You are Reviewer. Inspect the delegated work as it becomes available and report progress through the configured tools." $state.sessions.reviewer.session_id $state.sessions.reviewer.provider $state.sessions.reviewer.model $false $allowedDelegations }
   catch { Stop-RoleTree $state.sessions.executor; Stop-RoleTree $state.sessions.reviewer; $state | Add-Member -NotePropertyName launch_error -NotePropertyValue $_.Exception.Message -Force; $state | Add-Member -NotePropertyName launch_failed_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; Write-State $state; throw }
   Write-Output "STARTED $($c.task_id) scope=$($state.scope_id)"
 }
 function Status([string]$TaskId) { if ($TaskId) { $s=Read-State $TaskId; $s | ConvertTo-Json -Depth 10; foreach ($r in @('executor','reviewer','researcher')) { $p=Join-Path (StateRoot) "$TaskId-$r.jsonl"; if (Test-Path $p) { Get-Content $p | Select-Object -Last 1 } } } else { Get-ChildItem (StateRoot) -Filter '*.json' | Select-Object -ExpandProperty Name } }
-function Sync-Task([string]$Path) { $c=Parse-Contract $Path; $s=Read-State $c.task_id; foreach ($n in @('branch','worktree')) { if ($c.$n -ne $s.$n) { Fail "immutable field changed: $n" } }; $s.name=$c.name; $s.description=$c.description; Write-State $s; Write-Output "SYNCED $($c.task_id)" }
-function Research([string]$TaskId,[string]$QuestionId,[string]$QuestionFile) {
+function Sync-Task([string]$Path) { $c=Parse-Contract $Path; $s=Read-State $c.task_id; foreach ($n in @('branch','worktree')) { if ($c.$n -ne $s.$n) { Fail "immutable field changed: $n" } }; $s.name=$c.name; $s.description=(New-ContractDescription $c); Write-State $s; Write-Output "SYNCED $($c.task_id)" }
+function Research([string]$TaskId,[string]$QuestionFile) {
   Assert-Setup; $s=Read-State $TaskId
   if ($s.execution_status -ne 'active') { Fail 'task is not active' }
   if ($s.sessions.PSObject.Properties.Name -contains 'researcher') { $runtime=Read-Runtime $s 'researcher'; if (Test-RuntimeLive $runtime) { Fail 'a Researcher is already active for this task' } }
   if (-not (Test-Path $QuestionFile)) { Fail 'question file not found' }
   $contract=Parse-Contract $s.contract_path
-  $delegation=@($contract.delegations | Where-Object { $_.id -eq $QuestionId -and $_.role -eq 'researcher' })
-  if ($delegation.Count -ne 1) { Fail "unknown Researcher delegation: $QuestionId" }
-  $out=Join-Path $s.worktree $delegation[0].artifact_path; New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
+  $sequence = [int]$s.research_sequence + 1
+  Add-StateProperty $s 'research_sequence' $sequence
+  $researchId = "RESEARCH-$($s.task_id)-$sequence"
+  $artifactPath = "research/$($s.task_id)-$sequence.md"
+  $out=Join-Path $s.worktree $artifactPath; New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
   $q=Get-Content -Raw -Encoding UTF8 $QuestionFile
   $researcherId = New-Id
-  $assignment = "$(New-RoleContext $contract 'researcher' 'research' $q) Lead assignment. Task ID: $($s.task_id). Worktree: $($s.worktree). Research delegation: $($delegation[0].id). Research artifact: $($delegation[0].artifact_path). Required capabilities: $($delegation[0].required_capabilities -join ', '). Objective: $($delegation[0].objective). Answer exactly this question: $q"
+  $assignment = "$(New-RoleContext $contract 'researcher' 'research' $q) Answer exactly this bounded research question: $q. Write the result to $artifactPath."
   if (-not $s.role_configs -or -not($s.role_configs.PSObject.Properties.Name -contains 'researcher') -or [string]::IsNullOrWhiteSpace($s.role_configs.researcher.provider) -or [string]::IsNullOrWhiteSpace($s.role_configs.researcher.model)) { Fail 'task state lacks frozen provider/model for role researcher; refusing silent model change' }
   $researcherConfig = [pscustomobject]@{role='researcher';provider=$s.role_configs.researcher.provider;model=$s.role_configs.researcher.model}
   Assert-RoleProviderReady $researcherConfig
-  if (-not($s.sessions.PSObject.Properties.Name -contains 'researcher')) { $s.sessions | Add-Member -NotePropertyName researcher -NotePropertyValue ([pscustomobject]@{agent_id=$researcherId;session_id='';role='researcher';question_id=$QuestionId;artifact_path=$delegation[0].artifact_path;provider=$researcherConfig.provider;model=$researcherConfig.model}) }
-  $allowedDelegations = @($contract.delegations | ForEach-Object { [string]$_.id }) -join ','
+  if (-not($s.sessions.PSObject.Properties.Name -contains 'researcher')) { $s.sessions | Add-Member -NotePropertyName researcher -NotePropertyValue ([pscustomobject]@{agent_id=$researcherId;session_id='';role='researcher';question_id=$researchId;delegation_id=$researchId;artifact_path=$artifactPath;provider=$researcherConfig.provider;model=$researcherConfig.model}) }
+  $s.runtime_delegations | Add-Member -NotePropertyName researcher -NotePropertyValue $researchId -Force
+  Write-State $s
+  $allowedDelegations = @($s.runtime_delegations.PSObject.Properties | ForEach-Object { [string]$_.Value }) -join ','
   Launch-Role $s 'researcher' $assignment '' $researcherConfig.provider $researcherConfig.model $false $allowedDelegations
-  Write-Output "RESEARCH_STARTED $QuestionId"
+  Write-Output "RESEARCH_STARTED $researchId artifact=$artifactPath"
 }
 function Resume-Task([string]$TaskId) {
   Assert-Setup; $s=Read-State $TaskId
@@ -700,34 +701,22 @@ function Resume-Task([string]$TaskId) {
   foreach($r in @('executor','reviewer')) {
     $context = New-RoleContext $contract $r 'resume'
     if (-not($s.sessions.$r.PSObject.Properties.Name -contains 'provider') -or -not($s.sessions.$r.PSObject.Properties.Name -contains 'model')) { Fail "task state lacks frozen provider/model for role $r; refusing silent model change" }
-    $allowedDelegations = @($contract.delegations | ForEach-Object { [string]$_.id }) -join ','
+    $allowedDelegations = @($s.runtime_delegations.PSObject.Properties | ForEach-Object { [string]$_.Value }) -join ','
     Launch-Role $s $r "$context Resume the existing Lead task session as $r and continue the assigned work." $s.sessions.$r.session_id $s.sessions.$r.provider $s.sessions.$r.model $true $allowedDelegations
   }
   Write-Output "RESUMED $TaskId"
 }
 function Read-OutcomeFile([string]$Path,[string]$Expected='') { if (-not(Test-Path -LiteralPath $Path)) { Fail "outcome file not found: $Path" }; try { $x=Get-Content -Raw -Encoding UTF8 -LiteralPath $Path | ConvertFrom-Json } catch { Fail "invalid outcome file: $Path" }; if ($Expected -and $x.outcome -ne $Expected) { Fail "outcome file must declare outcome=$Expected" }; return $x }
 function Assert-MissingCriteria($Contract,$Evidence) {
-  if (-not $Evidence.reason -or @($Evidence.missing_done_criteria).Count -eq 0) { Fail 'incomplete closure requires reason and missing_done_criteria' }
-  if ($null -eq $Contract) { return }
-  $known=@{}; foreach($criterion in @($Contract.done_criteria)) { $known[[string]$criterion.id]=$true }
-  foreach($id in @($Evidence.missing_done_criteria)) { if (-not $known.ContainsKey([string]$id)) { Fail "unknown missing done criterion: $id" } }
+  if ([string]::IsNullOrWhiteSpace([string]$Evidence.reason)) { Fail 'incomplete closure requires reason' }
+  if ([string]::IsNullOrWhiteSpace([string]$Evidence.next_step)) { Fail 'incomplete closure requires next_step' }
 }
 function Accept([string]$TaskId,[string]$EvidencePath) {
   $s=Read-State $TaskId; if ($s.execution_status -ne 'active' -or $s.outcome -ne 'pending') { Fail 'task is not awaiting acceptance' }
   $e=Read-OutcomeFile $EvidencePath 'accepted'; $reviewerWarning=$null
   try { Assert-ReviewerReadyForAcceptance $TaskId } catch { $reviewerWarning = "reviewer_gate_not_converged:$($_.Exception.Message)" }
-  $contract=Parse-Contract $s.contract_path; $expected=@{}; foreach($criterion in @($contract.done_criteria)) { $expected[[string]$criterion.id]=$criterion }
-  if (@($e.criteria).Count -ne $expected.Count) { Fail 'acceptance evidence must cover every done criterion exactly once' }
-  $seen=@{}
-  foreach($item in @($e.criteria)) {
-    $id=[string]$item.criterion_id
-    if (-not $expected.ContainsKey($id)) { Fail "acceptance evidence names unknown criterion: $id" }
-    if ($seen.ContainsKey($id)) { Fail "acceptance evidence repeats criterion: $id" }; $seen[$id]=$true
-    if (-not $item.artifacts -or @($item.artifacts).Count -eq 0) { Fail "accepted criterion $id requires an artifact" }
-    $provided=@{}; foreach($artifact in @($item.artifacts)) { Assert-RelativeArtifactPath ([string]$artifact) "acceptance artifact"; if (-not(Test-Path (Join-Path $s.worktree $artifact))) { Fail "acceptance artifact not found: $artifact" }; $provided[[string]$artifact]=$true }
-    foreach($requiredArtifact in @($expected[$id].artifacts)) { if (-not $provided.ContainsKey([string]$requiredArtifact)) { Fail "accepted criterion $id is missing required artifact: $requiredArtifact" } }
-  }
-  if ($seen.Count -ne $expected.Count) { Fail 'acceptance evidence must cover every done criterion exactly once' }
+  if ([string]::IsNullOrWhiteSpace([string]$e.rationale)) { Fail 'accepted outcome requires rationale' }
+  if ($e.PSObject.Properties.Name -contains 'inspect_path' -and -not [string]::IsNullOrWhiteSpace([string]$e.inspect_path)) { Assert-RelativeArtifactPath ([string]$e.inspect_path) 'inspect_path' }
   Invoke-BlackboardLifecycle 'accept' $TaskId
   $s.outcome='accepted'; $s | Add-Member -NotePropertyName accepted_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; $s | Add-Member -NotePropertyName acceptance_path -NotePropertyValue ((Resolve-Path $EvidencePath).Path) -Force; if($reviewerWarning){Add-StateProperty $s 'acceptance_warnings' @($reviewerWarning)}; Write-State $s; Write-Output "ACCEPTED $TaskId"
 }
@@ -776,22 +765,10 @@ function Get-WorktreeChanges([string]$Worktree) {
   }
   return @($changes)
 }
-function Test-ContractPathAllowed($Contract,[string]$Path) {
-  $candidate = ($Path -replace '\\','/').TrimStart('./')
-  foreach ($entry in @($Contract.in_scope)) {
-    $allowed = ([string]$entry -replace '\\','/').Trim('./').TrimEnd('/')
-    if ($candidate -eq $allowed -or $candidate.StartsWith("$allowed/")) { return $true }
-  }
-  return $false
-}
-function Assert-AllowedWorktreeChanges($Contract,[string]$Worktree) {
-  $changes = @(Get-WorktreeChanges $Worktree)
-  foreach ($change in $changes) { if (-not (Test-ContractPathAllowed $Contract $change.path)) { Fail "worktree change is outside contract in_scope: $($change.path)" } }
-  return $changes
-}
 function Get-ContractGitHubIssue($Contract) {
   if ($Contract.PSObject.Properties.Name -contains 'github_issue' -and [string]$Contract.github_issue -match '^[0-9]+$') { return [int]$Contract.github_issue }
-  $text = "$($Contract.name)`n$($Contract.description)"
+  if ($Contract.PSObject.Properties.Name -contains 'source' -and $Contract.source -and $Contract.source.number -match '^[0-9]+$') { return [int]$Contract.source.number }
+  $text = "$($Contract.name)`n$($Contract.objective)"
   if ($text -match '(?i)(?:GitHub\s+)?Issue\s*#\s*([0-9]+)') { return [int]$Matches[1] }
   return $null
 }
@@ -886,10 +863,11 @@ function Inspect([string]$TaskId,[string]$Option1,[string]$Option2,[string]$Opti
     if(-not (Test-Path -LiteralPath $s.worktree -PathType Container)){ $failures += "task worktree missing: $($s.worktree)"; $checks.worktree=New-InspectCheck 'failed' 'worktree missing' } else { $checks.worktree=New-InspectCheck 'passed' $s.worktree }
     $targetDirty=Git @('-C',$ProjectRoot,'status','--porcelain','--untracked-files=all'); if($targetDirty){$failures += 'target worktree is dirty'}; $checks.target_clean=New-InspectCheck $(if($targetDirty){'failed'}else{'passed'}) $(if($targetDirty){'target worktree has uncommitted changes'}else{'target worktree clean'})
     if(Test-Path -LiteralPath $s.worktree -PathType Container){
-      $changes=@(Get-WorktreeChanges $s.worktree); $outside=@($changes | Where-Object { -not (Test-ContractPathAllowed $contract $_.path) }); if($outside.Count -gt 0){$failures += 'worktree contains changes outside contract in_scope'}
-      $checks.scope=New-InspectCheck $(if($outside.Count){'failed'}else{'passed'}) "changes=$($changes.Count), outside_scope=$($outside.Count)" ([pscustomobject]@{changes=$changes;outside_scope=$outside})
-      $required=@(); foreach($criterion in @($contract.done_criteria)){ $required += @($criterion.artifacts) }; foreach($delegation in @($contract.delegations)){ $required += [string]$delegation.artifact_path }; $required=@($required | Sort-Object -Unique); $missing=@($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $s.worktree $_) -PathType Leaf) }); if($missing.Count){$failures += 'required task artifacts are missing'}
-      $checks.artifacts=New-InspectCheck $(if($missing.Count){'failed'}else{'passed'}) "required=$($required.Count), missing=$($missing.Count)" ([pscustomobject]@{required=$required;missing=$missing})
+      $changes=@(Get-WorktreeChanges $s.worktree)
+      $checks.changes=New-InspectCheck 'observed' "changes=$($changes.Count)" ([pscustomobject]@{changes=$changes})
+      $artifactRoots=@('implementation_notes','research','reports','failures')
+      $artifacts=@(); foreach($root in $artifactRoots){$full=Join-Path $s.worktree $root; if(Test-Path -LiteralPath $full -PathType Container){$artifacts += @(Get-ChildItem -LiteralPath $full -File -Recurse | ForEach-Object { $_.FullName.Substring($s.worktree.Length).TrimStart('\','/') -replace '\\','/' })}}
+      $checks.artifacts=New-InspectCheck 'observed' "artifacts=$($artifacts.Count)" ([pscustomobject]@{declared=$contract.deliverables;observed=$artifacts})
     }
     $contaminated=@(); foreach($path in @('AGENTS.md','README.md','architect.md','goal.md','project_state.md','plugins/agent-blackboard/skills/pi-team-lead/SKILL.md')) { $full=Join-Path $s.worktree $path; if(Test-Path -LiteralPath $full -PathType Leaf){ $text=Get-Content -Raw -Encoding UTF8 -LiteralPath $full; if($text -match [regex]::Escape($TaskId) -or $text -match [regex]::Escape((Split-Path $s.worktree -Leaf))){$contaminated += $path} } }; if($contaminated.Count){$failures += 'reusable content contains task-specific identifiers'}; $checks.reusable_content=New-InspectCheck $(if($contaminated.Count){'failed'}else{'passed'}) "contaminated=$($contaminated.Count)" $contaminated
     if($skipTests){$warnings += 'tests_skipped'; $checks.tests=New-InspectCheck 'skipped' 'tests skipped by Lead option'} else { $test=Invoke-FinalizeTests $s.worktree; if(-not $test.passed -and -not $test.skipped){$failures += 'standard tests failed'}; $checks.tests=New-InspectCheck $(if($test.skipped){'skipped'}elseif($test.passed){'passed'}else{'failed'}) $(if($test.skipped){$test.output}elseif($test.passed){'standard tests passed'}else{'standard tests failed'}) ([pscustomobject]@{passed=$test.passed;skipped=$test.skipped;output=$test.output}) }
@@ -924,13 +902,13 @@ function Finalize-Task([string]$TaskId,[string]$Option,[string]$TargetBranchArg)
     $finalization.phase='resource_reclaim'; Stop-RoleTree $s.sessions.executor; Stop-RoleTree $s.sessions.reviewer; if($s.sessions.PSObject.Properties.Name -contains 'researcher'){Stop-RoleTree $s.sessions.researcher}; $finalization.terminals_reclaimed=$true; $finalization.cleanup.terminals_reclaimed=$true; Add-StateProperty $s 'finalization' $finalization; Write-State $s
     $needsWorktree=-not [bool]$finalization.worktree_removed -and -not [bool]$finalization.merged_to_target
     if($needsWorktree -and -not(Test-Path -LiteralPath $s.worktree -PathType Container)){Fail "task worktree is missing: $($s.worktree)"}
-    $changes=if($needsWorktree){@(Assert-AllowedWorktreeChanges $contract $s.worktree)}else{@()}; $branch=[string]$contract.branch
+    $changes=if($needsWorktree){@(Get-WorktreeChanges $s.worktree)}else{@()}; $branch=[string]$contract.branch
     if($needsWorktree){try{Git @('-C',$s.worktree,'merge-base','--is-ancestor',$contract.base_ref,'HEAD')|Out-Null}catch{Fail "task branch is not based on contract base_ref: $($contract.base_ref)"}}
     $ahead=if($needsWorktree){[int](Git @('-C',$s.worktree,'rev-list','--count',"$target..HEAD"))}else{0}
     if($s.outcome -eq 'accepted'){
       if(-not $finalization.merged_to_target){
         if($ahead -gt 0){Fail 'task branch already contains commits; finalizer will not rewrite agent commits'}
-        if($changes.Count -eq 0){Fail 'accepted task has no contract-scoped changes to integrate'}
+        if($changes.Count -eq 0){Fail 'accepted task has no worktree changes to integrate'}
         $finalization.phase='integration_commit'; foreach($change in $changes){Invoke-Native git.exe @('-C',$s.worktree,'add','--',$change.path)|Out-Null}; $staged=@(Git @('-C',$s.worktree,'diff','--cached','--name-only')); if($staged.Count -eq 0){Fail 'accepted task has no staged changes to integrate'}
         Invoke-Native git.exe @('-C',$s.worktree,'commit','-m',"pi-team: integrate $TaskId")|Out-Null; $commit=Git @('-C',$s.worktree,'rev-parse','HEAD'); $finalization.integration_commit=$commit; $finalization.integration.commit=$commit; $finalization.integration.status='committed'; Add-StateProperty $s 'finalization' $finalization; Write-State $s
         $finalization.phase='integration_merge'; try{Invoke-Native git.exe @('-C',$ProjectRoot,'merge','--no-ff','--no-edit',$branch)|Out-Null}catch{try{& git.exe '-C' $ProjectRoot 'merge' '--abort' 2>&1|Out-Null}catch{};throw}; $finalization.merged_to_target=$true; $finalization.integration.merged=$true; $finalization.integration.status='succeeded'
@@ -946,4 +924,4 @@ function Finalize-Task([string]$TaskId,[string]$Option,[string]$TargetBranchArg)
 }
 function Reclaim([string]$TaskId) { $s=Read-State $TaskId; if ($s.outcome -notin @('accepted','incomplete')) { Fail 'task must be accepted or closed incomplete before reclaim' }; Assert-NoLiveRoleProcesses $s; $s.execution_status='reclaimed'; $s | Add-Member -NotePropertyName reclaimed_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; Write-State $s; Invoke-BlackboardLifecycle 'archive' $TaskId; Write-Output "RECLAIMED $TaskId" }
 function Cleanup([string]$TaskId) { $s=Read-State $TaskId; if ($s.execution_status -ne 'reclaimed') { Fail 'task must be reclaimed before cleanup' }; $dirty=Git @('-C',$s.worktree,'status','--porcelain'); if ($dirty) { Fail 'worktree is not clean' }; if ([IO.Path]::GetFullPath($s.worktree) -ieq [IO.Path]::GetFullPath($ProjectRoot)) { Fail 'cannot remove main worktree' }; Invoke-Native git.exe @('-C',$ProjectRoot,'worktree','remove',$s.worktree); $s.execution_status='cleaned'; Write-State $s; Write-Output "CLEANED $TaskId" }
-switch ($Command.ToLowerInvariant()) { 'setup' {Setup}; 'codex-setup' {Setup-Codex}; 'doctor' {Doctor}; 'inventory' {Inventory $Arg1}; 'preflight' {Preflight $Arg1 $Arg2}; 'publish' {Publish $Arg1}; 'validate' {Validate $Arg1}; 'start' {Start-Task $Arg1}; 'sync' {Sync-Task $Arg1}; 'research' {Research $Arg1 $Arg2 $Arg3}; 'status' {Status $Arg1}; 'watch' {Status $Arg1}; 'inspect' {Inspect $Arg1 $Arg2 $Arg3 $Arg4 $Arg5}; 'resume' {Resume-Task $Arg1}; 'accept' {Accept $Arg1 $Arg2}; 'close-incomplete' {Close-Incomplete $Arg1 $Arg2}; 'reconcile' {Reconcile $Arg1 $Arg2}; 'finalize' {$result=Finalize-Task $Arg1 $Arg2 $Arg3; $result|ConvertTo-Json -Depth 30; if($result.status -eq 'blocked'){exit 1}}; 'reclaim' {Reclaim $Arg1}; 'cleanup' {Cleanup $Arg1}; default { Fail "unknown command: $Command" } }
+switch ($Command.ToLowerInvariant()) { 'setup' {Setup}; 'codex-setup' {Setup-Codex}; 'doctor' {Doctor}; 'inventory' {Inventory $Arg1}; 'preflight' {Preflight $Arg1 $Arg2}; 'publish' {Publish $Arg1}; 'validate' {Validate $Arg1}; 'start' {Start-Task $Arg1}; 'sync' {Sync-Task $Arg1}; 'research' {Research $Arg1 $Arg2}; 'status' {Status $Arg1}; 'watch' {Status $Arg1}; 'inspect' {Inspect $Arg1 $Arg2 $Arg3 $Arg4 $Arg5}; 'resume' {Resume-Task $Arg1}; 'accept' {Accept $Arg1 $Arg2}; 'close-incomplete' {Close-Incomplete $Arg1 $Arg2}; 'reconcile' {Reconcile $Arg1 $Arg2}; 'finalize' {$result=Finalize-Task $Arg1 $Arg2 $Arg3; $result|ConvertTo-Json -Depth 30; if($result.status -eq 'blocked'){exit 1}}; 'reclaim' {Reclaim $Arg1}; 'cleanup' {Cleanup $Arg1}; default { Fail "unknown command: $Command" } }

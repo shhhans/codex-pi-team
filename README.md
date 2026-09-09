@@ -13,7 +13,7 @@ the reviewed integration and then removes the task worktree and successfully
 merged task branch.
 
 Before acceptance, Lead may run `pi-team.cmd inspect <task-id>` to collect a
-read-only report covering the contract, diff scope, artifacts, tests, process
+read-only report covering the contract, actual diff, artifacts, tests, process
 ownership, GitHub issue state, and Blackboard observations. Blackboard lag is
 reported as a warning and does not replace Lead judgment. Use `--json` for a
 machine-readable result, `--skip-tests` only when explicitly appropriate, and
@@ -148,7 +148,7 @@ the installed cache must not depend on a sibling `.pi/blackboard` path.
 The plugin also supplies `$pi-team-lead`, which carries this complete launch
 and supervision workflow into Codex sessions opened above the repository.
 
-Publishing a Blackboard task only publishes the Lead-owned scope; it does not
+Publishing a Blackboard task only publishes the Lead-owned objective; it does not
 start Pi roles. The Lead uses the stable entrypoint for publication and then
 explicitly launches the pair:
 
@@ -168,27 +168,29 @@ Blackboard events; Agent events never replace review or acceptance.
 
 Active roles inherit the stable shared context from `AGENTS.md`. The launcher
 adds a compact role-specific task context at `start`, `research`, and `resume`
-so agents receive the relevant scope, artifact paths, recommended reads, and
-validation entrypoints before their first repository exploration. Task-specific
+so agents receive the objective, context, acceptance results, recommended reads,
+and validation entrypoints before their first repository exploration. Task-specific
 context is generated at runtime and is not added to reusable prompts or skills.
 
 ## Formal contract and closure
 
-New task contracts use JSON `version: 2`. Each `done_criteria` entry has a
-stable `C-###` ID, owner role, description, and worktree-relative artifact
-path. `delegations` name the assigned role, stable delegation ID, objective,
-artifact path, and declared capabilities. Declared capabilities are task
-context, not a static allow-list: projects may define new role/tool names as
-the Pi runtime evolves. Actual tool access remains enforced by the role's
-launcher, extensions, and runtime policy.
+New task contracts use JSON `version: 3`. A v3 contract contains the task
+objective, optional explanatory context, two to five observable acceptance
+results, explicit `base_ref`, branch, and worktree fields, and optional
+deliverable labels. It does not contain file scope lists, role delegations,
+capability declarations, criterion owners, or artifact mappings. Existing v2
+contracts are historical material and are not automatically migrated.
 
-`accept <task-id> <acceptance-file>` requires a Reviewer
-`ready_for_acceptance` event and one evidence entry for every frozen criterion
-ID, including its required artifacts. A task that cannot meet every criterion
-uses `close-incomplete <task-id> <closure-file>`; it records a reason and the
-missing criterion IDs, synchronizes the Blackboard as `incomplete`, and may
-then be reclaimed. `reconcile` is limited to legacy state and requires an
-explicit `accepted` or `incomplete` outcome; it never infers historic success.
+`inspect <task-id>` reports the actual diff, tests, artifacts, processes,
+Blackboard observations, and reusable-content checks. It does not decide
+whether a change is out of scope. The Lead makes that decision after reading
+the report, then `accept <task-id> <acceptance-file>` records one decision with
+a rationale and optional inspect report reference. A task that cannot be
+accepted uses `close-incomplete <task-id> <closure-file>` with a reason and
+next step; criterion IDs and artifact mappings are not required.
+
+`reconcile` is limited to legacy state and requires an explicit `accepted` or
+`incomplete` outcome; it never infers historic success.
 After acceptance, `finalize <task-id>` is the single delivery operation: it
 creates the integration commit, merges the task branch, runs the integration
 tests, reclaims owned Terminal resources, removes the worktree and merged

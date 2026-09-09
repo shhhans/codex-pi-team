@@ -276,7 +276,7 @@ test("artifact roots exist at the project root with exact contracts", async () =
 test("ADR 0002 is the sole normative Lead-Subagent protocol and active surfaces follow it", async () => {
   const adr = await readFile(join(REPO, "ADR/0002-lead-subagent-collaboration-protocol.md"), "utf8");
   assert.match(adr, /sole normative Lead.Subagent collaboration protocol/i);
-  assert.match(adr, /task ID, task name, task description, scope, constraints, and done criteria/i);
+  assert.match(adr, /task ID, task name, objective, acceptance decision, and task lifecycle/i);
   assert.match(adr, /Architecture and product decisions belong to Lead and User/i);
   assert.match(adr, /READY_FOR_REVIEW/);
   assert.match(adr, /REVIEW_PASS/);
@@ -574,22 +574,15 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     await writeFile(fakePi, `@echo off\r\nstart \"\" /b powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File \"%~dp0fake-pi.ps1\" %* >nul 2>&1\r\nexit /b 0\r\n`);
     await writeFile(questionFile, "Determine the runtime identity contract.\n");
     await writeFile(contract, `# Runtime test\n\n\`\`\`json\n${JSON.stringify({
-      version: 2,
+      version: 3,
       task_id: taskId,
       name: "Runtime identity test",
-      description: "Exercise all role launch paths.",
+      objective: "Exercise all role launch paths.",
       base_ref: "master",
       branch,
       worktree,
-      in_scope: ["runtime identity"],
-      out_of_scope: ["production changes"],
-      done_criteria: [{ id: "C-001", description: "fake processes receive identity", owner: "executor", artifacts: ["implementation_notes/ENV-001.md"] }],
-      delegations: [
-        { id: "EXECUTOR-001", role: "executor", objective: "Exercise the launcher.", artifact_path: "implementation_notes/ENV-001.md", required_capabilities: ["bash", "write"] },
-        { id: "REVIEWER-001", role: "reviewer", objective: "Review the launcher.", artifact_path: "failures/ENV-001-review.md", required_capabilities: ["read", "write"] },
-        { id: "RESEARCH-001", role: "researcher", objective: "Research the runtime identity contract.", artifact_path: "research/ENV-001.md", required_capabilities: ["web_search", "write"] },
-      ],
-      constraints: ["use the common Git directory"],
+      acceptance: ["Fake processes receive identity.", "The launch lifecycle remains observable."],
+      deliverables: ["runtime identity report"],
     }, null, 2)}\n\`\`\`\n`);
 
     const branchCreate = spawnSync("git", ["branch", branch, "master"], { cwd: REPO, encoding: "utf8" });
@@ -648,10 +641,6 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       assert.equal(record.args.some((arg) => arg.includes(contractSnapshot)), false, "initial assignment must not name the frozen contract path; state.contract_path remains the Lead-side pointer");
     }
     // Issue #1 — role-scoped assignment must include only role-critical content and exclude Lead-only text.
-    const roleDelegations = {
-      executor: "EXECUTOR-001",
-      reviewer: "REVIEWER-001",
-    };
     const initialPrompts = new Map();
     for (const record of startRecords) {
       const promptArgument = record.args[record.args.length - 1];
@@ -660,21 +649,18 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     }
     for (const record of startRecords) {
       const prompt = initialPrompts.get(record.role);
-      const delegationId = roleDelegations[record.role];
       assert.match(prompt, new RegExp(`Role: ${record.role}\\b`), `${record.role} prompt must declare its role identity`);
-      assert.match(prompt, new RegExp(`Delegation: ${delegationId}\\b`), `${record.role} prompt must declare its own delegation id`);
-      assert.match(prompt, /Artifact: /, `${record.role} prompt must declare its artifact path`);
-      assert.match(prompt, /Required capabilities: /, `${record.role} prompt must declare its required capabilities`);
-      assert.match(prompt, /Objective: /, `${record.role} prompt must declare its objective`);
+      assert.match(prompt, /Objective: Exercise all role launch paths\./, `${record.role} prompt must include the task objective`);
+      assert.match(prompt, /Acceptance: /, `${record.role} prompt must include the task acceptance results`);
       assert.match(prompt, /Tool runtime metadata: os_family=/, `${record.role} prompt must include launch-time OS metadata`);
       assert.match(prompt, /command_interpreter=/, `${record.role} prompt must expose the detected command interpreter`);
       assert.match(prompt, /command_syntax_examples=/, `${record.role} prompt must expose syntax examples for that interpreter`);
       assert.match(prompt, /Builtin bash-tool contract: its legacy name does not define command syntax/, `${record.role} prompt must reject inference from the builtin bash tool name`);
-      assert.match(prompt, /Done criteria: /, `${record.role} prompt must declare its own done criteria`);
       assert.doesNotMatch(prompt, /^-/, `${record.role} prompt must not begin with a CLI option marker`);
       assert.match(prompt, /--- PI TEAM TASK CONTEXT v1 ---/, `${record.role} prompt must include the dynamic task context marker`);
       assert.match(prompt, /Stable project context: AGENTS\.md/, `${record.role} prompt must point to inherited AGENTS.md context`);
-      assert.match(prompt, /Visible scope: /, `${record.role} prompt must include its visible scope`);
+      assert.doesNotMatch(prompt, /Visible scope:|Out of scope:/, `${record.role} prompt must not include a machine-enforced scope list`);
+      assert.doesNotMatch(prompt, /Delegation:|Required capabilities:|Owned artifact:|Done criteria:/, `${record.role} prompt must not include legacy delegation details`);
       assert.match(prompt, /Recommended role reads: /, `${record.role} prompt must include bounded navigation hints`);
       assert.match(prompt, /--- END PI TEAM TASK CONTEXT ---/, `${record.role} prompt must close the dynamic task context`);
       // Lead-only tokens that must never appear in role-scoped prompts.
@@ -682,14 +668,7 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       assert.doesNotMatch(prompt, /Read that exact contract before acting/, `${record.role} prompt must not instruct reading the contract from prompt`);
       assert.doesNotMatch(prompt, /\bConstraints: /, `${record.role} prompt must not include the Lead-only Constraints field`);
       assert.doesNotMatch(prompt, /\[owner=/, `${record.role} prompt must not leak other roles' owner= annotations`);
-      // Cross-role delegation ids must never appear.
-      const otherDelegations = Object.entries(roleDelegations).filter(([, id]) => id !== delegationId).map(([, id]) => id);
-      for (const otherId of otherDelegations) {
-        assert.equal(prompt.includes(`Delegation: ${otherId}`), false, `${record.role} prompt must not include other role delegation ${otherId}`);
-        assert.equal(prompt.includes(otherId), false, `${record.role} prompt must not leak other role delegation id ${otherId}`);
-      }
-      // RESEARCH-001 is the Researcher delegation in this contract; it must never appear in Executor/Reviewer prompts.
-      assert.equal(prompt.includes("RESEARCH-001"), false, `${record.role} prompt must not include the Researcher delegation id`);
+      assert.doesNotMatch(prompt, /EXECUTOR-ENV-001|REVIEWER-ENV-001|RESEARCH-ENV-001/, `${record.role} prompt must not leak runtime delegation IDs`);
     }
     const executorRecord = startRecords.find((record) => record.role === "executor");
     const reviewerRecord = startRecords.find((record) => record.role === "reviewer");
@@ -698,8 +677,8 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     assert.doesNotMatch(executorRecord.state_root, /task-worktree[\\/]\.git/i, "state must not be rooted under worktree .git");
 
     await writeFile(stateFile, JSON.stringify({
-      version: 1, task_id: taskId, name: "Runtime identity test", description: "Exercise all role launch paths.", status: "active",
-      worktree, contract_path: contractSnapshot, scope_id: scopeId,
+      version: 3, task_id: taskId, name: "Runtime identity test", description: "Exercise all role launch paths.", execution_status: "active", outcome: "pending",
+      worktree, contract_path: contractSnapshot, scope_id: scopeId, runtime_delegations: { executor: "EXECUTOR-ENV-001", reviewer: "REVIEWER-ENV-001" }, research_sequence: 0,
       role_configs: {
         researcher: { provider: "minimax-cn", model: "MiniMax-M3" },
         executor: { provider: "minimax-cn", model: "MiniMax-M3" },
@@ -711,7 +690,7 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       },
     }));
     await rm(launchLog, { force: true });
-    const research = run("research", [taskId, "RESEARCH-001", questionFile], { PI_TEAM_TEST_LOG: launchLog });
+    const research = run("research", [taskId, questionFile], { PI_TEAM_TEST_LOG: launchLog });
     assert.equal(research.status, 0, research.stderr || research.stdout);
     const researchRecords = await waitForRecords(1);
     assert.equal(researchRecords.length, 1);
@@ -767,7 +746,7 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
       const prompt = await readFile(promptArgument.slice(1), "utf8");
       assert.doesNotMatch(promptArgument, /^-/, `${record.role} resume prompt must not begin with a CLI option marker`);
       assert.match(prompt, /Context mode: resume/);
-      assert.match(prompt, /Resume rule: preserve the existing task scope/);
+      assert.match(prompt, /Resume rule: preserve the existing task objective/);
       assert.doesNotMatch(prompt, /Recommended common reads:/, "resume must not repeat the shared context map");
       assert.doesNotMatch(prompt, /Recommended role reads:/, "resume must not repeat role navigation");
     }
@@ -823,27 +802,19 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
   }
 });
 
-test("v2 contracts preserve declared capabilities without static availability preflight", async () => {
-  const root = mkdtempSync(join(tmpdir(), "pi-team-v2-contract-"));
+test("v3 contracts reject legacy scope and delegation fields", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-team-v3-contract-"));
   const contract = join(root, "contract.md");
   const script = join(REPO, "scripts/pi-team.ps1");
   const base = {
-    version: 2,
+    version: 3,
     task_id: "CAP-001",
-    name: "Capability preflight",
-    description: "Preserve a Researcher delegation that names project-specific capabilities.",
+    name: "Lightweight contract",
+    objective: "Validate the v3 task contract.",
     base_ref: "master",
     branch: `pi-team/test-capabilities-${process.pid}`,
     worktree: join(root, "worktree"),
-    in_scope: ["contract validation"],
-    out_of_scope: ["live performance measurement"],
-    done_criteria: [{ id: "C-001", description: "The contract preserves declared capabilities.", owner: "executor", artifacts: ["implementation_notes/CAP-001.md"] }],
-    delegations: [
-      { id: "EXECUTOR-001", role: "executor", objective: "Validate the contract.", artifact_path: "implementation_notes/CAP-001.md", required_capabilities: ["bash", "write"] },
-      { id: "REVIEWER-001", role: "reviewer", objective: "Review the contract.", artifact_path: "failures/CAP-001-review.md", required_capabilities: ["read", "write"] },
-      { id: "RESEARCH-001", role: "researcher", objective: "Collect web evidence.", artifact_path: "research/CAP-001.md", required_capabilities: ["web_search", "write"] },
-    ],
-    constraints: ["no live profiler access for Researcher"],
+    acceptance: ["The contract validates.", "Legacy orchestration fields are not required."],
   };
   const run = () => spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "validate", contract], { cwd: root, encoding: "utf8" });
   try {
@@ -852,17 +823,61 @@ test("v2 contracts preserve declared capabilities without static availability pr
     assert.equal(valid.status, 0, valid.stderr || valid.stdout);
     assert.match(valid.stdout, /VALID CAP-001/);
 
-    base.delegations[2].required_capabilities = ["shell", "profiler", "future_web_tool"];
+    base.version = 2;
+    await writeFile(contract, `# Historical v2\n\n\`\`\`json\n${JSON.stringify(base, null, 2)}\n\`\`\`\n`);
+    const v2 = run();
+    assert.notEqual(v2.status, 0);
+    assert.match(v2.stderr, /contract version must be 3/);
+    base.version = 3;
+
+    base.in_scope = ["legacy field"];
     await writeFile(contract, `# Invalid contract\n\n\`\`\`json\n${JSON.stringify(base, null, 2)}\n\`\`\`\n`);
-    const projectSpecific = run();
-    assert.equal(projectSpecific.status, 0, projectSpecific.stderr || projectSpecific.stdout);
-    assert.match(projectSpecific.stdout, /VALID CAP-001/);
+    const legacy = run();
+    assert.notEqual(legacy.status, 0);
+    assert.match(legacy.stderr, /legacy field: in_scope/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("acceptance requires each frozen criterion ID and synchronizes the Blackboard outcome", async () => {
+test("v3 contracts require the lightweight task fields and bounded acceptance list", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-team-v3-required-"));
+  const contract = join(root, "contract.md");
+  const script = join(REPO, "scripts/pi-team.ps1");
+  const base = {
+    version: 3,
+    task_id: "REQ-001",
+    name: "Required v3 fields",
+    objective: "Validate required v3 fields.",
+    base_ref: "master",
+    branch: "pi-team/test-required-v3",
+    worktree: join(root, "worktree"),
+    acceptance: ["The first result is observable.", "The second result is observable."],
+  };
+  const run = () => spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "validate", contract], { cwd: root, encoding: "utf8" });
+  const render = (value, title = "Contract") => "# " + title + "\n\n```json\n" + JSON.stringify(value, null, 2) + "\n```\n";
+  try {
+    for (const field of ["objective", "base_ref", "branch", "worktree", "acceptance"]) {
+      const candidate = structuredClone(base);
+      delete candidate[field];
+      await writeFile(contract, render(candidate, "Missing " + field));
+      const result = run();
+      assert.notEqual(result.status, 0, field + " must be required");
+      assert.match(result.stderr, new RegExp("contract missing field: " + field));
+    }
+
+    const invalidAcceptance = structuredClone(base);
+    invalidAcceptance.acceptance = ["only one result"];
+    await writeFile(contract, render(invalidAcceptance, "Invalid acceptance"));
+    const result = run();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /acceptance must contain between 2 and 5 items/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("acceptance records one Lead decision and synchronizes the Blackboard outcome", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-team-acceptance-"));
   const worktree = join(root, "worktree");
   const contract = join(root, "contract.md");
@@ -875,13 +890,8 @@ test("acceptance requires each frozen criterion ID and synchronizes the Blackboa
   const contractSnapshot = join(stateRoot, "contracts", `${taskId}.md`);
   const blackboardFile = join(commonDir, "harness-blackboard", "v1", `${taskId}.json`);
   const value = {
-    version: 2, task_id: taskId, name: "Strict acceptance", description: "Validate criteria IDs.", base_ref: "master", branch: `pi-team/test-acceptance-${process.pid}`, worktree,
-    in_scope: ["acceptance"], out_of_scope: ["implementation"],
-    done_criteria: [{ id: "C-001", description: "Implementation evidence exists.", owner: "executor", artifacts: ["implementation_notes/ACC-001.md"] }],
-    delegations: [
-      { id: "EXECUTOR-001", role: "executor", objective: "Produce evidence.", artifact_path: "implementation_notes/ACC-001.md", required_capabilities: ["write"] },
-      { id: "REVIEWER-001", role: "reviewer", objective: "Review evidence.", artifact_path: "failures/ACC-001-review.md", required_capabilities: ["read"] },
-    ], constraints: ["Lead acceptance only"],
+    version: 3, task_id: taskId, name: "Simple acceptance", objective: "Validate a single Lead decision.", base_ref: "master", branch: `pi-team/test-acceptance-${process.pid}`, worktree,
+    acceptance: ["The Lead has enough evidence to accept.", "The task can proceed to finalize."],
   };
   const run = (command, args = []) => spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, command, ...args], { cwd: REPO, encoding: "utf8" });
   try {
@@ -891,18 +901,12 @@ test("acceptance requires each frozen criterion ID and synchronizes the Blackboa
     assert.equal(run("publish", [contract]).status, 0);
     await mkdir(join(stateRoot, "contracts"), { recursive: true });
     await writeFile(contractSnapshot, await readFile(contract));
-    await writeFile(stateFile, JSON.stringify({ version: 2, task_id: taskId, execution_status: "active", outcome: "pending", worktree, contract_path: contractSnapshot, sessions: {} }));
+    await writeFile(stateFile, JSON.stringify({ version: 3, task_id: taskId, execution_status: "active", outcome: "pending", worktree, contract_path: contractSnapshot, sessions: {} }));
     await appendAgentEvent(REPO, { task_id: taskId, role: "reviewer", agent_id: "reviewer-acceptance", worktree }, {
       state: "ready_for_acceptance", activity: "Acceptance evidence is ready.", next: "Await Lead acceptance.",
     });
 
-    await writeFile(evidence, JSON.stringify({ outcome: "accepted", criteria: [{ criterion_id: "C-999", artifacts: ["implementation_notes/ACC-001.md"] }] }));
-    const rejected = run("accept", [taskId, evidence]);
-    assert.notEqual(rejected.status, 0);
-    assert.match(rejected.stderr, /unknown criterion/);
-    assert.equal(parseJsonText(await readFile(stateFile, "utf8")).outcome, "pending");
-
-    await writeFile(evidence, JSON.stringify({ outcome: "accepted", criteria: [{ criterion_id: "C-001", artifacts: ["implementation_notes/ACC-001.md"] }] }));
+    await writeFile(evidence, JSON.stringify({ outcome: "accepted", rationale: "Inspect confirms the objective and acceptance results are satisfied.", inspect_path: "implementation_notes/ACC-001.md", warnings: [] }));
     const accepted = run("accept", [taskId, evidence]);
     assert.equal(accepted.status, 0, accepted.stderr || accepted.stdout);
     assert.equal(parseJsonText(await readFile(stateFile, "utf8")).outcome, "accepted");
@@ -927,10 +931,11 @@ test("finalize integrates an accepted task and reclaims its worktree and branch"
     const checkoutTarget = spawnSync("git", ["-C", clone, "checkout", "--quiet", "develop"], { encoding: "utf8" });
     assert.equal(checkoutTarget.status, 0, checkoutTarget.stderr || checkoutTarget.stdout);
     await copyFile(join(REPO, "scripts/pi-team.ps1"), join(clone, "scripts/pi-team.ps1"));
+    await copyFile(join(REPO, "plugins/agent-blackboard/server/blackboard-core.mjs"), join(clone, "plugins/agent-blackboard/server/blackboard-core.mjs"));
     await writeFile(join(clone, "tests/run-tests.ps1"), "$ErrorActionPreference='Stop'\nexit 0\n");
     spawnSync("git", ["-C", clone, "config", "user.email", "test@example.invalid"], { encoding: "utf8" });
     spawnSync("git", ["-C", clone, "config", "user.name", "Pi Team Test"], { encoding: "utf8" });
-    const fixtureAdd = spawnSync("git", ["-C", clone, "add", "--", "scripts/pi-team.ps1", "tests/run-tests.ps1"], { encoding: "utf8" });
+    const fixtureAdd = spawnSync("git", ["-C", clone, "add", "--", "scripts/pi-team.ps1", "plugins/agent-blackboard/server/blackboard-core.mjs", "tests/run-tests.ps1"], { encoding: "utf8" });
     assert.equal(fixtureAdd.status, 0, fixtureAdd.stderr || fixtureAdd.stdout);
     const fixtureCommit = spawnSync("git", ["-C", clone, "commit", "--quiet", "-m", "test fixture"], { encoding: "utf8" });
     assert.equal(fixtureCommit.status, 0, fixtureCommit.stderr || fixtureCommit.stdout);
@@ -938,14 +943,11 @@ test("finalize integrates an accepted task and reclaims its worktree and branch"
     assert.equal(addWorktree.status, 0, addWorktree.stderr);
     await mkdir(join(worktree, "implementation_notes"), { recursive: true });
     await writeFile(join(worktree, "implementation_notes", `${taskId}.md`), "integrated evidence\n");
+    await writeFile(join(worktree, "lead-approved-context.txt"), "Lead accepted this additional task context.\n");
     const value = {
-      version: 2, task_id: taskId, name: "Finalizer integration", description: "Test deterministic finalization.",
-      base_ref: "develop", branch, worktree, in_scope: [`implementation_notes/${taskId}.md`], out_of_scope: ["other files"],
-      done_criteria: [{ id: "C-001", description: "The change is integrated.", owner: "executor", artifacts: [`implementation_notes/${taskId}.md`] }],
-      delegations: [
-        { id: "EXECUTOR-FIN-001", role: "executor", objective: "Prepare the integration change.", artifact_path: `implementation_notes/${taskId}.md`, required_capabilities: ["write"] },
-        { id: "REVIEW-FIN-001", role: "reviewer", objective: "Review the integration change.", artifact_path: `reports/${taskId}-review.md`, required_capabilities: ["read"] },
-      ], constraints: ["finalizer test"],
+      version: 3, task_id: taskId, name: "Finalizer integration", objective: "Test deterministic finalization.",
+      base_ref: "develop", branch, worktree,
+      acceptance: ["The accepted change is integrated.", "The task resources are reclaimed."],
     };
     await writeFile(contract, `# Finalizer test\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n`);
     const commonDir = spawnSync("git", ["-C", clone, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
@@ -964,7 +966,7 @@ test("finalize integrates an accepted task and reclaims its worktree and branch"
     const acceptBoard = spawnSync("node", [cli, "accept", clone, taskId], { encoding: "utf8" });
     assert.equal(acceptBoard.status, 0, acceptBoard.stderr || acceptBoard.stdout);
     const state = {
-      version: 2, task_id: taskId, name: value.name, description: value.description,
+      version: 3, task_id: taskId, name: value.name, description: value.objective,
       execution_status: "active", outcome: "accepted", worktree, contract_path: contractSnapshot,
       sessions: {},
     };
@@ -982,6 +984,7 @@ test("finalize integrates an accepted task and reclaims its worktree and branch"
     assert.equal(finalState.execution_status, "cleaned");
     assert.equal((spawnSync("git", ["-C", clone, "branch", "--list", branch], { encoding: "utf8" }).stdout.trim()), "");
     assert.equal((spawnSync("git", ["-C", clone, "show", `develop:implementation_notes/${taskId}.md`], { encoding: "utf8" }).stdout.trim()), "integrated evidence");
+    assert.equal((spawnSync("git", ["-C", clone, "show", "develop:lead-approved-context.txt"], { encoding: "utf8" }).stdout.trim()), "Lead accepted this additional task context.");
     await stat(join(commonDir, "harness-blackboard", "v1", `${taskId}.json`));
     const archived = parseJsonText(await readFile(join(commonDir, "harness-blackboard", "v1", `${taskId}.json`), "utf8"));
     assert.equal(archived.status, "archived");
@@ -1006,9 +1009,10 @@ test("inspect returns read-only evidence, supports JSON output, and treats skipp
     const checkoutTarget = spawnSync("git", ["-C", clone, "checkout", "--quiet", "develop"], { encoding: "utf8" });
     assert.equal(checkoutTarget.status, 0, checkoutTarget.stderr || checkoutTarget.stdout);
     await copyFile(join(REPO, "scripts/pi-team.ps1"), join(clone, "scripts/pi-team.ps1"));
+    await copyFile(join(REPO, "plugins/agent-blackboard/server/blackboard-core.mjs"), join(clone, "plugins/agent-blackboard/server/blackboard-core.mjs"));
     spawnSync("git", ["-C", clone, "config", "user.email", "test@example.invalid"], { encoding: "utf8" });
     spawnSync("git", ["-C", clone, "config", "user.name", "Pi Team Test"], { encoding: "utf8" });
-    assert.equal(spawnSync("git", ["-C", clone, "add", "scripts/pi-team.ps1"], { encoding: "utf8" }).status, 0);
+    assert.equal(spawnSync("git", ["-C", clone, "add", "scripts/pi-team.ps1", "plugins/agent-blackboard/server/blackboard-core.mjs"], { encoding: "utf8" }).status, 0);
     const fixtureCommit = spawnSync("git", ["-C", clone, "commit", "--quiet", "-m", "inspect fixture"], { encoding: "utf8" });
     assert.ok(fixtureCommit.status === 0 || /nothing to commit/i.test(`${fixtureCommit.stdout}\n${fixtureCommit.stderr}`));
     const addWorktree = spawnSync("git", ["-C", clone, "worktree", "add", "--quiet", "-b", branch, worktree, "develop"], { encoding: "utf8" });
@@ -1018,14 +1022,9 @@ test("inspect returns read-only evidence, supports JSON output, and treats skipp
     await writeFile(join(worktree, "implementation_notes", `${taskId}.md`), "implementation evidence\n");
     await writeFile(join(worktree, "reports", `${taskId}-review.md`), "review evidence\n");
     const value = {
-      version: 2, task_id: taskId, name: "Inspect evidence", description: "Test read-only inspect.",
+      version: 3, task_id: taskId, name: "Inspect evidence", objective: "Test read-only inspect.",
       base_ref: "develop", branch, worktree,
-      in_scope: [`implementation_notes/${taskId}.md`, `reports/${taskId}-review.md`], out_of_scope: ["other files"],
-      done_criteria: [{ id: "C-001", description: "Evidence exists.", owner: "executor", artifacts: [`implementation_notes/${taskId}.md`] }],
-      delegations: [
-        { id: "EXECUTOR-INSP-001", role: "executor", objective: "Prepare evidence.", artifact_path: `implementation_notes/${taskId}.md`, required_capabilities: ["write"] },
-        { id: "REVIEW-INSP-001", role: "reviewer", objective: "Review evidence.", artifact_path: `reports/${taskId}-review.md`, required_capabilities: ["read"] },
-      ], constraints: ["inspect test"],
+      acceptance: ["Inspect reports the current evidence.", "Inspect does not modify task state."],
     };
     await writeFile(contract, `# Inspect test\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n`);
     const commonDir = spawnSync("git", ["-C", clone, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
@@ -1042,7 +1041,7 @@ test("inspect returns read-only evidence, supports JSON output, and treats skipp
       state: "reviewing", activity: "Stale reviewer observation for inspect.", next: "Awaiting Lead.",
     });
     const statePath = join(stateRoot, `${taskId}.json`);
-    const state = { version: 2, task_id: taskId, name: value.name, description: value.description, execution_status: "active", outcome: "pending", worktree, contract_path: contractSnapshot, sessions: {} };
+    const state = { version: 3, task_id: taskId, name: value.name, description: value.objective, execution_status: "active", outcome: "pending", worktree, contract_path: contractSnapshot, sessions: {} };
     await writeFile(statePath, JSON.stringify(state, null, 2));
     const before = await readFile(statePath, "utf8");
     const finalized = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(clone, "scripts/pi-team.ps1"), "inspect", taskId, "--json", "--skip-tests", "--output", report], { cwd: clone, encoding: "utf8" });
@@ -1051,8 +1050,8 @@ test("inspect returns read-only evidence, supports JSON output, and treats skipp
     assert.equal(result.task_id, taskId);
     assert.equal(result.status, "warnings", JSON.stringify(result, null, 2));
     assert.equal(result.checks.tests.status, "skipped");
-    assert.equal(result.checks.scope.status, "passed");
-    assert.equal(result.checks.artifacts.status, "passed");
+    assert.equal(result.checks.changes.status, "observed");
+    assert.equal(result.checks.artifacts.status, "observed");
     assert.equal(result.checks.blackboard.status, "warning");
     assert.match(result.warnings.join(";"), /blackboard_agent_state:reviewer=reviewing/);
     assert.equal(result.output_path, report);
@@ -1091,7 +1090,7 @@ test("shared AGENTS context and Lead skill keep separate responsibilities", asyn
   assert.doesNotMatch(agents, /<lead-pi-team-runbook>/);
   assert.doesNotMatch(agents, /pi-team\.cmd publish <contract-path>/);
   const readme = await readFile(join(REPO, "README.md"), "utf8");
-  assert.match(readme, /Publishing a Blackboard task only publishes the Lead-owned scope; it does not\s+start Pi roles/);
+  assert.match(readme, /Publishing a Blackboard task only publishes the Lead-owned objective; it does not\s+start Pi roles/);
   assert.match(readme, /pi-team\.cmd publish/);
   assert.match(readme, /pi-team\.cmd codex-setup/);
   const leadSkill = await readFile(join(REPO, "plugins/agent-blackboard/skills/pi-team-lead/SKILL.md"), "utf8");

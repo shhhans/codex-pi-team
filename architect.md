@@ -81,12 +81,12 @@ surface. Its MCP tools manage Lead-owned task metadata and watch append-only
 Agent events stored at `<git-common-dir>/harness-blackboard/v1/`. The active Pi
 roles load `.pi/communication/extensions/blackboard-update.ts`; runtime
 identity, sequence, worktree, and observation time are not agent-controlled.
-The Blackboard displays current task scope and activity but does not authorize
-work, prove completion, or replace Lead inspection and acceptance. The
-read-only `pi-team.cmd inspect` command gathers contract, diff, artifact, test,
-process, issue, and Blackboard evidence. The `pi-team.cmd finalize` command
-executes the Lead's accepted decision; Blackboard projection lag is returned as
-a warning rather than a close gate.
+The Blackboard displays current task objective and activity but does not
+authorize work, prove completion, or replace Lead inspection and acceptance.
+The read-only `pi-team.cmd inspect` command gathers contract, diff, artifact,
+test, process, issue, and Blackboard evidence. The `pi-team.cmd finalize`
+command executes the Lead's accepted decision; Blackboard projection lag is
+returned as a warning rather than a close gate.
 The UI requests PiP when available and otherwise renders inline.
 
 ## Legacy
