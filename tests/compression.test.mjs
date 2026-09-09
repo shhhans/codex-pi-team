@@ -447,23 +447,16 @@ exit 0
 `);
   const contractPath = join(fakeRoot, "contract.md");
   const value = {
-    version: 2,
+    version: 3,
     task_id: "CMPRS-001",
     name: "compression smoke",
-    description: "freeze provider/model into task state",
+    objective: "freeze provider/model into task state",
     base_ref: "master",
     branch: `pi-team/test-compression-state-${process.pid}`,
     worktree: join(fakeRoot, "task-worktree"),
-    in_scope: ["compression freeze"],
-    out_of_scope: ["blackboard"],
-    done_criteria: [
-      { id: "C-001", owner: "executor", description: "freeze", artifacts: ["implementation_notes/CMPRS-001.md"] },
-    ],
-    delegations: [
-      { id: "EXEC-CMPRS-001", role: "executor", objective: "freeze", artifact_path: "implementation_notes/CMPRS-001.md", required_capabilities: ["read", "write"] },
-      { id: "REV-CMPRS-001", role: "reviewer", objective: "review", artifact_path: "failures/CMPRS-001.md", required_capabilities: ["read"] },
-    ],
-    constraints: ["deterministic"],
+    context: ["compression freeze"],
+    deliverables: ["implementation_notes/CMPRS-001.md"],
+    acceptance: ["provider/model are frozen in task state", "active roles launch with the frozen settings"],
   };
   const contractBody = [
     "```json",
@@ -588,23 +581,16 @@ exit 0
   const contractPath = join(fakeRoot, "contract.md");
   const branch = `pi-team/test-compression-launch-${process.pid}`;
   const value = {
-    version: 2,
+    version: 3,
     task_id: "CMPRS-002",
     name: "compression launch args",
-    description: "verify --extension compression.ts reaches the real pi launch",
+    objective: "verify --extension compression.ts reaches the real pi launch",
     base_ref: "master",
     branch,
     worktree: join(fakeRoot, "task-worktree"),
-    in_scope: ["compression launch args"],
-    out_of_scope: ["blackboard"],
-    done_criteria: [
-      { id: "C-001", owner: "executor", description: "launch args", artifacts: ["implementation_notes/CMPRS-002.md"] },
-    ],
-    delegations: [
-      { id: "EXEC-CMPRS-002", role: "executor", objective: "launch args", artifact_path: "implementation_notes/CMPRS-002.md", required_capabilities: ["read", "write"] },
-      { id: "REV-CMPRS-002", role: "reviewer", objective: "review", artifact_path: "failures/CMPRS-002.md", required_capabilities: ["read"] },
-    ],
-    constraints: ["deterministic"],
+    context: ["compression launch args"],
+    deliverables: ["implementation_notes/CMPRS-002.md"],
+    acceptance: ["active roles receive compression.ts explicitly", "role launches retain the no-extensions boundary"],
   };
   const contractBody = [
     "```json",
