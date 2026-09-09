@@ -254,12 +254,13 @@ export default function (pi: ExtensionAPI) {
       usage = undefined;
     }
     if (!usage || typeof usage.contextWindow !== "number" || usage.contextWindow <= 0) return;
-    const percent = typeof usage.percent === "number" ? usage.percent : null;
+    // Pi's ContextUsage.percent is expressed as a percentage in the range
+    // 0..100, while the team policy deliberately stores thresholds as ratios
+    // in the range 0..1. Normalize at the API boundary so both paths use the
+    // policy's ratio semantics consistently.
+    const percent = typeof usage.percent === "number" ? usage.percent / 100 : null;
     const tokens = typeof usage.tokens === "number" ? usage.tokens : null;
-    let effectivePercent = percent;
-    if (effectivePercent === null && tokens !== null) {
-      effectivePercent = tokens / usage.contextWindow;
-    }
+    const effectivePercent = percent ?? (tokens === null ? null : tokens / usage.contextWindow);
     if (effectivePercent === null) return;
     const threshold = state.policy.threshold_percent;
     if (effectivePercent < threshold) return;

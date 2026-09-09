@@ -85,14 +85,21 @@ test("C-004 behavior 1: threshold compression triggers compact at most once per 
     const ctx = {
       hasUI: false,
       ui: { notify() {} },
-      getContextUsage: () => ({ tokens: 150000, contextWindow: 200000, percent: 0.75 }),
+      getContextUsage: () => ({ tokens: 150000, contextWindow: 200000, percent: 75 }),
       compact: (o) => compactCalls.push(o),
     };
     const { default: extension } = await freshExtension();
     extension(pi);
     await handlers.session_start({}, ctx);
 
+    // A real Pi ContextUsage.percent is in the range 0..100. A 10% context
+    // must remain below the 50% policy threshold.
+    ctx.getContextUsage = () => ({ tokens: 20000, contextWindow: 200000, percent: 10 });
+    await handlers.turn_end({}, ctx);
+    assert.equal(compactCalls.length, 0, "10% usage must not trigger compaction");
+
     // First turn_end above threshold -> exactly one compact.
+    ctx.getContextUsage = () => ({ tokens: 150000, contextWindow: 200000, percent: 75 });
     await handlers.turn_end({}, ctx);
     assert.equal(compactCalls.length, 1, "threshold crossing must trigger exactly one compact");
     // Fire the before/after compact events as Pi would after a successful compact.
@@ -120,7 +127,7 @@ test("C-004 behavior 2: length-error recovery retries at most once, then cancels
     const ctx = {
       hasUI: false,
       ui: { notify() {} },
-      getContextUsage: () => ({ tokens: 150000, contextWindow: 200000, percent: 0.75 }),
+      getContextUsage: () => ({ tokens: 150000, contextWindow: 200000, percent: 75 }),
       compact: (o) => compactCalls.push(o),
     };
     const { default: extension } = await freshExtension();
@@ -159,7 +166,7 @@ test("C-004 behavior 3: resource cap stops the role and writes a credential-free
     const ctx = {
       hasUI: false,
       ui: { notify() {} },
-      getContextUsage: () => ({ tokens: 150000, contextWindow: 200000, percent: 0.75 }),
+      getContextUsage: () => ({ tokens: 150000, contextWindow: 200000, percent: 75 }),
       compact() {},
     };
     const { default: extension } = await freshExtension();
