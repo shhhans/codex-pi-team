@@ -827,12 +827,17 @@ function Sync-FinalizeGitHubIssue($Contract,[string]$TaskId,[string]$Commit) {
 function Invoke-FinalizeTests([string]$Worktree) {
   $runner = Join-Path $Worktree 'tests/run-tests.ps1'
   if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { return [pscustomobject]@{ passed=$true; skipped=$true; output='tests/run-tests.ps1 not found' } }
+  $previousProjectRoot = $env:PI_TEAM_PROJECT_ROOT
   Push-Location $Worktree
   try {
+    Remove-Item Env:PI_TEAM_PROJECT_ROOT -ErrorAction SilentlyContinue
     $output = @(& powershell.exe '-NoLogo' '-NoProfile' '-ExecutionPolicy' 'Bypass' '-File' $runner 2>&1)
     $text = ($output -join "`n")
     return [pscustomobject]@{ passed=($LASTEXITCODE -eq 0); skipped=$false; output=$text.Substring(0,[Math]::Min(4000,$text.Length)) }
-  } finally { Pop-Location }
+  } finally {
+    if ($null -eq $previousProjectRoot) { Remove-Item Env:PI_TEAM_PROJECT_ROOT -ErrorAction SilentlyContinue } else { $env:PI_TEAM_PROJECT_ROOT = $previousProjectRoot }
+    Pop-Location
+  }
 }
 function New-InspectCheck([string]$Status,[string]$Detail,[object]$Data=$null) {
   $x=[ordered]@{status=$Status;detail=$Detail}; if ($null -ne $Data) { $x.data=$Data }; return [pscustomobject]$x
