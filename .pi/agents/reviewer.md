@@ -15,6 +15,7 @@ subagentOnlyExtensions:
   - ~/.pi/agent/npm/node_modules/pi-intercom/index.ts
   - ../communication/extensions/reviewer.ts
   - ../communication/extensions/blackboard-update.ts
+  - ../communication/extensions/compression.ts
 defaultProgress: true
 ---
 

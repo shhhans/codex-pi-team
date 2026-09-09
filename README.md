@@ -233,6 +233,72 @@ Reviewer neither load its provider nor allowlist its tools.
 See `ADR/0002-lead-subagent-collaboration-protocol.md` for collaboration rules
 and `ADR/0003-stable-pi-team-entrypoint.md` for the lifecycle contract.
 
+## Automatic compression and checkpoint resume
+
+The Pi Team compression extension is loaded by every active role. It reads
+the project-level runtime configuration at `.pi/team-runtime.json` and
+applies the effective role policy (with role-card overrides) at session
+start.
+
+The defaults are:
+
+| Field | Default | Range |
+| --- | --- | --- |
+| `compression.threshold_percent` | `0.5` | `(0, 1]` |
+| `compression.max_tool_calls_per_segment` | `40` | `[1, 1000]` |
+| `compression.max_compact_retries` | `1` | `[0, 5]` |
+| `compression.output_token_limit` | `65536` | `[1024, 1048576]` |
+
+Role overrides are validated against the same ranges and may only be set on
+the three active roles (`researcher`, `executor`, `reviewer`). Sensitive
+fields (`api_key`, `token`, `auth`, `password`, `secret`) and host-absolute
+paths are rejected at load time. The `output_token_limit` keeps the
+existing 64K output budget effective.
+
+Behavior:
+
+- After every agent turn, the extension reads `ctx.getContextUsage()`. When
+  the usage percentage crosses the configured threshold and a retry budget
+  remains, it triggers `ctx.compact()` with a custom instruction that
+  preserves the frozen contract, the latest artifact paths, and the open
+  implementation decisions.
+- A per-segment tool-call counter enforces `max_tool_calls_per_segment`. A
+  successful `session_compact` resets the counter; a `session_before_compact`
+  event checks the retry budget and refuses further retries when the cap is
+  reached.
+- When a limit stops the role, the extension writes a credential-free,
+  versioned checkpoint to `<state_root>/checkpoints/task-checkpoint-<task>-<role>-<iso>.json`
+  and persists the stop reason, frozen policy, stats, and checkpoint path
+  into the task state at `<state_root>/<task_id>.json`.
+
+Checkpoints never contain API keys, OAuth tokens, or the previous session
+transcript. They carry:
+
+- the frozen compression policy,
+- the frozen provider/model,
+- the resource-limit stop reason and stats,
+- the contract snapshot path,
+- the worktree-relative `injected_artifacts` list the resume command must
+  inject.
+
+Resource-limit stops never auto-create a new session. Lead must explicitly
+resume from the checkpoint:
+
+```powershell
+.\pi-team.cmd resume-checkpoint <task-id> <checkpoint-path> <executor|reviewer>
+```
+
+The command mints a fresh session ID, reuses the frozen provider/model
+captured in the task state, and injects only the contract snapshot, the
+checkpoint summary, and the listed worktree-relative artifacts. The old
+session ID is recorded as `previous_session_id` for traceability.
+
+Inspect the most recent checkpoint path without launching a session:
+
+```powershell
+Get-Content <state_root>\<task-id>.json | Select-String last_checkpoint_path
+```
+
 ## Lead-owned project documents
 
 `ADR/0002-lead-subagent-collaboration-protocol.md` is the normative

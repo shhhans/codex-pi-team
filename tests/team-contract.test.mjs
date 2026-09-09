@@ -168,8 +168,8 @@ test("researcher alone loads shared pi-web-access and has no Deep Research tools
     assert.equal(tools.includes(banned), false, `Researcher must not include Deep Research tool ${banned}`);
   }
   const exts = parseScalarList(fm.subagentOnlyExtensions);
-  assert.deepEqual(exts, [SHARED_INTERCOM, SHARED_WEB_ACCESS, "../communication/extensions/researcher.ts", "../communication/extensions/blackboard-update.ts"],
-    "Researcher must load shared intercom, web access, and Blackboard policy extensions");
+  assert.deepEqual(exts, [SHARED_INTERCOM, SHARED_WEB_ACCESS, "../communication/extensions/researcher.ts", "../communication/extensions/blackboard-update.ts", "../communication/extensions/compression.ts"],
+    "Researcher must load shared intercom, web access, Blackboard, and compression policy extensions");
   assert.match(text, /answer-research-question/);
   assert.equal(fm.skills, "answer-research-question");
   assert.equal(fm.skillPath, "../skills");
@@ -1559,16 +1559,18 @@ exit 0
 test("tests directory contains the deterministic contract and communication-policy tests", async () => {
   const { readdir } = await import("node:fs/promises");
   const entries = (await readdir(join(REPO, "tests"))).filter((name) => !name.startsWith(".")).sort();
-  assert.deepEqual(entries, ["blackboard.test.mjs", "cleanup.mjs", "communication-policy.test.mjs", "fixtures", "legacy", "run-tests.ps1", "team-contract.test.mjs"].sort(),
+  assert.deepEqual(entries, ["automatic-compression.test.mjs", "blackboard.test.mjs", "cleanup.mjs", "communication-policy.test.mjs", "compression.test.mjs", "fixtures", "legacy", "run-tests.ps1", "team-contract.test.mjs"].sort(),
     `tests/ must contain only the deterministic contract and communication-policy tests; got ${entries.join(", ")}`);
   // Both top-level .test.mjs files are allowed.
   const topLevelTests = entries.filter((name) => name.endsWith(".test.mjs")).sort();
-  assert.deepEqual(topLevelTests, ["blackboard.test.mjs", "communication-policy.test.mjs", "team-contract.test.mjs"]);
+  assert.deepEqual(topLevelTests, ["automatic-compression.test.mjs", "blackboard.test.mjs", "communication-policy.test.mjs", "compression.test.mjs", "team-contract.test.mjs"]);
   // The contract test must be referenced by run-tests.ps1.
   const runner = await readFile(join(REPO, "tests/run-tests.ps1"), "utf8");
   assert.match(runner, /team-contract\.test\.mjs/);
   assert.match(runner, /communication-policy\.test\.mjs/);
   assert.match(runner, /blackboard\.test\.mjs/);
+  assert.match(runner, /compression\.test\.mjs/);
+  assert.match(runner, /automatic-compression\.test\.mjs/);
 });
 
 test("shared AGENTS context and Lead skill keep separate responsibilities", async () => {

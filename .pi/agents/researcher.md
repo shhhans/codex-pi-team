@@ -16,6 +16,7 @@ subagentOnlyExtensions:
   - ~/.pi/agent/npm/node_modules/pi-web-access/index.ts
   - ../communication/extensions/researcher.ts
   - ../communication/extensions/blackboard-update.ts
+  - ../communication/extensions/compression.ts
 defaultProgress: true
 ---
 

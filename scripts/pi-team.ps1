@@ -551,10 +551,12 @@ function RoleArguments([string]$Role,[string]$InitialPromptFile,[string]$Session
   $roleFile = Join-Path $ProjectRoot ".pi/agents/$Role.md"
   $intercom = Join-Path (Get-PiAgentDir) 'npm/node_modules/pi-intercom/index.ts'
   $roleExtension = Join-Path $ProjectRoot ".pi/communication/extensions/$Role.ts"
+  $compressionExtension = Join-Path $ProjectRoot '.pi/communication/extensions/compression.ts'
   $blackboardExtension = Join-Path $ProjectRoot '.pi/communication/extensions/blackboard-update.ts'
   $skill = Join-Path $ProjectRoot ".pi/skills/$($skills[$Role])/SKILL.md"
   if ([string]::IsNullOrWhiteSpace($Provider) -or [string]::IsNullOrWhiteSpace($Model)) { Fail "missing frozen provider/model for role $Role" }
-  $args = @('--approve','--provider',$Provider,'--model',$Model,'--name',$Role,'--no-extensions','--no-skills','--tools',$tools[$Role],'--skill',$skill,'--append-system-prompt',$roleFile,'--extension',$intercom,'--extension',$roleExtension,'--extension',$blackboardExtension)
+  # --no-extensions disables role-card auto-loading, so compression is passed explicitly.
+  $args = @('--approve','--provider',$Provider,'--model',$Model,'--name',$Role,'--no-extensions','--no-skills','--tools',$tools[$Role],'--skill',$skill,'--append-system-prompt',$roleFile,'--extension',$intercom,'--extension',$roleExtension,'--extension',$compressionExtension,'--extension',$blackboardExtension)
   if ($Role -eq 'researcher') { $args += @('--extension',(Join-Path (Get-PiAgentDir) 'npm/node_modules/pi-web-access/index.ts')) }
   if ($SessionId) { $args += @('--session-id',$SessionId) }
   # Pi expands an @file argument after Windows has completed command-line
@@ -675,7 +677,17 @@ function Start-Task([string]$Path) {
   $contractSnapshot = Snapshot-Contract $Path $c.task_id
   $frozenRoleConfigs = [pscustomobject]@{ researcher=[pscustomobject]@{provider=$roleConfigs['researcher'].provider;model=$roleConfigs['researcher'].model}; executor=[pscustomobject]@{provider=$roleConfigs['executor'].provider;model=$roleConfigs['executor'].model}; reviewer=[pscustomobject]@{provider=$roleConfigs['reviewer'].provider;model=$roleConfigs['reviewer'].model} }
   $runtimeDelegations = [pscustomobject]@{executor="EXECUTOR-$($c.task_id)";reviewer="REVIEWER-$($c.task_id)"}
-  $state = [pscustomobject]@{version=3;task_id=$c.task_id;name=$c.name;description=(New-ContractDescription $c);execution_status='active';outcome='pending';worktree=$c.worktree;contract_path=$contractSnapshot;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');role_configs=$frozenRoleConfigs;runtime_delegations=$runtimeDelegations;research_sequence=0;finalization=(New-FinalizationState $c.base_ref);sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor';provider=$frozenRoleConfigs.executor.provider;model=$frozenRoleConfigs.executor.model};reviewer=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='reviewer';provider=$frozenRoleConfigs.reviewer.provider;model=$frozenRoleConfigs.reviewer.model}}}
+  $settings = Read-UserSettings
+  $frozenProvider = ''; $frozenModel = ''
+  if ($null -ne $settings) {
+    $frozenProvider = [string]$settings.defaultProvider
+    $frozenModel = [string]$settings.defaultModel
+  }
+  $frozenPair = $null
+  if (-not [string]::IsNullOrWhiteSpace($frozenProvider) -and -not [string]::IsNullOrWhiteSpace($frozenModel)) {
+    $frozenPair = [pscustomobject]@{provider=$frozenProvider;model=$frozenModel}
+  }
+  $state = [pscustomobject]@{version=3;task_id=$c.task_id;name=$c.name;description=(New-ContractDescription $c);execution_status='active';outcome='pending';worktree=$c.worktree;contract_path=$contractSnapshot;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');role_configs=$frozenRoleConfigs;runtime_delegations=$runtimeDelegations;research_sequence=0;frozen_provider_model=$frozenPair;finalization=(New-FinalizationState $c.base_ref);sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor';provider=$frozenRoleConfigs.executor.provider;model=$frozenRoleConfigs.executor.model};reviewer=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='reviewer';provider=$frozenRoleConfigs.reviewer.provider;model=$frozenRoleConfigs.reviewer.model}}}
   Write-State $state; foreach ($r in @('executor','reviewer')) { Event $state $r 'working' 'task started' '' '' }
   $executorAssignment = New-RoleAssignment $c 'executor'
   $reviewerAssignment = New-RoleAssignment $c 'reviewer'
@@ -714,6 +726,22 @@ function Resume-Task([string]$TaskId) {
   Assert-Setup; $s=Read-State $TaskId
   if ($s.execution_status -ne 'active') { Fail 'task is not active' }
   Assert-NoLiveRoleProcesses $s
+  # Resource-cap stops persist last_stop_reason / last_checkpoint_path on the
+  # task state. A plain `resume` must refuse in that case so the Lead uses
+  # the explicit `resume-checkpoint` path (which mints a new session ID and
+  # reuses the frozen provider/model).
+  $resourceLimitCodes = @('tool_call_segment_limit','compact_retry_limit','output_token_limit_exceeded')
+  $hasConstrainedState = $false
+  foreach ($role in @('executor','reviewer')) {
+    if (-not ($s.PSObject.Properties.Name -contains 'last_stop_reason')) { continue }
+    $reason = $s.last_stop_reason
+    if ($null -ne $reason -and ($resourceLimitCodes -contains ([string]$reason.code))) { $hasConstrainedState = $true; break }
+    if ($s.PSObject.Properties.Name -contains 'last_checkpoint_path' -and $null -ne $s.last_checkpoint_path) { $hasConstrainedState = $true; break }
+    if ($s.PSObject.Properties.Name -contains 'resumed_from_checkpoint') { $hasConstrainedState = $true; break }
+  }
+  if ($hasConstrainedState) {
+    Fail "task was stopped by a resource limit (or a previous resume-checkpoint); plain resume would silently reuse a constrained session. Use 'pi-team.cmd resume-checkpoint <task-id> <checkpoint-path> <executor|reviewer>' to mint a new session ID and reuse the frozen provider/model."
+  }
   $contract = Parse-Contract $s.contract_path
   foreach($r in @('executor','reviewer')) {
     $context = New-RoleContext $contract $r 'resume'
@@ -722,6 +750,44 @@ function Resume-Task([string]$TaskId) {
     Launch-Role $s $r "$context Resume the existing Lead task session as $r and continue the assigned work." $s.sessions.$r.session_id $s.sessions.$r.provider $s.sessions.$r.model $true $allowedDelegations
   }
   Write-Output "RESUMED $TaskId"
+}
+function Read-Checkpoint([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { Fail "checkpoint file not found: $Path" }
+  try { $doc = Get-Content -Raw -Encoding UTF8 -LiteralPath $Path | ConvertFrom-Json } catch { Fail "invalid checkpoint JSON: $Path" }
+  if ($null -eq $doc.version -or $doc.version -ne 1) { Fail 'checkpoint version must be 1' }
+  foreach ($f in @('task_id','role','agent_id','frozen_policy','frozen_provider_model','stats','stop_reason','injected_artifacts','contract_path','contract_version','resume_allowed')) {
+    if ($null -eq $doc.$f) { Fail "checkpoint missing field: $f" }
+  }
+  return $doc
+}
+function Resume-From-Checkpoint([string]$TaskId,[string]$CheckpointPath,[string]$Role) {
+  Assert-Setup; $s = Read-State $TaskId
+  if ($s.execution_status -ne 'active') { Fail 'task is not active' }
+  if ($s.PSObject.Properties.Name -notcontains 'frozen_provider_model' -or $null -eq $s.frozen_provider_model) { Fail 'task state is missing frozen_provider_model; resume-checkpoint requires a frozen provider/model' }
+  Assert-NoLiveRoleProcesses $s
+  $doc = Read-Checkpoint $CheckpointPath
+  if ($doc.task_id -ne $TaskId) { Fail "checkpoint task_id mismatch: expected $TaskId, got $($doc.task_id)" }
+  if ($doc.resume_allowed -ne $true) { Fail 'checkpoint does not allow resume' }
+  if ($Role -notin @('executor','reviewer')) { Fail "resume-checkpoint role must be executor or reviewer; got $Role" }
+  $frozen = $s.frozen_provider_model
+  $docFrozen = $doc.frozen_provider_model
+  if ($docFrozen.provider -ne $frozen.provider -or $docFrozen.model -ne $frozen.model) { Fail "checkpoint frozen provider/model does not match task state: checkpoint=$($docFrozen.provider)/$($docFrozen.model), state=$($frozen.provider)/$($frozen.model)" }
+  # New session ID for the resumed role; old sessions are intentionally retired.
+  $oldSession = $s.sessions.$Role.session_id
+  $s.sessions.$Role | Add-Member -NotePropertyName session_id -NotePropertyValue (New-Id) -Force
+  $s.sessions.$Role | Add-Member -NotePropertyName previous_session_id -NotePropertyValue $oldSession -Force
+  $s | Add-Member -NotePropertyName resumed_from_checkpoint -NotePropertyValue ([IO.Path]::GetFullPath($CheckpointPath)) -Force
+  $s | Add-Member -NotePropertyName resumed_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force
+  Write-State $s
+  $contract = Parse-Contract $s.contract_path
+  $context = New-RoleContext $contract $Role 'resume'
+  $artifacts = ($doc.injected_artifacts | ForEach-Object { [string]$_ }) -join '; '
+  $summary = "Resume from checkpoint $($doc.stop_reason.code): $($doc.stop_reason.message). Frozen policy: threshold_percent=$($doc.frozen_policy.threshold_percent), max_tool_calls_per_segment=$($doc.frozen_policy.max_tool_calls_per_segment), max_compact_retries=$($doc.frozen_policy.max_compact_retries), output_token_limit=$($doc.frozen_policy.output_token_limit). Stats: tool_calls=$($doc.stats.tool_calls_in_segment), compaction_attempts=$($doc.stats.compaction_attempts), compaction_completed=$($doc.stats.compaction_completed), segment_count=$($doc.stats.segment_count). Injected artifacts: $artifacts. Contract snapshot: $((Split-Path $s.contract_path -Leaf)). Frozen provider/model: $($frozen.provider)/$($frozen.model). New session_id has been minted; previous session id was retired."
+  $prompt = "$context $summary You are $Role. Lead-initiated explicit checkpoint resume: continue the assigned work using the injected contract snapshot, the frozen provider/model, the frozen policy, and the listed worktree-relative artifacts. Do not request a different provider or model."
+  $allowedDelegations = @($s.runtime_delegations.PSObject.Properties | ForEach-Object { [string]$_.Value }) -join ','
+  Launch-Role $s $Role $prompt $s.sessions.$Role.session_id $frozen.provider $frozen.model $false $allowedDelegations
+  Event $s $Role 'working' "resume from checkpoint $($doc.stop_reason.code)" '' ''
+  Write-Output "RESUMED_CHECKPOINT $TaskId role=$Role previous_session=$oldSession new_session=$($s.sessions.$Role.session_id)"
 }
 function Read-OutcomeFile([string]$Path,[string]$Expected='') { if (-not(Test-Path -LiteralPath $Path)) { Fail "outcome file not found: $Path" }; try { $x=Get-Content -Raw -Encoding UTF8 -LiteralPath $Path | ConvertFrom-Json } catch { Fail "invalid outcome file: $Path" }; if ($Expected -and $x.outcome -ne $Expected) { Fail "outcome file must declare outcome=$Expected" }; return $x }
 function Assert-MissingCriteria($Contract,$Evidence) {
@@ -942,3 +1008,4 @@ function Finalize-Task([string]$TaskId,[string]$Option,[string]$TargetBranchArg)
 function Reclaim([string]$TaskId) { $s=Read-State $TaskId; if ($s.outcome -notin @('accepted','incomplete')) { Fail 'task must be accepted or closed incomplete before reclaim' }; Assert-NoLiveRoleProcesses $s; $s.execution_status='reclaimed'; $s | Add-Member -NotePropertyName reclaimed_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; Write-State $s; Invoke-BlackboardLifecycle 'archive' $TaskId; Write-Output "RECLAIMED $TaskId" }
 function Cleanup([string]$TaskId) { $s=Read-State $TaskId; if ($s.execution_status -ne 'reclaimed') { Fail 'task must be reclaimed before cleanup' }; $dirty=Git @('-C',$s.worktree,'status','--porcelain'); if ($dirty) { Fail 'worktree is not clean' }; if ([IO.Path]::GetFullPath($s.worktree) -ieq [IO.Path]::GetFullPath($ProjectRoot)) { Fail 'cannot remove main worktree' }; Invoke-Native git.exe @('-C',$ProjectRoot,'worktree','remove',$s.worktree); $s.execution_status='cleaned'; Write-State $s; Write-Output "CLEANED $TaskId" }
 switch ($Command.ToLowerInvariant()) { 'setup' {Setup}; 'codex-setup' {Setup-Codex}; 'doctor' {Doctor}; 'inventory' {Inventory $Arg1}; 'preflight' {Preflight $Arg1 $Arg2}; 'publish' {Publish $Arg1}; 'validate' {Validate $Arg1}; 'start' {Start-Task $Arg1}; 'sync' {Sync-Task $Arg1}; 'research' {Research $Arg1 $Arg2}; 'status' {Status $Arg1}; 'watch' {Status $Arg1}; 'inspect' {Inspect $Arg1 $Arg2 $Arg3 $Arg4 $Arg5}; 'resume' {Resume-Task $Arg1}; 'accept' {Accept $Arg1 $Arg2}; 'close-incomplete' {Close-Incomplete $Arg1 $Arg2}; 'reconcile' {Reconcile $Arg1 $Arg2}; 'finalize' {$result=Finalize-Task $Arg1 $Arg2 $Arg3; $result|ConvertTo-Json -Depth 30; if($result.status -eq 'blocked'){exit 1}}; 'reclaim' {Reclaim $Arg1}; 'cleanup' {Cleanup $Arg1}; default { Fail "unknown command: $Command" } }
+switch ($Command.ToLowerInvariant()) { 'setup' {Setup}; 'codex-setup' {Setup-Codex}; 'doctor' {Doctor}; 'inventory' {Inventory $Arg1}; 'preflight' {Preflight $Arg1 $Arg2}; 'publish' {Publish $Arg1}; 'validate' {Validate $Arg1}; 'start' {Start-Task $Arg1}; 'sync' {Sync-Task $Arg1}; 'research' {Research $Arg1 $Arg2}; 'status' {Status $Arg1}; 'watch' {Status $Arg1}; 'inspect' {Inspect $Arg1 $Arg2 $Arg3 $Arg4 $Arg5}; 'resume' {Resume-Task $Arg1}; 'resume-checkpoint' {Resume-From-Checkpoint $Arg1 $Arg2 $Arg3}; 'accept' {Accept $Arg1 $Arg2}; 'close-incomplete' {Close-Incomplete $Arg1 $Arg2}; 'reconcile' {Reconcile $Arg1 $Arg2}; 'finalize' {$result=Finalize-Task $Arg1 $Arg2 $Arg3; $result|ConvertTo-Json -Depth 30; if($result.status -eq 'blocked'){exit 1}}; 'reclaim' {Reclaim $Arg1}; 'cleanup' {Cleanup $Arg1}; default { Fail "unknown command: $Command" } }
