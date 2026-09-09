@@ -664,9 +664,7 @@ function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question
     "Context: $context",
     "Acceptance: $acceptance",
     "Deliverables: $deliverables",
-    (Get-ToolRuntimeMetadata),
-    'Normative protocol: ADR/0002-lead-subagent-collaboration-protocol.md',
-    'Recommended common reads: AGENTS.md, ADR/0002-lead-subagent-collaboration-protocol.md, project_state.md'
+    (Get-ToolRuntimeMetadata)
   )
   switch ($Role) {
     'researcher' {

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { appendAgentEvent } from "../plugins/agent-blackboard/server/blackboard-core.mjs";
+import { appendRoleEvent } from "../.pi/communication/role-events.mjs";
 const REPO = process.cwd();
 const SKILL_NAMES = ["answer-research-question", "execute-delegated-task", "review-delegated-task"];
 const RESEARCHER_TOOLS = ["read", "grep", "find", "ls", "write", "web_search", "fetch_content", "get_search_content", "source_check", "pi_team_intercom", "blackboard_update"];
@@ -1380,6 +1381,7 @@ test("Start-RoleProcess bootstrap transmits identity, directory, executable, and
       await writeFile(join(packageDir, "package.json"), JSON.stringify({ name, version }));
     }
     await writeFile(fakePiScript, String.raw`param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Args)
+if ($Args -contains 'auth') { exit 0 }
  $encodedIndex = [Array]::IndexOf($Args, '-EncodedCommand')
 if ($encodedIndex -ge 0) {
   if ($encodedIndex -ge ($Args.Count - 1)) { Write-Error 'fake Windows Terminal requires an encoded bootstrap'; exit 2 }
@@ -1396,21 +1398,16 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     const branchCreate = spawnSync("git", ["branch", branch, "master"], { cwd: REPO, encoding: "utf8" });
     assert.equal(branchCreate.status, 0, branchCreate.stderr);
     await writeFile(contract, `# Bootstrap boundaries\n\n\`\`\`json\n${JSON.stringify({
-      version: 2,
+      version: 3,
       task_id: taskId,
       name: 'Boundary contract with doublequotes and backticks and ampersands',
-      description: `Semicolons; double quotes; $dollar; \`backtick\`; parens (round); a long body follows: ${longPromptBody}`,
+      objective: `Semicolons; double quotes; $dollar; \`backtick\`; parens (round); a long body follows: ${longPromptBody}`,
       base_ref: "master",
       branch,
       worktree,
-      in_scope: ["bootstrap boundaries"],
-      out_of_scope: ["production deploys"],
-      done_criteria: [{ id: "C-001", description: "Bootstrap transmits all fields.", owner: "executor", artifacts: ["implementation_notes/BND-001.md"] }],
-      delegations: [
-        { id: "EXECUTOR-001", role: "executor", objective: "Exercise the bootstrap.", artifact_path: "implementation_notes/BND-001.md", required_capabilities: ["bash", "write"] },
-        { id: "REVIEWER-001", role: "reviewer", objective: "Review the bootstrap.", artifact_path: "failures/BND-001-review.md", required_capabilities: ["read", "write"] },
-      ],
-      constraints: ["constraint one; with semicolon", "constraint two with doublequotes", "constraint three `with backtick`"],
+      context: ["bootstrap boundaries", "Semicolons; with special characters"],
+      deliverables: ["implementation_notes/BND-001.md"],
+      acceptance: ["bootstrap transmits the v3 objective", "role identity and worktree remain intact"],
     }, null, 2)}\n\`\`\`\n`);
     const publish = run("publish", [contract]);
     assert.equal(publish.status, 0, publish.stderr || publish.stdout);
@@ -1436,15 +1433,17 @@ $record | ConvertTo-Json -Compress | Add-Content -Encoding UTF8 -LiteralPath $en
     assert.ok(reviewerRecord, "reviewer launch must be recorded");
     for (const record of [executorRecord, reviewerRecord]) {
       const argvJoined = record.args.join(" ");
-      assert.match(argvJoined, /Lead assignment\. Task ID: BND-001\./);
-      assert.match(argvJoined, new RegExp(`Frozen task contract: ${contractSnapshot.replace(/\\/g, "\\\\")}`));
-      assert.match(argvJoined, /Semicolons;/);
-      assert.match(argvJoined, /double quotes/);
-      assert.match(argvJoined, /\$dollar/);
-      assert.match(argvJoined, /`backtick`/);
-      assert.match(argvJoined, /parens \(round\)/);
-      assert.ok(argvJoined.length > 2000, "long description body must round-trip through the bootstrap (>2 KB)");
-      assert.match(argvJoined, /Constraints: constraint one; with semicolon; constraint two with doublequotes; constraint three `with backtick`\./);
+      const promptArg = record.args.find((arg) => typeof arg === "string" && arg.startsWith("@"));
+      assert.ok(promptArg, "role launch must carry a prompt file");
+      const prompt = await readFile(promptArg.slice(1), "utf8");
+      assert.match(prompt, /Lead assignment\. Perform the general/);
+      assert.match(prompt, /Objective: Semicolons;/);
+      assert.match(prompt, /Context: bootstrap boundaries; Semicolons; with special characters/);
+      assert.match(prompt, /double quotes/);
+      assert.match(prompt, /\$dollar/);
+      assert.match(prompt, /`backtick`/);
+      assert.match(prompt, /parens \(round\)/);
+      assert.ok(prompt.length > 2000, "long objective body must round-trip through the bootstrap (>2 KB)");
       // The role argv must keep the frozen session id and skill path intact.
       assert.equal(record.args.includes("--session-id"), true);
       assert.equal(record.args[record.args.indexOf("--skill") + 1].endsWith("SKILL.md"), true);
@@ -1517,21 +1516,16 @@ exit 0
 `);
     await writeFile(fakePi, `@echo off\r\npowershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0fake-pi.ps1" %*\r\n`);
     await writeFile(contract, `# Wait timeout\n\n\`\`\`json\n${JSON.stringify({
-      version: 2,
+      version: 3,
       task_id: taskId,
       name: "Wait timeout test",
-      description: "Verify bounded timeout.",
+      objective: "Verify bounded timeout.",
       base_ref: "master",
       branch,
       worktree,
-      in_scope: ["wait timeout"],
-      out_of_scope: ["happy path"],
-      done_criteria: [{ id: "C-001", description: "Timeout fires.", owner: "executor", artifacts: ["implementation_notes/TMO-001.md"] }],
-      delegations: [
-        { id: "EXECUTOR-001", role: "executor", objective: "Verify timeout.", artifact_path: "implementation_notes/TMO-001.md", required_capabilities: ["bash", "write"] },
-        { id: "REVIEWER-001", role: "reviewer", objective: "Verify timeout.", artifact_path: "failures/TMO-001-review.md", required_capabilities: ["read"] },
-      ],
-      constraints: ["bounded timeout"],
+      context: ["wait timeout"],
+      deliverables: ["implementation_notes/TMO-001.md"],
+      acceptance: ["timeout is bounded", "no runtime readiness is fabricated"],
     }, null, 2)}\n\`\`\`\n`);
     const branchCreate = spawnSync("git", ["branch", branch, "master"], { cwd: REPO, encoding: "utf8" });
     assert.equal(branchCreate.status, 0, branchCreate.stderr);
@@ -1652,22 +1646,16 @@ test("ISSUE-018: New-RoleContext deduplicates redundant navigation hints and sta
   const script = join(REPO, "scripts/pi-team.ps1");
   const quoted = script.replace(/\\/g, "\\\\").replace(/'/g, "''");
   const contractJson = JSON.stringify({
-    version: 2,
+    version: 3,
     task_id: "ISSUE-018",
     name: "Cost optimization",
-    description: "Verify deduplicated prompt and size budget.",
+    objective: "Verify deduplicated prompt and size budget.",
     base_ref: "master",
     branch: "pi-team/ISSUE-018-cost-check",
     worktree: "D:/Coding/Harness/Pi-team-ISSUE-018",
-    in_scope: ["scripts/pi-team.ps1"],
-    out_of_scope: ["modify tests to hide failures"],
-    done_criteria: [{ id: "C-002", description: "Optimize startup injection.", owner: "executor", artifacts: ["implementation_notes/ISSUE-018.md"] }],
-    delegations: [
-      { id: "EXECUTOR-ISSUE-018", role: "executor", objective: "Optimize startup injection.", artifact_path: "reports/ISSUE-018-verification.md", required_capabilities: ["bash", "write"] },
-      { id: "REVIEWER-ISSUE-018", role: "reviewer", objective: "Review startup injection.", artifact_path: "reports/ISSUE-018-review.md", required_capabilities: ["read", "write"] },
-      { id: "RESEARCH-ISSUE-018", role: "researcher", objective: "Research startup injection optimization.", artifact_path: "research/ISSUE-018.md", required_capabilities: ["web_search", "write"] },
-    ],
-    constraints: ["Lead acceptance only"],
+    context: ["scripts/pi-team.ps1", "modify tests to hide failures is out of scope"],
+    deliverables: ["reports/ISSUE-018-verification.md", "reports/ISSUE-018-review.md"],
+    acceptance: ["startup context is deduplicated", "role-specific navigation remains"],
   }).replace(/'/g, "''");
   const roles = ["executor", "reviewer"];
   const sizes = {};
@@ -1763,21 +1751,16 @@ test("ISSUE-018: independent worktree paths flow into each role prompt without l
   const script = join(REPO, "scripts/pi-team.ps1");
   const quoted = script.replace(/\\/g, "\\\\").replace(/'/g, "''");
   const buildContract = (taskId, worktree) => JSON.stringify({
-    version: 2,
+    version: 3,
     task_id: taskId,
     name: `${taskId} contract`,
-    description: `${taskId} description`,
+    objective: `${taskId} objective`,
     base_ref: "master",
     branch: `pi-team/${taskId}-wt`,
     worktree,
-    in_scope: ["scripts/pi-team.ps1"],
-    out_of_scope: ["production changes"],
-    done_criteria: [{ id: "C-002", description: `${taskId} optimize.`, owner: "executor", artifacts: [`implementation_notes/${taskId}.md`] }],
-    delegations: [
-      { id: `EXECUTOR-${taskId}`, role: "executor", objective: `${taskId} optimize.`, artifact_path: `implementation_notes/${taskId}.md`, required_capabilities: ["write"] },
-      { id: `REVIEWER-${taskId}`, role: "reviewer", objective: `${taskId} review.`, artifact_path: `failures/${taskId}-review.md`, required_capabilities: ["read"] },
-    ],
-    constraints: ["Lead acceptance only"],
+    context: ["scripts/pi-team.ps1", "production changes are out of scope"],
+    deliverables: [`implementation_notes/${taskId}.md`],
+    acceptance: [`${taskId} objective is present`, "the worktree path is isolated"],
   }).replace(/'/g, "''");
   const worktreeA = "D:/Coding/Harness/Pi-team-ISSUE-018-A";
   const worktreeB = "D:/Coding/Harness/Pi-team-ISSUE-018-B";
