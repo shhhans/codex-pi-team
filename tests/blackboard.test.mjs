@@ -24,7 +24,17 @@ import {
   unregisterLead,
   watch,
 } from "../plugins/agent-blackboard/server/blackboard-core.mjs";
-import { createLeadWakeupRequest, dispatchLeadWakeups } from "../plugins/agent-blackboard/server/lead-wakeup-adapter.mjs";
+import {
+  buildLeadWakeupContext,
+  coalesceWakeups,
+  createLeadWakeupRequest,
+  dispatchLeadWakeups,
+  formatLeadWakeup,
+  getLeadWakeupHealth,
+  renderLeadWakeupDigest,
+  summarizeRecentActivity,
+  summarizeWakeupHealth,
+} from "../plugins/agent-blackboard/server/lead-wakeup-adapter.mjs";
 
 const REPO = process.cwd();
 
@@ -348,6 +358,232 @@ test("Lead wakeup binding is explicit and isolated per task", async () => {
     assert.equal((await listLeadWakeups(fixture.repo, "BB-WAKE-B")).wakeups.length, 0);
     await unregisterLead(fixture.repo, "BB-WAKE-A", { thread_id: "lead-a", host_id: "local" });
     assert.equal((await listLeadWakeups(fixture.repo, "BB-WAKE-A")).binding, null);
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
+test("Lead wakeup prompt injects task context, recent activity digest, and degradation health", async () => {
+  const fixture = await makeRepo();
+  try {
+    await createTask(fixture.repo, { task_id: "BB-WAKE-CTX", name: "Context task", description: "Wakeup context digest baseline" });
+    const identity = { task_id: "BB-WAKE-CTX", role: "executor", agent_id: "executor-ctx", worktree: fixture.worktree };
+    await appendAgentEvent(fixture.repo, identity, { state: "working", activity: "starting slice" });
+    await appendAgentEvent(fixture.repo, identity, { state: "working", activity: "mid-slice progress" });
+    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "slice ready", next: "wait for review" });
+    const wakeup = (await listLeadWakeups(fixture.repo, "BB-WAKE-CTX")).wakeups[0];
+    const context = await buildLeadWakeupContext(fixture.repo, wakeup, { recent_activity_limit: 5 });
+    assert.equal(context.task.name, "Context task");
+    assert.equal(context.task.description, "Wakeup context digest baseline");
+    assert.equal(context.recent_activity.length, 2, "wakeup digest excludes the wakeup's own sequence");
+    assert.deepEqual(context.recent_activity.map((item) => `${item.role}:${item.state}`), ["executor:working", "executor:working"]);
+    assert.equal(context.health.pending, 1);
+    assert.equal(context.health.failed, 0);
+    assert.equal(context.health.degraded, false);
+    const request = createLeadWakeupRequest({ thread_id: "lead-ctx", host_id: "local" }, wakeup, context);
+    assert.match(request.prompt, /task_name=Context task/);
+    assert.match(request.prompt, /task_description=Wakeup context digest baseline/);
+    assert.match(request.prompt, /recent_activity:/);
+    assert.match(request.prompt, /executor:1 working/);
+    assert.match(request.prompt, /executor:2 working/);
+    assert.match(request.prompt, /state=ready_for_review/);
+    assert.doesNotMatch(request.prompt, /executor:3 /, "wakeup must not echo its own sequence in the digest");
+    assert.doesNotMatch(request.prompt, /degradation:/, "fresh wakeup must not surface degradation");
+    assert.doesNotMatch(request.prompt, /base64|eyJ[A-Za-z0-9]/i);
+    const direct = formatLeadWakeup(wakeup);
+    assert.doesNotMatch(direct, /recent_activity:/, "the bare formatter must remain a stable, minimal fallback");
+    assert.equal((await listLeadWakeups(fixture.repo, "BB-WAKE-CTX")).name, "Context task", "listLeadWakeups must expose the task name alongside binding and wakeups");
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
+test("Lead wakeup dedup coalesces matching wakeups inside the rolling window and preserves distinct ones", async () => {
+  const fixture = await makeRepo();
+  try {
+    await createTask(fixture.repo, { task_id: "BB-WAKE-DEDUP", name: "Dedup task", description: "Coalesce duplicate wakeups" });
+    await registerLead(fixture.repo, "BB-WAKE-DEDUP", { thread_id: "lead-dedup", host_id: "local" });
+    const identity = { task_id: "BB-WAKE-DEDUP", role: "executor", agent_id: "executor-dedup", worktree: fixture.worktree };
+    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "first slice ready" });
+    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "first slice ready" });
+    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "first slice ready" });
+    await appendAgentEvent(fixture.repo, identity, { state: "blocked", activity: "downstream API failing" });
+    const queue = await listLeadWakeups(fixture.repo, "BB-WAKE-DEDUP");
+    assert.equal(queue.wakeups.length, 4);
+    const survivor = coalesceWakeups(queue.wakeups, { window_ms: 60_000 });
+    assert.equal(survivor.length, 2, "matching role+state+activity wakeups collapse to one survivor plus the distinct blocked event");
+    const ready = survivor.find((item) => item.state === "ready_for_review");
+    assert.equal(ready.coalesced_count, 3);
+    assert.deepEqual(ready.coalesced_sequences.sort((a, b) => a - b), [1, 2, 3]);
+    assert.deepEqual(ready.coalesced_ids, ["BB-WAKE-DEDUP:executor:2", "BB-WAKE-DEDUP:executor:3"]);
+    assert.equal(survivor.find((item) => item.state === "blocked").coalesced_count, undefined);
+    const sent = [];
+    const dispatched = await dispatchLeadWakeups(fixture.repo, "BB-WAKE-DEDUP", async (request) => { sent.push(request); return { accepted: true }; });
+    assert.equal(sent.length, 2, "dispatcher must not double-send coalesced wakeups");
+    assert.equal(dispatched.deduplicated.length, 2);
+    assert.match(sent.find((item) => item.event_key.endsWith(":1")).prompt, /coalesced_count=3/);
+    assert.match(sent.find((item) => item.event_key.endsWith(":4")).prompt, /state=blocked/);
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
+test("Lead wakeup dedup leaves wakeups outside the rolling window untouched", async () => {
+  const older = {
+    id: "BB-WAKE-OLD:executor:1",
+    task_id: "BB-WAKE-OLD",
+    role: "executor",
+    sequence: 1,
+    state: "ready_for_review",
+    activity: "stale slice",
+    created_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+    status: "pending",
+    attempts: 0,
+  };
+  const fresh = {
+    id: "BB-WAKE-OLD:executor:2",
+    task_id: "BB-WAKE-OLD",
+    role: "executor",
+    sequence: 2,
+    state: "ready_for_review",
+    activity: "stale slice",
+    created_at: new Date(Date.now() - 1000).toISOString(),
+    status: "pending",
+    attempts: 0,
+  };
+  const survivor = coalesceWakeups([older, fresh], { window_ms: 60_000 });
+  assert.equal(survivor.length, 2, "wakeups older than the window must not collapse with newer siblings");
+  assert.deepEqual(survivor.map((item) => item.id), [older.id, fresh.id]);
+});
+
+test("Lead wakeup degradation surfaces stuck, failed, and in-flight metrics for Lead observability", async () => {
+  const fixture = await makeRepo();
+  try {
+    await createTask(fixture.repo, { task_id: "BB-WAKE-DEGRADE", name: "Degrade task", description: "Surface wakeup degradation" });
+    await registerLead(fixture.repo, "BB-WAKE-DEGRADE", { thread_id: "lead-degrade", host_id: "local" });
+    const identity = { task_id: "BB-WAKE-DEGRADE", role: "executor", agent_id: "executor-degrade", worktree: fixture.worktree };
+    const fresh = await appendAgentEvent(fixture.repo, identity, { state: "blocked", activity: "downstream API failing" });
+    const exhausted = (await listLeadWakeups(fixture.repo, "BB-WAKE-DEGRADE")).wakeups[0];
+    await recordLeadWakeupDelivery(fixture.repo, "BB-WAKE-DEGRADE", exhausted.id, { delivered: false, error: "thread-stale" });
+    await recordLeadWakeupDelivery(fixture.repo, "BB-WAKE-DEGRADE", exhausted.id, { delivered: false, error: "thread-stale" });
+    await recordLeadWakeupDelivery(fixture.repo, "BB-WAKE-DEGRADE", exhausted.id, { delivered: false, error: "host-rejected-wakeup" });
+
+    const healthEmpty = summarizeWakeupHealth([]);
+    assert.equal(healthEmpty.pending, 0);
+    assert.equal(healthEmpty.degraded, false);
+    await assert.rejects(async () => summarizeWakeupHealth(null), /wakeups must be an array/);
+    await assert.rejects(async () => summarizeWakeupHealth([], { max_attempts: 0 }), /max_attempts/);
+
+    const health = await getLeadWakeupHealth(fixture.repo, "BB-WAKE-DEGRADE");
+    assert.equal(health.health.stuck, 1, "wakeups that hit maxAttempts must be flagged as stuck");
+    assert.equal(health.health.failed, 1);
+    assert.equal(health.health.attempts, 3);
+    assert.equal(health.health.last_error, "host-rejected-wakeup");
+    assert.equal(health.health.degraded, true);
+    assert.equal(health.task_name, "Degrade task");
+    assert.equal(health.task_description, "Surface wakeup degradation");
+
+    const dispatched = await dispatchLeadWakeups(fixture.repo, "BB-WAKE-DEGRADE", async () => ({ accepted: false, reason: "host-busy" }));
+    assert.equal(dispatched.skipped.length, 1, "stuck wakeups must be skipped, not re-sent");
+    assert.equal(dispatched.delivered.length, 0);
+    assert.equal(dispatched.health.stuck, 1);
+    assert.deepEqual(dispatched.delivered, [], "stuck wakeup must not be re-delivered");
+
+    const digest = await renderLeadWakeupDigest(fixture.repo, "BB-WAKE-DEGRADE");
+    assert.match(digest, /task_name=Degrade task/);
+    assert.match(digest, /pending=1/);
+    assert.match(digest, /stuck=1/);
+    assert.match(digest, /degraded=true/);
+    assert.match(digest, /last_error=host-rejected-wakeup/);
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
+test("Lead wakeup dispatcher is concurrency-safe: concurrent dispatches deliver each wakeup exactly once", async () => {
+  const fixture = await makeRepo();
+  try {
+    await createTask(fixture.repo, { task_id: "BB-WAKE-RACE", name: "Race task", description: "Concurrent dispatch safety" });
+    await registerLead(fixture.repo, "BB-WAKE-RACE", { thread_id: "lead-race", host_id: "local" });
+    const identity = { task_id: "BB-WAKE-RACE", role: "executor", agent_id: "executor-race", worktree: fixture.worktree };
+    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "first ready" });
+    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "second ready" });
+    const sent = [];
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const sender = async (request) => {
+      sent.push(request.event_key);
+      await gate;
+      return { accepted: true, delivery_id: `delivery-${request.event_key}` };
+    };
+    const first = dispatchLeadWakeups(fixture.repo, "BB-WAKE-RACE", sender);
+    const second = dispatchLeadWakeups(fixture.repo, "BB-WAKE-RACE", sender);
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    const deliveredKeys = [a, b].flatMap((item) => item.delivered.map((entry) => entry.id));
+    const seen = new Set(deliveredKeys);
+    assert.equal(seen.size, deliveredKeys.length, "the same wakeup id must not be reported as delivered twice");
+    assert.ok(sent.length >= 2, "the dispatcher must still attempt every wakeup at least once");
+    const stillPending = (await listLeadWakeups(fixture.repo, "BB-WAKE-RACE")).wakeups.filter((wakeup) => wakeup.status !== "delivered");
+    assert.deepEqual(stillPending, [], "every wakeup must end in `delivered` after concurrent dispatch");
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
+test("summarizeRecentActivity bounds the digest and never includes the wakeup's own sequence", async () => {
+  const events = [
+    { role: "executor", sequence: 1, state: "working", activity: "start", observed_at: "2026-01-01T00:00:00.000Z" },
+    { role: "researcher", sequence: 1, state: "waiting", activity: "waiting", observed_at: "2026-01-01T00:00:01.000Z" },
+    { role: "reviewer", sequence: 1, state: "reviewing", activity: "checking", observed_at: "2026-01-01T00:00:02.000Z" },
+    { role: "executor", sequence: 4, state: "ready_for_review", activity: "ready", observed_at: "2026-01-01T00:00:03.000Z" },
+  ];
+  const digest = summarizeRecentActivity(events, { limit: 2, before_sequence: 4 });
+  assert.equal(digest.length, 2);
+  assert.deepEqual(digest.map((item) => item.sequence), [1, 1]);
+  assert.equal(digest.every((item) => item.sequence < 4), true);
+  const overflow = summarizeRecentActivity(events, { limit: 0 });
+  assert.deepEqual(overflow, []);
+  const guarded = summarizeRecentActivity(null, { limit: 3 });
+  assert.deepEqual(guarded, []);
+});
+
+test("context digest keeps recent cross-role activity before the wakeup regardless of role-local sequence", async () => {
+  // Regression for ISSUE-030 finding cross-role-sequence-cutoff: the
+  // before_sequence cutoff is role-local, so it must not silently drop recent
+  // events from other roles whose local sequence exceeds the wakeup's.
+  const fixture = await makeRepo();
+  try {
+    await createTask(fixture.repo, { task_id: "BB-WAKE-MR", name: "Multi role", description: "Cross-role digest" });
+    await registerLead(fixture.repo, "BB-WAKE-MR", { thread_id: "lead-mr", host_id: "local" });
+    const researcher = { task_id: "BB-WAKE-MR", role: "researcher", agent_id: "researcher-mr", worktree: fixture.worktree };
+    const executor = { task_id: "BB-WAKE-MR", role: "executor", agent_id: "executor-mr", worktree: fixture.worktree };
+    for (let i = 1; i <= 5; i++) {
+      await appendAgentEvent(fixture.repo, researcher, { state: "working", activity: `researcher-step-${i}` });
+    }
+    await appendAgentEvent(fixture.repo, executor, { state: "working", activity: "executor-start" });
+    const wakeupEvent = await appendAgentEvent(fixture.repo, executor, { state: "ready_for_review", activity: "executor-done" });
+    const wakeup = (await listLeadWakeups(fixture.repo, "BB-WAKE-MR")).wakeups.find((item) => item.sequence === wakeupEvent.event.sequence);
+    const context = await buildLeadWakeupContext(fixture.repo, wakeup, { recent_activity_limit: 10 });
+    const digest = context.recent_activity.map((item) => `${item.role}:${item.sequence}`);
+    // All five researcher events plus the executor working event precede the
+    // wakeup in time; none may be dropped by the role-local sequence cutoff.
+    assert.deepEqual(digest.sort(), ["executor:1", "researcher:1", "researcher:2", "researcher:3", "researcher:4", "researcher:5"]);
+  } finally {
+    await removeRepo(fixture);
+  }
+});
+
+test("Lead wakeup helper functions reject invalid inputs without crashing", async () => {
+  await assert.rejects(dispatchLeadWakeups(".", "BB-INVALID", null), /sendMessageToThread must be a function/);
+  await assert.rejects(async () => buildLeadWakeupContext(".", null), /wakeup/);
+  const digest = await renderLeadWakeupDigest(".", "BB-MISSING");
+  assert.match(digest, /pending=0/);
+  assert.match(digest, /degraded=false/);
+  const fixture = await makeRepo();
+  try {
+    await assert.rejects(async () => getLeadWakeupHealth(fixture.repo, ""), /invalid task_id/);
+    await assert.rejects(async () => getLeadWakeupHealth(fixture.repo, "INVALID ID"), /invalid task_id/);
   } finally {
     await removeRepo(fixture);
   }

@@ -518,11 +518,50 @@ export async function listLeadWakeups(projectRoot, taskId) {
     }
     return {
       task_id: taskId,
+      name: task.name,
+      description: task.description,
       status: task.status,
       binding: task.lead_binding || null,
       wakeups: ensureWakeupStore(task).filter((item) => item.status !== "acked"),
     };
   });
+}
+
+// Read the append-only Agent event log for one task across all roles.
+// Returns events sorted by (observed_at, sequence). Two complementary
+// filters are supported:
+//   * `before_observed_at` (ISO 8601 string) drops every event whose
+//     `observed_at` is greater than or equal to the cutoff. This is the
+//     cross-role safe filter because `observed_at` is globally comparable.
+//   * `before_sequence` (integer) drops every event whose sequence is
+//     greater than or equal to the cutoff. This is **role-local** because
+//     `appendAgentEvent` numbers sequences per role file; using it across
+//     roles silently drops events from roles with higher local sequences.
+//     Prefer `before_observed_at` whenever the caller has access to the
+//     wakeup's `created_at`. Both filters may be combined (AND).
+// This function is read-only and is used by the Lead wakeup adapter to
+// inject a bounded "recent activity" digest into the prompt.
+export async function listAgentEvents(projectRoot, taskId, options = {}) {
+  const root = await ensureStateRoot(projectRoot);
+  ensureTaskId(taskId);
+  const limit = Number.isFinite(options.limit) ? Math.max(0, Math.min(500, options.limit)) : 50;
+  const beforeSequence = options.before_sequence === undefined ? undefined : Number(options.before_sequence);
+  const beforeObservedAt = typeof options.before_observed_at === "string" && options.before_observed_at.length > 0 ? options.before_observed_at : undefined;
+  const events = [];
+  for (const role of Object.keys(ROLE_STATES)) {
+    const file = `${taskId}-${role}.jsonl`;
+    const fileEvents = await parseEventFile(root, file);
+    events.push(...fileEvents);
+  }
+  let filtered = events;
+  if (beforeSequence !== undefined && Number.isFinite(beforeSequence)) {
+    filtered = filtered.filter((event) => Number(event.sequence) < beforeSequence);
+  }
+  if (beforeObservedAt !== undefined) {
+    filtered = filtered.filter((event) => typeof event.observed_at === "string" && event.observed_at < beforeObservedAt);
+  }
+  filtered.sort((a, b) => (a.observed_at || "").localeCompare(b.observed_at || "") || Number(a.sequence) - Number(b.sequence));
+  return filtered.slice(-limit);
 }
 
 export async function recordLeadWakeupDelivery(projectRoot, taskId, wakeupId, input) {
@@ -542,6 +581,34 @@ export async function recordLeadWakeupDelivery(projectRoot, taskId, wakeupId, in
     if (deliveryId !== undefined) wakeup.delivery_id = deliveryId;
     if (error !== undefined) wakeup.last_error = error;
     else delete wakeup.last_error;
+    task.updated_at = isoNow();
+    await writeJsonAtomic(taskPath(root, taskId), task);
+    return { task_id: taskId, wakeup };
+  });
+}
+
+// Atomically claim a wakeup for delivery. Marks the wakeup as `in_flight`
+// and refuses to claim a wakeup that is already delivered, has exhausted
+// `maxAttempts`, or is currently in_flight (i.e. another dispatcher has
+// already claimed it). Returns the claimed wakeup on success or null when
+// the wakeup is not eligible. This is the only concurrency-safe way for a
+// dispatcher to enter the host send path. The attempt counter is
+// incremented later by `recordLeadWakeupDelivery` so the total attempt
+// count matches the actual number of host round-trips.
+export async function claimLeadWakeup(projectRoot, taskId, wakeupId, options = {}) {
+  const root = await ensureStateRoot(projectRoot);
+  ensureTaskId(taskId);
+  const id = ensureLineField(wakeupId, "wakeup_id", 400, true);
+  const maxAttempts = Number.isFinite(options.maxAttempts) ? Math.max(1, options.maxAttempts) : 3;
+  return withLock(`${taskPath(root, taskId)}.lock`, async () => {
+    const task = await loadTask(root, taskId);
+    const wakeup = ensureWakeupStore(task).find((item) => item.id === id);
+    if (!wakeup) fail(`unknown Lead wakeup: ${id}`);
+    if (wakeup.status === "delivered") return { task_id: taskId, wakeup: null, reason: "already_delivered" };
+    if (wakeup.status === "in_flight") return { task_id: taskId, wakeup: null, reason: "in_flight" };
+    if (Number(wakeup.attempts || 0) >= maxAttempts) return { task_id: taskId, wakeup: null, reason: "max_attempts_exceeded" };
+    wakeup.last_attempt_at = isoNow();
+    wakeup.status = "in_flight";
     task.updated_at = isoNow();
     await writeJsonAtomic(taskPath(root, taskId), task);
     return { task_id: taskId, wakeup };
