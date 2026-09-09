@@ -43,7 +43,7 @@ scope. It asks Lead when one of these fields is missing or contradictory.
 
 ### Task boundaries, issue tracking, and branch isolation
 
-`master` is the stable integration baseline. Every development task uses one
+`develop` is the stable integration baseline. Every development task uses one
 focused branch and one worktree created from the contract's explicit,
 validated, clean `base_ref`; the launcher must not infer the base from the
 directory in which it is invoked. Until the launcher enforces `base_ref`, Lead
@@ -104,8 +104,11 @@ The lifecycle is:
    and the same Reviewer re-reviews. The pair repeats without stop/resume.
 6. After a pass, Executor reports `READY_FOR_ACCEPTANCE`. Lead independently
    verifies the done criteria and either requests another slice or accepts.
-7. Only after Lead acceptance may Lead reclaim both sessions and clean up the
-   worktree according to the worktree policy.
+7. After Lead acceptance, Lead runs `pi-team.cmd inspect <task-id>` as an
+   evidence collection step and then invokes `pi-team.cmd finalize <task-id>`.
+   Finalize reclaims task-owned sessions and cleans up the worktree according
+   to the worktree policy. Blackboard projection lag is reported to Lead but
+   does not revoke an accepted decision.
 
 After acceptance, Lead synchronizes the project documentation before treating
 the task as fully documented: update `architect.md` only when architecture

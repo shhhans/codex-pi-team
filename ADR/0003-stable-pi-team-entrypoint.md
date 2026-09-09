@@ -57,9 +57,11 @@ changes. Task worktrees never install project-local Pi packages.
 Only Reviewer `ready_for_acceptance` permits acceptance. Acceptance evidence
 must cover every frozen v2 criterion ID and its required artifacts. A partial
 task is closed explicitly as `incomplete`, not accepted; legacy state is
-reconciled only with a Lead-selected outcome. The Lead then invokes the
-deterministic finalizer, which integrates accepted contract-scoped changes,
-reclaims task-owned Terminal resources, removes the task worktree and merged
-branch, and archives Blackboard only after cleanup succeeds. Conflicts or
-failed tests preserve the task worktree and branch for retry; the finalizer
-never touches the main worktree as a cleanup target.
+reconciled only with a Lead-selected outcome. Before acceptance, Lead may run
+the read-only `inspect <task-id>` command for a unified evidence report. The
+Lead then invokes the deterministic finalizer, which integrates accepted
+contract-scoped changes, reclaims task-owned Terminal resources, removes the
+task worktree and merged branch, synchronizes GitHub, and attempts Blackboard
+archival. Blackboard convergence is reported but is not a finalizer gate.
+Conflicts or failed tests preserve the remaining task evidence for retry; the
+finalizer never touches the main worktree as a cleanup target.

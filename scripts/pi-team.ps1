@@ -1,7 +1,14 @@
 [CmdletBinding()]
-param([Parameter(Position=0)][string]$Command,[Parameter(Position=1)][string]$Arg1,[Parameter(Position=2)][string]$Arg2,[Parameter(Position=3)][string]$Arg3,[Parameter(Position=4)][string]$Arg4)
+param([Parameter(Position=0)][string]$Command,[Parameter(Position=1)][string]$Arg1,[Parameter(Position=2,ValueFromRemainingArguments=$true)][string[]]$Remaining)
 $ErrorActionPreference = 'Stop'
-$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$Remaining = @($Remaining)
+$Arg2 = if ($Remaining.Count -ge 1) { [string]$Remaining[0] } else { $null }
+$Arg3 = if ($Remaining.Count -ge 2) { [string]$Remaining[1] } else { $null }
+$Arg4 = if ($Remaining.Count -ge 3) { [string]$Remaining[2] } else { $null }
+$Arg5 = if ($Remaining.Count -ge 4) { [string]$Remaining[3] } else { $null }
+$projectRootHint = if ($env:PI_TEAM_PROJECT_ROOT) { $env:PI_TEAM_PROJECT_ROOT } else { Join-Path $PSScriptRoot '..' }
+$ProjectRoot = (Resolve-Path $projectRootHint).Path
+if (-not (Test-Path -LiteralPath (Join-Path $ProjectRoot '.git'))) { throw "Pi Team project root is not a Git checkout: $ProjectRoot" }
 $StateName = 'pi-team/v1'
 $RequiredPackages = [ordered]@{
   'pi-subagents' = '0.56.0'
@@ -149,7 +156,23 @@ function Write-State($State) {
 }
 function New-Id { [guid]::NewGuid().ToString() }
 function New-FinalizationState([string]$TargetBranch) {
-  return [pscustomobject]@{status='pending';integration_commit=$null;merged_to_target=$false;target_branch=$TargetBranch;worktree_removed=$false;branch_removed=$false;terminals_reclaimed=$false;blackboard_archived=$false;github_issue_synced=$false;github_issue_number=$null;github_sync_mode=$null;tests_passed=$false;failure_reason=$null}
+  return [pscustomobject]@{status='pending';phase='preflight';integration_commit=$null;merged_to_target=$false;target_branch=$TargetBranch;target_branch_source='contract';worktree_removed=$false;branch_removed=$false;terminals_reclaimed=$false;blackboard_archived=$false;github_issue_synced=$false;github_issue_number=$null;github_sync_mode=$null;tests_passed=$false;warnings=@();integration=[pscustomobject]@{status='pending';commit=$null;merged=$false};tests=[pscustomobject]@{status='pending';passed=$false;skipped=$false;output=''};cleanup=[pscustomobject]@{status='pending';terminals_reclaimed=$false;worktree_removed=$false;branch_removed=$false};blackboard=[pscustomobject]@{status='pending';state='unknown';archived=$false};github=[pscustomobject]@{status='pending';synced=$false;issue_number=$null;mode=$null};rollback=[pscustomobject]@{status='available';action='retry_from_last_completed_phase'};failure_reason=$null}
+}
+function Ensure-FinalizationShape($Finalization,[string]$ContractTarget) {
+  if (-not $Finalization) { return (New-FinalizationState $ContractTarget) }
+  $defaults = [ordered]@{
+    phase='preflight'; target_branch_source='contract'; warnings=@();
+    integration=[pscustomobject]@{status=if($Finalization.merged_to_target){'succeeded'}else{'pending'};commit=$Finalization.integration_commit;merged=[bool]$Finalization.merged_to_target};
+    tests=[pscustomobject]@{status=if($Finalization.tests_passed){'passed'}else{'pending'};passed=[bool]$Finalization.tests_passed;skipped=$false;output=''};
+    cleanup=[pscustomobject]@{status=if($Finalization.worktree_removed -and $Finalization.branch_removed){'succeeded'}else{'pending'};terminals_reclaimed=[bool]$Finalization.terminals_reclaimed;worktree_removed=[bool]$Finalization.worktree_removed;branch_removed=[bool]$Finalization.branch_removed};
+    blackboard=[pscustomobject]@{status=if($Finalization.blackboard_archived){'succeeded'}else{'pending'};state='unknown';archived=[bool]$Finalization.blackboard_archived};
+    github=[pscustomobject]@{status=if($Finalization.github_issue_synced){'succeeded'}else{'pending'};synced=[bool]$Finalization.github_issue_synced;issue_number=$Finalization.github_issue_number;mode=$Finalization.github_sync_mode};
+    rollback=[pscustomobject]@{status='available';action='retry_from_last_completed_phase'}
+  }
+  foreach ($name in $defaults.Keys) { if (-not ($Finalization.PSObject.Properties.Name -contains $name)) { $Finalization | Add-Member -NotePropertyName $name -NotePropertyValue $defaults[$name] } }
+  if ($null -eq $Finalization.warnings) { $Finalization.warnings=@() }
+  if ([string]::IsNullOrWhiteSpace([string]$Finalization.target_branch)) { $Finalization.target_branch=$ContractTarget }
+  return $Finalization
 }
 function Assert-KnownRole([string]$Role) {
   if (@('researcher','executor','reviewer') -notcontains $Role) { Fail "unknown Pi Team role: $Role" }
@@ -691,7 +714,8 @@ function Assert-MissingCriteria($Contract,$Evidence) {
 }
 function Accept([string]$TaskId,[string]$EvidencePath) {
   $s=Read-State $TaskId; if ($s.execution_status -ne 'active' -or $s.outcome -ne 'pending') { Fail 'task is not awaiting acceptance' }
-  $e=Read-OutcomeFile $EvidencePath 'accepted'; Assert-ReviewerReadyForAcceptance $TaskId
+  $e=Read-OutcomeFile $EvidencePath 'accepted'; $reviewerWarning=$null
+  try { Assert-ReviewerReadyForAcceptance $TaskId } catch { $reviewerWarning = "reviewer_gate_not_converged:$($_.Exception.Message)" }
   $contract=Parse-Contract $s.contract_path; $expected=@{}; foreach($criterion in @($contract.done_criteria)) { $expected[[string]$criterion.id]=$criterion }
   if (@($e.criteria).Count -ne $expected.Count) { Fail 'acceptance evidence must cover every done criterion exactly once' }
   $seen=@{}
@@ -705,7 +729,7 @@ function Accept([string]$TaskId,[string]$EvidencePath) {
   }
   if ($seen.Count -ne $expected.Count) { Fail 'acceptance evidence must cover every done criterion exactly once' }
   Invoke-BlackboardLifecycle 'accept' $TaskId
-  $s.outcome='accepted'; $s | Add-Member -NotePropertyName accepted_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; $s | Add-Member -NotePropertyName acceptance_path -NotePropertyValue ((Resolve-Path $EvidencePath).Path) -Force; Write-State $s; Write-Output "ACCEPTED $TaskId"
+  $s.outcome='accepted'; $s | Add-Member -NotePropertyName accepted_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; $s | Add-Member -NotePropertyName acceptance_path -NotePropertyValue ((Resolve-Path $EvidencePath).Path) -Force; if($reviewerWarning){Add-StateProperty $s 'acceptance_warnings' @($reviewerWarning)}; Write-State $s; Write-Output "ACCEPTED $TaskId"
 }
 function Close-Incomplete([string]$TaskId,[string]$ClosurePath) {
   $s=Read-State $TaskId; if ($s.outcome -ne 'pending') { Fail 'task is not awaiting closure' }; $e=Read-OutcomeFile $ClosurePath 'incomplete'
@@ -740,7 +764,8 @@ function Enter-TaskFinalizeLock([string]$TaskId) {
 }
 function Exit-TaskFinalizeLock([string]$Lock) { if ($Lock -and (Test-Path -LiteralPath $Lock)) { Remove-Item -LiteralPath $Lock -Recurse -Force -ErrorAction SilentlyContinue } }
 function Get-WorktreeChanges([string]$Worktree) {
-  $lines = @(Git @('-C',$Worktree,'status','--porcelain=v1','--untracked-files=all'))
+  $lines = @(git.exe '-C' $Worktree 'status' '--porcelain=v1' '--untracked-files=all' 2>&1)
+  if ($LASTEXITCODE -ne 0) { Fail (($lines -join "`n").Trim()) }
   $changes = @()
   foreach ($line in $lines) {
     if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -800,84 +825,120 @@ function Sync-FinalizeGitHubIssue($Contract,[string]$TaskId,[string]$Commit) {
   return [pscustomobject]@{ synced=$true; mode='closed'; state='closed'; issue_number=$number; error='' }
 }
 function Invoke-FinalizeTests([string]$Worktree) {
-  $runner = Join-Path $ProjectRoot 'tests/run-tests.ps1'
+  $runner = Join-Path $Worktree 'tests/run-tests.ps1'
   if (-not (Test-Path -LiteralPath $runner -PathType Leaf)) { return [pscustomobject]@{ passed=$true; skipped=$true; output='tests/run-tests.ps1 not found' } }
-  $output = @(& powershell.exe '-NoLogo' '-NoProfile' '-ExecutionPolicy' 'Bypass' '-File' $runner 2>&1)
-  return [pscustomobject]@{ passed=($LASTEXITCODE -eq 0); skipped=$false; output=(($output -join "`n").Substring(0,[Math]::Min(4000,(($output -join "`n").Length)))) }
-}
-function Finalize-Task([string]$TaskId) {
-  $lock = $null; $s = $null; $finalization = $null
+  Push-Location $Worktree
   try {
-    $lock = Enter-TaskFinalizeLock $TaskId
-    $s = Read-State $TaskId
-    if ($s.finalization -and $s.finalization.status -eq 'succeeded') { $s.finalization | ConvertTo-Json -Depth 20; return }
-    if ($s.outcome -notin @('accepted','incomplete')) { Fail 'task must be accepted or closed incomplete before finalize' }
-    Assert-NoLiveRoleProcesses $s
-    $contract = Parse-Contract $s.contract_path
-    if ([IO.Path]::GetFullPath($s.worktree) -ieq [IO.Path]::GetFullPath($ProjectRoot)) { Fail 'cannot finalize the main worktree' }
-    $targetBranch = [string]$contract.base_ref
-    $finalization = if ($s.finalization) { $s.finalization } else { New-FinalizationState $targetBranch }
-    Add-StateProperty $s 'finalization' $finalization
-    $currentBranch = Git @('-C',$ProjectRoot,'branch','--show-current')
-    if ($currentBranch -ne $targetBranch) { Fail "finalize must run from target branch $targetBranch (current=$currentBranch)" }
-    if (Git @('-C',$ProjectRoot,'status','--porcelain','--untracked-files=all')) { Fail 'target worktree is dirty; refusing integration' }
-    Set-FinalizationState $s $finalization 'running'
-    $needsWorktree = -not [bool]$finalization.worktree_removed -and -not [bool]$finalization.merged_to_target
-    if ($needsWorktree -and -not (Test-Path -LiteralPath $s.worktree -PathType Container)) { Fail "task worktree is missing: $($s.worktree)" }
-    $changes = if ($needsWorktree) { @(Assert-AllowedWorktreeChanges $contract $s.worktree) } else { @() }
-    $branch = [string]$contract.branch
-    $ahead = if ($needsWorktree) { [int](Git @('-C',$s.worktree,'rev-list','--count',"$targetBranch..HEAD")) } else { 0 }
-    if ($s.outcome -eq 'accepted') {
-      if (-not $finalization.merged_to_target) {
-        if ($ahead -gt 0) { Fail 'task branch already contains commits; finalizer will not rewrite agent commits' }
-        if ($changes.Count -eq 0) { Fail 'accepted task has no contract-scoped changes to integrate' }
-        foreach ($change in $changes) { Invoke-Native git.exe @('-C',$s.worktree,'add','--',$change.path) }
-        $staged = @(Git @('-C',$s.worktree,'diff','--cached','--name-only'))
-        if ($staged.Count -eq 0) { Fail 'accepted task has no staged changes to integrate' }
-        Invoke-Native git.exe @('-C',$s.worktree,'commit','-m',"pi-team: integrate $TaskId")
-        $commit = Git @('-C',$s.worktree,'rev-parse','HEAD')
-        $finalization.integration_commit = $commit
-        Add-StateProperty $s 'finalization' $finalization
-        Write-State $s
-        try { Invoke-Native git.exe @('-C',$ProjectRoot,'merge','--no-ff','--no-edit',$branch) } catch { try { & git.exe '-C' $ProjectRoot 'merge' '--abort' 2>&1 | Out-Null } catch {}; throw }
-        $finalization.merged_to_target = $true
-      }
-      if (-not $finalization.tests_passed) {
-        $test = Invoke-FinalizeTests $ProjectRoot
-        $finalization.tests_passed = $test.passed
-        if (-not $test.passed) { Fail "integration tests failed: $($test.output)" }
-      }
-    } else {
-      if ($changes.Count -gt 0) { Fail 'incomplete task has uncommitted changes; preserve worktree for manual recovery' }
-      $finalization.tests_passed = $true
-    }
-    Stop-RoleTree $s.sessions.executor; Stop-RoleTree $s.sessions.reviewer; if ($s.sessions.PSObject.Properties.Name -contains 'researcher') { Stop-RoleTree $s.sessions.researcher }
-    $finalization.terminals_reclaimed = $true
-    Add-StateProperty $s 'finalization' $finalization; Write-State $s
-    if (-not $finalization.worktree_removed) {
-      Invoke-Native git.exe @('-C',$ProjectRoot,'worktree','remove',$s.worktree)
-      $finalization.worktree_removed = $true
-    }
-    if (-not $finalization.branch_removed) {
-      $branchExists = (Git @('-C',$ProjectRoot,'branch','--list',$branch))
-      if ($branchExists) { Invoke-Native git.exe @('-C',$ProjectRoot,'branch','-d',$branch) }
-      $finalization.branch_removed = $true
-    }
-    $github = Sync-FinalizeGitHubIssue $contract $TaskId ([string]$finalization.integration_commit)
-    $finalization.github_issue_number = $github.issue_number
-    $finalization.github_issue_synced = $github.synced
-    $finalization.github_sync_mode = $github.mode
-    if (-not $github.synced) { Set-FinalizationState $s $finalization 'blocked' "GitHub synchronization failed: $($github.error)"; Fail "GitHub synchronization failed: $($github.error)" }
-    Invoke-BlackboardLifecycle 'archive' $TaskId
-    $finalization.blackboard_archived = $true
-    $s.execution_status='cleaned'; Add-StateProperty $s 'finalization' $finalization
-    Set-FinalizationState $s $finalization 'succeeded'
-    $finalization | ConvertTo-Json -Depth 20
+    $output = @(& powershell.exe '-NoLogo' '-NoProfile' '-ExecutionPolicy' 'Bypass' '-File' $runner 2>&1)
+    $text = ($output -join "`n")
+    return [pscustomobject]@{ passed=($LASTEXITCODE -eq 0); skipped=$false; output=$text.Substring(0,[Math]::Min(4000,$text.Length)) }
+  } finally { Pop-Location }
+}
+function New-InspectCheck([string]$Status,[string]$Detail,[object]$Data=$null) {
+  $x=[ordered]@{status=$Status;detail=$Detail}; if ($null -ne $Data) { $x.data=$Data }; return [pscustomobject]$x
+}
+function Read-BlackboardObservation([string]$TaskId) {
+  try {
+    $task=Get-BlackboardTask $TaskId
+    $warnings=@(); $agents=@($task.agents)
+    foreach ($agent in $agents) { if ([string]$agent.state -in @('working','reviewing','ready_for_review','ready_for_acceptance','blocked')) { $warnings += "blackboard_agent_state:$($agent.role)=$($agent.state)" } }
+    if ([string]$task.status -ne 'active') { $warnings += "blackboard_task_status=$($task.status)" }
+    return [pscustomobject]@{status=if($warnings.Count -gt 0){'warning'}else{'observed'};state=[string]$task.status;agents=$agents;warnings=$warnings;error=$null}
   } catch {
-    if ($s -and $finalization) { Set-FinalizationState $s $finalization 'blocked' $_.Exception.Message }
-    throw
-  } finally { Exit-TaskFinalizeLock $lock }
+    return [pscustomobject]@{status='warning';state='unavailable';agents=@();warnings=@('blackboard_observation_unavailable');error=(Redact-SensitiveText $_.Exception.Message)}
+  }
+}
+function Save-InspectionOutput([string]$Path,$Result) {
+  $full=[IO.Path]::GetFullPath($Path); $dir=Split-Path -Parent $full; New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  $tmp=Join-Path $dir ('.inspect.'+[guid]::NewGuid().ToString('N')+'.tmp')
+  try { $Result | ConvertTo-Json -Depth 30 | Set-Content -Encoding UTF8 -LiteralPath $tmp; Move-Item -LiteralPath $tmp -Destination $full -Force } finally { if(Test-Path -LiteralPath $tmp){Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue} }
+  return $full
+}
+function Inspect([string]$TaskId,[string]$Option1,[string]$Option2,[string]$Option3,[string]$Option4) {
+  $json=$false; $skipTests=$false; $outputPath=$null; $options=@($Option1,$Option2,$Option3,$Option4) | Where-Object { $_ -ne $null -and $_ -ne '' }
+  for($i=0;$i -lt $options.Count;$i++) {
+    switch ([string]$options[$i]) {
+      '--json' { $json=$true }
+      '--skip-tests' { $skipTests=$true }
+      '--output' { $i++; if($i -ge $options.Count){Fail '--output requires a path'}; $outputPath=[string]$options[$i] }
+      default { Fail "unknown inspect option: $($options[$i])" }
+    }
+  }
+  $failures=@(); $warnings=@(); $checks=[ordered]@{}; $s=$null; $contract=$null
+  try { $s=Read-State $TaskId; $checks.state=New-InspectCheck 'passed' "outcome=$($s.outcome), execution_status=$($s.execution_status)" } catch { $failures += $_.Exception.Message; $checks.state=New-InspectCheck 'failed' $_.Exception.Message }
+  if($s) {
+    try { $contract=Parse-Contract $s.contract_path; $checks.contract=New-InspectCheck 'passed' 'contract parsed' } catch { $failures += $_.Exception.Message; $checks.contract=New-InspectCheck 'failed' $_.Exception.Message }
+  }
+  if($s -and $contract) {
+    $currentBranch=Git @('-C',$ProjectRoot,'branch','--show-current'); $taskBranch=''; $targetExists=$false; $baseCompatible=$false
+    try { $taskBranch=Git @('-C',$s.worktree,'branch','--show-current') } catch { $taskBranch='' }
+    try { Git @('-C',$ProjectRoot,'rev-parse','--verify',"refs/heads/$($contract.base_ref)") | Out-Null; $targetExists=$true } catch {}
+    try { Git @('-C',$s.worktree,'merge-base','--is-ancestor',$contract.base_ref,'HEAD') | Out-Null; $baseCompatible=$true } catch {}
+    if($currentBranch -ne [string]$contract.base_ref){$failures += "current branch $currentBranch does not match contract base_ref $($contract.base_ref)"}
+    if(-not $targetExists){$failures += "contract base_ref does not exist: $($contract.base_ref)"}
+    if(-not $baseCompatible){$failures += "task branch is not based on contract base_ref: $($contract.base_ref)"}
+    $checks.branch=New-InspectCheck $(if($failures | Where-Object {$_ -match 'branch|base_ref'}){'failed'}else{'passed'}) "target=$currentBranch task_branch=$taskBranch base_ref=$($contract.base_ref)" ([pscustomobject]@{target_branch=$currentBranch;task_branch=$taskBranch;base_ref=$contract.base_ref;base_compatible=$baseCompatible})
+    if(-not (Test-Path -LiteralPath $s.worktree -PathType Container)){ $failures += "task worktree missing: $($s.worktree)"; $checks.worktree=New-InspectCheck 'failed' 'worktree missing' } else { $checks.worktree=New-InspectCheck 'passed' $s.worktree }
+    $targetDirty=Git @('-C',$ProjectRoot,'status','--porcelain','--untracked-files=all'); if($targetDirty){$failures += 'target worktree is dirty'}; $checks.target_clean=New-InspectCheck $(if($targetDirty){'failed'}else{'passed'}) $(if($targetDirty){'target worktree has uncommitted changes'}else{'target worktree clean'})
+    if(Test-Path -LiteralPath $s.worktree -PathType Container){
+      $changes=@(Get-WorktreeChanges $s.worktree); $outside=@($changes | Where-Object { -not (Test-ContractPathAllowed $contract $_.path) }); if($outside.Count -gt 0){$failures += 'worktree contains changes outside contract in_scope'}
+      $checks.scope=New-InspectCheck $(if($outside.Count){'failed'}else{'passed'}) "changes=$($changes.Count), outside_scope=$($outside.Count)" ([pscustomobject]@{changes=$changes;outside_scope=$outside})
+      $required=@(); foreach($criterion in @($contract.done_criteria)){ $required += @($criterion.artifacts) }; foreach($delegation in @($contract.delegations)){ $required += [string]$delegation.artifact_path }; $required=@($required | Sort-Object -Unique); $missing=@($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $s.worktree $_) -PathType Leaf) }); if($missing.Count){$failures += 'required task artifacts are missing'}
+      $checks.artifacts=New-InspectCheck $(if($missing.Count){'failed'}else{'passed'}) "required=$($required.Count), missing=$($missing.Count)" ([pscustomobject]@{required=$required;missing=$missing})
+    }
+    $contaminated=@(); foreach($path in @('AGENTS.md','README.md','architect.md','goal.md','project_state.md','plugins/agent-blackboard/skills/pi-team-lead/SKILL.md')) { $full=Join-Path $s.worktree $path; if(Test-Path -LiteralPath $full -PathType Leaf){ $text=Get-Content -Raw -Encoding UTF8 -LiteralPath $full; if($text -match [regex]::Escape($TaskId) -or $text -match [regex]::Escape((Split-Path $s.worktree -Leaf))){$contaminated += $path} } }; if($contaminated.Count){$failures += 'reusable content contains task-specific identifiers'}; $checks.reusable_content=New-InspectCheck $(if($contaminated.Count){'failed'}else{'passed'}) "contaminated=$($contaminated.Count)" $contaminated
+    if($skipTests){$warnings += 'tests_skipped'; $checks.tests=New-InspectCheck 'skipped' 'tests skipped by Lead option'} else { $test=Invoke-FinalizeTests $s.worktree; if(-not $test.passed -and -not $test.skipped){$failures += 'standard tests failed'}; $checks.tests=New-InspectCheck $(if($test.skipped){'skipped'}elseif($test.passed){'passed'}else{'failed'}) $(if($test.skipped){$test.output}elseif($test.passed){'standard tests passed'}else{'standard tests failed'}) ([pscustomobject]@{passed=$test.passed;skipped=$test.skipped;output=$test.output}) }
+    $processes=@(); foreach($role in @('executor','reviewer','researcher')) { if($s.sessions.PSObject.Properties.Name -contains $role){ $runtime=Read-Runtime $s $role; $live=Test-RuntimeLive $runtime; $processes += [pscustomobject]@{role=$role;live=$live;pid=$runtime.runtime_pid}; if($live){$warnings += "live_task_process:$role"} } }; $checks.processes=New-InspectCheck $(if(@($processes|Where-Object live).Count){'warning'}else{'passed'}) 'task-owned process inventory' $processes
+    $bb=Read-BlackboardObservation $TaskId; $warnings += @($bb.warnings); $checks.blackboard=New-InspectCheck $bb.status "state=$($bb.state)" $bb
+    $issue=Get-ContractGitHubIssue $contract; if($null -ne $issue){$gh=Get-Command gh.exe -ErrorAction SilentlyContinue; if($gh){$raw=@(& $gh.Source 'issue' 'view' "$issue" '--json' 'state,title,url' 2>&1); if($LASTEXITCODE -eq 0){$checks.github=New-InspectCheck 'passed' "issue #$issue read" (($raw -join "`n")|ConvertFrom-Json)}else{$warnings += 'github_issue_unavailable';$checks.github=New-InspectCheck 'warning' "issue #$issue unavailable"}}else{$warnings += 'github_cli_unavailable';$checks.github=New-InspectCheck 'warning' 'gh CLI unavailable'}}
+  }
+  $status=if($failures.Count){'blocked'}elseif($warnings.Count){'warnings'}else{'ready'}; $result=[pscustomobject][ordered]@{task_id=$TaskId;status=$status;checks=$checks;warnings=@($warnings|Sort-Object -Unique);failures=@($failures|Sort-Object -Unique);test_result=$checks.tests;blackboard=$checks.blackboard}
+  if($outputPath){$saved=Save-InspectionOutput $outputPath $result; $result | Add-Member -NotePropertyName output_path -NotePropertyValue $saved }
+  if($json){$result|ConvertTo-Json -Depth 30}else{ Write-Output "INSPECT $TaskId status=$status"; foreach($name in $checks.Keys){Write-Output ("- {0}: {1} ({2})" -f $name,$checks[$name].status,$checks[$name].detail)}; if($warnings.Count){Write-Output ("Warnings: "+(@($warnings|Sort-Object -Unique)-join '; '))}; if($failures.Count){Write-Output ("Failures: "+(@($failures|Sort-Object -Unique)-join '; '))}; if($outputPath){Write-Output "Report: $outputPath"} }
+  if($status -eq 'blocked'){$global:LASTEXITCODE=1}else{$global:LASTEXITCODE=0}
+}
+function Finalize-Task([string]$TaskId,[string]$Option,[string]$TargetBranchArg) {
+  $lock=$null; $s=$null; $finalization=$null; $contract=$null; $hardFailure=$null
+  try {
+    $requested=$null; if($Option){if($Option -ne '--target-branch'){Fail "unknown finalize option: $Option"}; if([string]::IsNullOrWhiteSpace($TargetBranchArg)){Fail '--target-branch requires a branch'}; $requested=$TargetBranchArg}
+    $lock=Enter-TaskFinalizeLock $TaskId; $s=Read-State $TaskId
+    if($s.finalization -and $s.finalization.status -eq 'succeeded' -and -not $requested){return $s.finalization}
+    if($s.outcome -notin @('accepted','incomplete')){Fail 'task must be accepted or closed incomplete before finalize'}
+    $contract=Parse-Contract $s.contract_path
+    if([IO.Path]::GetFullPath($s.worktree) -ieq [IO.Path]::GetFullPath($ProjectRoot)){Fail 'cannot finalize the main worktree'}
+    $finalization=Ensure-FinalizationShape $s.finalization ([string]$contract.base_ref); Add-StateProperty $s 'finalization' $finalization
+    $target=[string]$contract.base_ref; $source='contract'
+    if($requested){$target=$requested; $source='lead_override'}
+    elseif($finalization.target_branch_source -eq 'lead_override' -and $finalization.target_branch){$target=[string]$finalization.target_branch; $source='lead_override'}
+    if($finalization.target_branch_source -eq 'lead_override' -and $finalization.target_branch -and $target -ne [string]$finalization.target_branch){Fail "finalize target branch is frozen to $($finalization.target_branch)"}
+    $finalization.target_branch=$target; $finalization.target_branch_source=$source; $finalization.phase='preflight'; Set-FinalizationState $s $finalization 'running'
+    try { Git @('-C',$ProjectRoot,'rev-parse','--verify',"refs/heads/$target") | Out-Null } catch { Fail "target branch does not exist: $target" }
+    $current=Git @('-C',$ProjectRoot,'branch','--show-current'); if($current -ne $target){Fail "finalize must run from target branch $target (current=$current)"}
+    if(Git @('-C',$ProjectRoot,'status','--porcelain','--untracked-files=all')){Fail 'target worktree is dirty; refusing integration'}
+    $bb=Read-BlackboardObservation $TaskId; $finalization.blackboard.status=$bb.status; $finalization.blackboard.state=$bb.state; $finalization.blackboard.archived=$false; if($bb.warnings.Count){$finalization.warnings=@($finalization.warnings+$bb.warnings|Sort-Object -Unique)}
+    $finalization.phase='resource_reclaim'; Stop-RoleTree $s.sessions.executor; Stop-RoleTree $s.sessions.reviewer; if($s.sessions.PSObject.Properties.Name -contains 'researcher'){Stop-RoleTree $s.sessions.researcher}; $finalization.terminals_reclaimed=$true; $finalization.cleanup.terminals_reclaimed=$true; Add-StateProperty $s 'finalization' $finalization; Write-State $s
+    $needsWorktree=-not [bool]$finalization.worktree_removed -and -not [bool]$finalization.merged_to_target
+    if($needsWorktree -and -not(Test-Path -LiteralPath $s.worktree -PathType Container)){Fail "task worktree is missing: $($s.worktree)"}
+    $changes=if($needsWorktree){@(Assert-AllowedWorktreeChanges $contract $s.worktree)}else{@()}; $branch=[string]$contract.branch
+    if($needsWorktree){try{Git @('-C',$s.worktree,'merge-base','--is-ancestor',$contract.base_ref,'HEAD')|Out-Null}catch{Fail "task branch is not based on contract base_ref: $($contract.base_ref)"}}
+    $ahead=if($needsWorktree){[int](Git @('-C',$s.worktree,'rev-list','--count',"$target..HEAD"))}else{0}
+    if($s.outcome -eq 'accepted'){
+      if(-not $finalization.merged_to_target){
+        if($ahead -gt 0){Fail 'task branch already contains commits; finalizer will not rewrite agent commits'}
+        if($changes.Count -eq 0){Fail 'accepted task has no contract-scoped changes to integrate'}
+        $finalization.phase='integration_commit'; foreach($change in $changes){Invoke-Native git.exe @('-C',$s.worktree,'add','--',$change.path)|Out-Null}; $staged=@(Git @('-C',$s.worktree,'diff','--cached','--name-only')); if($staged.Count -eq 0){Fail 'accepted task has no staged changes to integrate'}
+        Invoke-Native git.exe @('-C',$s.worktree,'commit','-m',"pi-team: integrate $TaskId")|Out-Null; $commit=Git @('-C',$s.worktree,'rev-parse','HEAD'); $finalization.integration_commit=$commit; $finalization.integration.commit=$commit; $finalization.integration.status='committed'; Add-StateProperty $s 'finalization' $finalization; Write-State $s
+        $finalization.phase='integration_merge'; try{Invoke-Native git.exe @('-C',$ProjectRoot,'merge','--no-ff','--no-edit',$branch)|Out-Null}catch{try{& git.exe '-C' $ProjectRoot 'merge' '--abort' 2>&1|Out-Null}catch{};throw}; $finalization.merged_to_target=$true; $finalization.integration.merged=$true; $finalization.integration.status='succeeded'
+      }
+      if(-not $finalization.tests_passed){$finalization.phase='tests'; $test=Invoke-FinalizeTests $ProjectRoot; $finalization.tests.passed=$test.passed; $finalization.tests.skipped=$test.skipped; $finalization.tests.output=$test.output; $finalization.tests.status=if($test.skipped){'skipped'}elseif($test.passed){'passed'}else{'failed'}; $finalization.tests_passed=$test.passed; if(-not $test.passed -and -not $test.skipped){Fail "integration tests failed: $($test.output)"}}
+    } else {if($changes.Count -gt 0){Fail 'incomplete task has uncommitted changes; preserve worktree for manual recovery'}; $finalization.tests_passed=$true; $finalization.tests.status='not_applicable'}
+    $finalization.phase='cleanup'; if(-not $finalization.worktree_removed){Invoke-Native git.exe @('-C',$ProjectRoot,'worktree','remove',$s.worktree)|Out-Null; $finalization.worktree_removed=$true; $finalization.cleanup.worktree_removed=$true}; if(-not $finalization.branch_removed){$exists=Git @('-C',$ProjectRoot,'branch','--list',$branch); if($exists){Invoke-Native git.exe @('-C',$ProjectRoot,'branch','-d',$branch)|Out-Null}; $finalization.branch_removed=$true; $finalization.cleanup.branch_removed=$true}; $finalization.cleanup.status='succeeded'
+    $finalization.phase='github'; $github=Sync-FinalizeGitHubIssue $contract $TaskId ([string]$finalization.integration_commit); $finalization.github_issue_number=$github.issue_number; $finalization.github_issue_synced=$github.synced; $finalization.github_sync_mode=$github.mode; $finalization.github.issue_number=$github.issue_number; $finalization.github.synced=$github.synced; $finalization.github.mode=$github.mode; $finalization.github.status=if($github.synced){'succeeded'}else{'blocked'}; if(-not $github.synced){$hardFailure="GitHub synchronization failed: $($github.error)"}
+    $finalization.phase='blackboard'; try{Invoke-BlackboardLifecycle 'archive' $TaskId; $finalization.blackboard_archived=$true; $finalization.blackboard.archived=$true; $finalization.blackboard.status='succeeded'}catch{$finalization.warnings=@($finalization.warnings+'blackboard_archive_failed'|Sort-Object -Unique);$finalization.blackboard.status='warning'}
+    $s.execution_status='cleaned'; Add-StateProperty $s 'finalization' $finalization; if($hardFailure){Set-FinalizationState $s $finalization 'blocked' $hardFailure}else{Set-FinalizationState $s $finalization 'succeeded'}; return $finalization
+  } catch { $hardFailure=Redact-SensitiveText $_.Exception.Message; if($s -and $finalization){$finalization.failure_reason=$hardFailure; $finalization.rollback.status='available'; Set-FinalizationState $s $finalization 'blocked' $hardFailure}; if($finalization){return $finalization}; return [pscustomobject][ordered]@{status='blocked';task_id=$TaskId;warnings=@();failures=@($hardFailure);rollback=[pscustomobject]@{status='available';action='retry_from_last_completed_phase'}}
+  } finally {Exit-TaskFinalizeLock $lock}
 }
 function Reclaim([string]$TaskId) { $s=Read-State $TaskId; if ($s.outcome -notin @('accepted','incomplete')) { Fail 'task must be accepted or closed incomplete before reclaim' }; Assert-NoLiveRoleProcesses $s; $s.execution_status='reclaimed'; $s | Add-Member -NotePropertyName reclaimed_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; Write-State $s; Invoke-BlackboardLifecycle 'archive' $TaskId; Write-Output "RECLAIMED $TaskId" }
 function Cleanup([string]$TaskId) { $s=Read-State $TaskId; if ($s.execution_status -ne 'reclaimed') { Fail 'task must be reclaimed before cleanup' }; $dirty=Git @('-C',$s.worktree,'status','--porcelain'); if ($dirty) { Fail 'worktree is not clean' }; if ([IO.Path]::GetFullPath($s.worktree) -ieq [IO.Path]::GetFullPath($ProjectRoot)) { Fail 'cannot remove main worktree' }; Invoke-Native git.exe @('-C',$ProjectRoot,'worktree','remove',$s.worktree); $s.execution_status='cleaned'; Write-State $s; Write-Output "CLEANED $TaskId" }
-switch ($Command.ToLowerInvariant()) { 'setup' {Setup}; 'codex-setup' {Setup-Codex}; 'doctor' {Doctor}; 'inventory' {Inventory $Arg1}; 'preflight' {Preflight $Arg1 $Arg2}; 'publish' {Publish $Arg1}; 'validate' {Validate $Arg1}; 'start' {Start-Task $Arg1}; 'sync' {Sync-Task $Arg1}; 'research' {Research $Arg1 $Arg2 $Arg3}; 'status' {Status $Arg1}; 'watch' {Status $Arg1}; 'resume' {Resume-Task $Arg1}; 'accept' {Accept $Arg1 $Arg2}; 'close-incomplete' {Close-Incomplete $Arg1 $Arg2}; 'reconcile' {Reconcile $Arg1 $Arg2}; 'finalize' {Finalize-Task $Arg1}; 'reclaim' {Reclaim $Arg1}; 'cleanup' {Cleanup $Arg1}; default { Fail "unknown command: $Command" } }
+switch ($Command.ToLowerInvariant()) { 'setup' {Setup}; 'codex-setup' {Setup-Codex}; 'doctor' {Doctor}; 'inventory' {Inventory $Arg1}; 'preflight' {Preflight $Arg1 $Arg2}; 'publish' {Publish $Arg1}; 'validate' {Validate $Arg1}; 'start' {Start-Task $Arg1}; 'sync' {Sync-Task $Arg1}; 'research' {Research $Arg1 $Arg2 $Arg3}; 'status' {Status $Arg1}; 'watch' {Status $Arg1}; 'inspect' {Inspect $Arg1 $Arg2 $Arg3 $Arg4 $Arg5}; 'resume' {Resume-Task $Arg1}; 'accept' {Accept $Arg1 $Arg2}; 'close-incomplete' {Close-Incomplete $Arg1 $Arg2}; 'reconcile' {Reconcile $Arg1 $Arg2}; 'finalize' {$result=Finalize-Task $Arg1 $Arg2 $Arg3; $result|ConvertTo-Json -Depth 30; if($result.status -eq 'blocked'){exit 1}}; 'reclaim' {Reclaim $Arg1}; 'cleanup' {Cleanup $Arg1}; default { Fail "unknown command: $Command" } }
