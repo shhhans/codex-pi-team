@@ -491,9 +491,15 @@ test("role launchers inject common-dir identity and isolate Executor/Reviewer en
   const eventFiles = [join(stateRoot, `${taskId}-executor.jsonl`), join(stateRoot, `${taskId}-reviewer.jsonl`)];
   const runtimeFiles = ["executor", "reviewer", "researcher"].map((role) => join(stateRoot, `${taskId}-${role}-runtime.json`));
 
+  // PI_TEAM_TEST_NO_WINDOW=1 tells scripts/pi-team.ps1 Start-RoleProcess to use
+  // -WindowStyle Hidden so the .cmd/.ps1 test launchers do not flash visible
+  // console windows during the suite. Tests can still override by passing
+  // PI_TEAM_TEST_NO_WINDOW explicitly through extraEnv; production wt.exe
+  // launches are unaffected because the env var defaults to absent.
+  const baseTestEnv = { PI_TEAM_TEST_NO_WINDOW: "1" };
   const run = (command, args = [], extraEnv = {}) => spawnSync("powershell.exe", [
     "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, command, ...args,
-  ], { cwd: REPO, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_CMD: fakePi, WT_CMD: fakePi, ...extraEnv }, encoding: "utf8" });
+  ], { cwd: REPO, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_CMD: fakePi, WT_CMD: fakePi, ...baseTestEnv, ...extraEnv }, encoding: "utf8" });
 
   const waitForRecords = async (count) => {
     for (let attempt = 0; attempt < 50; attempt++) {
