@@ -29,6 +29,7 @@ import {
 } from "../.pi/communication/policy.mjs";
 import { createRoleRuntimePolicy } from "../.pi/communication/runtime-policy.mjs";
 import { classifyClientResult } from "../.pi/communication/send.mjs";
+import { sendLeadRequestChanges } from "../.pi/communication/lead-intercom.mjs";
 
 const REPO = process.cwd();
 const ACTIVE_ROLE_NAMES = ["researcher", "executor", "reviewer"];
@@ -1476,4 +1477,59 @@ test("structured envelope derives research correlation from request_id", () => {
   const event = makeResearchRequestBody({ task_id: "ISSUE-012", request_id: requestId, delegation_id: "RESEARCH-ISSUE-003" });
   const made = makeStructuredEnvelope(JSON.stringify(event), "ISSUE-012");
   assert.equal(parseEnvelope(made.envelope).correlationId, requestId);
+});
+
+test("Lead sends a structured request-changes event to the unique same-task Executor and observes confirmation", async () => {
+  const auditDir = mkdtempSync(join(tmpdir(), "lead-intercom-audit-"));
+  const published = [];
+  try {
+    const result = await sendLeadRequestChanges({
+      taskId: "ISSUE-005",
+      delegationId: "EXECUTOR-ISSUE-005",
+      rejectedCriteria: ["C-001"],
+      rejectedEvidence: "acceptance reproduced duplicate event sequence",
+      requiredCorrection: "make the append path cross-process safe and add the regression probe",
+      nextArtifact: "implementation_notes/ISSUE-005.md",
+      auditDir,
+      client: {
+        async listSessions() { return [{ id: "pi-team--ISSUE-005--executor--fresh" }]; },
+        async publish(payload) { published.push(payload); return { accepted: true }; },
+        async waitForAck(messageId) { assert.ok(messageId); return { status: "accepted" }; },
+      },
+    });
+    assert.equal(result.delivered, true);
+    assert.equal(result.delivery, "accepted");
+    assert.equal(result.confirmation, "accepted");
+    assert.equal(published.length, 1);
+    assert.equal(published[0].type, "pi-team-structured-envelope/v1");
+    assert.equal(published[0].to_session_id, "pi-team--ISSUE-005--executor--fresh");
+    assert.match(published[0].envelope, /^agent-team\/v1\n/);
+    const audit = JSON.parse((await readFile(join(auditDir, "lead.jsonl"), "utf8")).trim());
+    assert.equal(audit.outcome, "allowed");
+    assert.equal(audit.confirmation, "accepted");
+    assert.equal(JSON.stringify(audit).includes("base64url"), false);
+  } finally {
+    rmSync(auditDir, { recursive: true, force: true });
+  }
+});
+
+test("Lead refuses missing or ambiguous same-task Executor without publishing", async () => {
+  let publishes = 0;
+  const base = {
+    taskId: "ISSUE-005",
+    delegationId: "EXECUTOR-ISSUE-005",
+    rejectedCriteria: ["C-001"],
+    rejectedEvidence: "evidence",
+    requiredCorrection: "correction",
+    nextArtifact: "implementation_notes/ISSUE-005.md",
+    client: {
+      async publish() { publishes += 1; return { accepted: true }; },
+      async waitForAck() { return { status: "accepted" }; },
+    },
+  };
+  const missing = await sendLeadRequestChanges({ ...base, client: { ...base.client, async listSessions() { return []; } } });
+  assert.equal(missing.delivered, false);
+  const ambiguous = await sendLeadRequestChanges({ ...base, client: { ...base.client, async listSessions() { return [{ id: "pi-team--ISSUE-005--executor--a" }, { id: "pi-team--ISSUE-005--executor--b" }]; } } });
+  assert.equal(ambiguous.delivered, false);
+  assert.equal(publishes, 0);
 });

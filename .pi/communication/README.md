@@ -15,9 +15,19 @@ Direct peer messages are asynchronous and restricted to:
 - Executor <-> Reviewer
 
 Researcher and Reviewer cannot communicate directly. Lead does not use
-the peer-send route. Lead assigns each Executor/Reviewer pair; the
+the ordinary peer-send route. Lead assigns each Executor/Reviewer pair; the
 role-level ACL does not prove that two allowed sessions belong to the
 same task.
+
+For acceptance failures, the Lead-only `pi_team_lead_request_changes` tool
+is the supported control route to the current same-task Executor. It accepts
+only the structured `LEAD_REQUEST_CHANGES` event, resolves exactly one
+`pi-team--<task-id>--executor--<launch-id>` session, publishes through the
+same intercom extension bus, and records explicit `not-sent`, `accepted`, or
+confirmation-timeout results in the Lead audit file. The Executor projects
+the event only after normal inbound policy validation and returns an
+accepted/refused confirmation. Lead feedback is therefore a control event,
+not an arbitrary text message and not a Blackboard write.
 
 The paired Executor and Reviewer remain alive through implementation,
 review/fix, and re-review. `READY_FOR_REVIEW`, `REVIEW_PASS`,

@@ -14,7 +14,7 @@ const TEAM_TRANSPORT_TYPE = "pi-team-structured-envelope/v1";
 function roleForSession(session: PeerSession | undefined, taskId: string | undefined) {
   const identity = [session?.id, session?.name].find(value => typeof value === "string")?.toLowerCase();
   const escapedTask = taskId?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").toLowerCase();
-  const match = identity?.match(new RegExp(`^pi-team--${escapedTask}--(researcher|executor|reviewer)--`));
+  const match = identity?.match(new RegExp(`^pi-team--${escapedTask}--(lead|researcher|executor|reviewer)--`));
   return match?.[1];
 }
 
@@ -44,7 +44,7 @@ export function installRolePolicy(pi: ExtensionAPI, role: string, auditDir?: str
   });
   const receiveTransportEvent = async (event: any) => {
     if (event?.type !== "message" || !event.payload || typeof event.payload !== "object") return;
-    const payload = event.payload as { type?: string; to_session_id?: string; envelope?: string };
+    const payload = event.payload as { type?: string; to_session_id?: string; message_id?: string; envelope?: string };
     if (payload.type !== TEAM_TRANSPORT_TYPE || payload.to_session_id !== process.env.PI_INTERCOM_SESSION_ID || typeof payload.envelope !== "string") return;
     let sessions: PeerSession[];
     try { sessions = await intercomChannel?.listSessions() ?? []; } catch { return; }
@@ -55,6 +55,15 @@ export function installRolePolicy(pi: ExtensionAPI, role: string, auditDir?: str
     // agent-team/v1 envelope (including base64url body) in the JSONL session
     // transcript even though onContext later hid it from the model.
     const projected = await policy.projectInboundStructuredEnvelope({ sender, text: payload.envelope });
+    if (sender === "lead") {
+      intercomChannel.publish({
+        type: "pi-team-structured-envelope-ack/v1",
+        to_session_id: event.fromSessionId,
+        message_id: payload.message_id,
+        status: projected.accepted ? "accepted" : "refused",
+        ...(projected.reason ? { reason: projected.reason } : {}),
+      }, { audience: "capable" });
+    }
     if (!projected.accepted) return;
     pi.sendMessage(projected.message, { triggerTurn: true, deliverAs: "followUp" });
   };

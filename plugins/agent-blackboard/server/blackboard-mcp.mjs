@@ -1,5 +1,6 @@
 import readline from "node:readline";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   acceptTask,
   archiveTask,
@@ -16,8 +17,14 @@ import {
   updateTask,
   watch,
 } from "./blackboard-core.mjs";
+import { sendLeadRequestChanges } from "../../../.pi/communication/lead-intercom.mjs";
 
 const tools = [
+  {
+    name: "pi_team_lead_request_changes",
+    description: "Lead-only: send a validated LEAD_REQUEST_CHANGES event to the unique current same-task Executor and return delivery plus Executor confirmation status.",
+    inputSchema: { type: "object", required: ["project_root", "task_id", "delegation_id", "rejected_criteria", "rejected_evidence", "required_correction", "next_artifact"], properties: { project_root: { type: "string" }, task_id: { type: "string" }, delegation_id: { type: "string" }, rejected_criteria: { type: "array", items: { type: "string" }, minItems: 1 }, rejected_evidence: { type: "string" }, required_correction: { type: "string" }, next_artifact: { type: "string" }, timeout_ms: { type: "integer", minimum: 100, maximum: 30000 } }, additionalProperties: false },
+  },
   {
     name: "blackboard_create_task",
     description: "Create an active Lead-owned task in the Git common-dir Agent Blackboard.",
@@ -104,6 +111,7 @@ function result(value) {
 
 async function callTool(name, args = {}) {
   const projectRoot = args.project_root;
+  if (name === "pi_team_lead_request_changes") return sendLeadRequestChanges({ ...args, projectRoot, auditDir: join(projectRoot, ".pi", "communication", "audit"), timeoutMs: args.timeout_ms });
   if (name === "blackboard_create_task") return createTask(projectRoot, args);
   if (name === "blackboard_update_task") return updateTask(projectRoot, args.task_id, args);
   if (name === "blackboard_accept_task") return acceptTask(projectRoot, args.task_id);
