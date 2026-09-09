@@ -1009,7 +1009,8 @@ test("inspect returns read-only evidence, supports JSON output, and treats skipp
     spawnSync("git", ["-C", clone, "config", "user.email", "test@example.invalid"], { encoding: "utf8" });
     spawnSync("git", ["-C", clone, "config", "user.name", "Pi Team Test"], { encoding: "utf8" });
     assert.equal(spawnSync("git", ["-C", clone, "add", "scripts/pi-team.ps1"], { encoding: "utf8" }).status, 0);
-    assert.equal(spawnSync("git", ["-C", clone, "commit", "--quiet", "-m", "inspect fixture"], { encoding: "utf8" }).status, 0);
+    const fixtureCommit = spawnSync("git", ["-C", clone, "commit", "--quiet", "-m", "inspect fixture"], { encoding: "utf8" });
+    assert.ok(fixtureCommit.status === 0 || /nothing to commit/i.test(`${fixtureCommit.stdout}\n${fixtureCommit.stderr}`));
     const addWorktree = spawnSync("git", ["-C", clone, "worktree", "add", "--quiet", "-b", branch, worktree, "develop"], { encoding: "utf8" });
     assert.equal(addWorktree.status, 0, addWorktree.stderr);
     await mkdir(join(worktree, "implementation_notes"), { recursive: true });
