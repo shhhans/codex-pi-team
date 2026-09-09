@@ -53,4 +53,7 @@ separate from connection readiness.
 
 Executor and Reviewer remain persistent through review/fix and re-review until
 Lead acceptance and reclamation. The Blackboard does not introduce a stop
-handoff or infer activity from file operations or model thoughts.
+handoff or infer activity from file operations or model thoughts. `inspect`
+and `finalize` may read the Blackboard as an observation source, but an
+unconverged agent projection is returned as a warning and does not block a
+Lead-authorized finalization.

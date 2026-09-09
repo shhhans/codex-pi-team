@@ -282,7 +282,7 @@ test("ADR 0002 is the sole normative Lead-Subagent protocol and active surfaces 
   assert.match(adr, /REVIEW_PASS/);
   assert.match(adr, /REVIEW_FAIL/);
   assert.match(adr, /FIX_READY/);
-  assert.match(adr, /Only after Lead acceptance/i);
+  assert.match(adr, /(?:Only after Lead acceptance|After Lead acceptance)/i);
   assert.match(adr, /read-only\s+Git operations/i);
   assert.match(adr, /do not invoke WSL unless Lead explicitly authorizes it/i);
 
@@ -924,6 +924,8 @@ test("finalize integrates an accepted task and reclaims its worktree and branch"
   const cloneResult = spawnSync("git", ["clone", "--no-local", REPO, clone], { encoding: "utf8" });
   assert.equal(cloneResult.status, 0, cloneResult.stderr);
   try {
+    const checkoutTarget = spawnSync("git", ["-C", clone, "checkout", "--quiet", "develop"], { encoding: "utf8" });
+    assert.equal(checkoutTarget.status, 0, checkoutTarget.stderr || checkoutTarget.stdout);
     await copyFile(join(REPO, "scripts/pi-team.ps1"), join(clone, "scripts/pi-team.ps1"));
     await writeFile(join(clone, "tests/run-tests.ps1"), "$ErrorActionPreference='Stop'\nexit 0\n");
     spawnSync("git", ["-C", clone, "config", "user.email", "test@example.invalid"], { encoding: "utf8" });
@@ -956,6 +958,9 @@ test("finalize integrates an accepted task and reclaims its worktree and branch"
     const cli = join(clone, "plugins/agent-blackboard/server/blackboard-cli.mjs");
     const publish = spawnSync("node", [cli, "publish", clone, contract], { encoding: "utf8" });
     assert.equal(publish.status, 0, publish.stderr || publish.stdout);
+    await appendAgentEvent(clone, { task_id: taskId, role: "reviewer", agent_id: "reviewer-finalize", worktree }, {
+      state: "reviewing", activity: "Stale reviewer observation for finalizer.", next: "Awaiting Lead.",
+    });
     const acceptBoard = spawnSync("node", [cli, "accept", clone, taskId], { encoding: "utf8" });
     assert.equal(acceptBoard.status, 0, acceptBoard.stderr || acceptBoard.stdout);
     const state = {
@@ -973,12 +978,88 @@ test("finalize integrates an accepted task and reclaims its worktree and branch"
     assert.equal(finalState.finalization.worktree_removed, true);
     assert.equal(finalState.finalization.branch_removed, true);
     assert.equal(finalState.finalization.blackboard_archived, true);
+    assert.match(finalState.finalization.warnings.join(";"), /blackboard_agent_state:reviewer=reviewing/);
     assert.equal(finalState.execution_status, "cleaned");
     assert.equal((spawnSync("git", ["-C", clone, "branch", "--list", branch], { encoding: "utf8" }).stdout.trim()), "");
     assert.equal((spawnSync("git", ["-C", clone, "show", `develop:implementation_notes/${taskId}.md`], { encoding: "utf8" }).stdout.trim()), "integrated evidence");
     await stat(join(commonDir, "harness-blackboard", "v1", `${taskId}.json`));
     const archived = parseJsonText(await readFile(join(commonDir, "harness-blackboard", "v1", `${taskId}.json`), "utf8"));
     assert.equal(archived.status, "archived");
+  } finally {
+    spawnSync("git", ["-C", clone, "worktree", "remove", "--force", worktree], { encoding: "utf8" });
+    spawnSync("git", ["-C", clone, "branch", "-D", branch], { encoding: "utf8" });
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("inspect returns read-only evidence, supports JSON output, and treats skipped tests as a warning", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-team-inspect-"));
+  const clone = join(root, "repo");
+  const worktree = join(root, "task-worktree");
+  const contract = join(root, "contract.md");
+  const report = join(root, "inspect.json");
+  const taskId = "INSP-001";
+  const branch = `pi-team/test-inspect-${process.pid}`;
+  const cloneResult = spawnSync("git", ["clone", "--no-local", REPO, clone], { encoding: "utf8" });
+  assert.equal(cloneResult.status, 0, cloneResult.stderr);
+  try {
+    const checkoutTarget = spawnSync("git", ["-C", clone, "checkout", "--quiet", "develop"], { encoding: "utf8" });
+    assert.equal(checkoutTarget.status, 0, checkoutTarget.stderr || checkoutTarget.stdout);
+    await copyFile(join(REPO, "scripts/pi-team.ps1"), join(clone, "scripts/pi-team.ps1"));
+    spawnSync("git", ["-C", clone, "config", "user.email", "test@example.invalid"], { encoding: "utf8" });
+    spawnSync("git", ["-C", clone, "config", "user.name", "Pi Team Test"], { encoding: "utf8" });
+    assert.equal(spawnSync("git", ["-C", clone, "add", "scripts/pi-team.ps1"], { encoding: "utf8" }).status, 0);
+    assert.equal(spawnSync("git", ["-C", clone, "commit", "--quiet", "-m", "inspect fixture"], { encoding: "utf8" }).status, 0);
+    const addWorktree = spawnSync("git", ["-C", clone, "worktree", "add", "--quiet", "-b", branch, worktree, "develop"], { encoding: "utf8" });
+    assert.equal(addWorktree.status, 0, addWorktree.stderr);
+    await mkdir(join(worktree, "implementation_notes"), { recursive: true });
+    await mkdir(join(worktree, "reports"), { recursive: true });
+    await writeFile(join(worktree, "implementation_notes", `${taskId}.md`), "implementation evidence\n");
+    await writeFile(join(worktree, "reports", `${taskId}-review.md`), "review evidence\n");
+    const value = {
+      version: 2, task_id: taskId, name: "Inspect evidence", description: "Test read-only inspect.",
+      base_ref: "develop", branch, worktree,
+      in_scope: [`implementation_notes/${taskId}.md`, `reports/${taskId}-review.md`], out_of_scope: ["other files"],
+      done_criteria: [{ id: "C-001", description: "Evidence exists.", owner: "executor", artifacts: [`implementation_notes/${taskId}.md`] }],
+      delegations: [
+        { id: "EXECUTOR-INSP-001", role: "executor", objective: "Prepare evidence.", artifact_path: `implementation_notes/${taskId}.md`, required_capabilities: ["write"] },
+        { id: "REVIEW-INSP-001", role: "reviewer", objective: "Review evidence.", artifact_path: `reports/${taskId}-review.md`, required_capabilities: ["read"] },
+      ], constraints: ["inspect test"],
+    };
+    await writeFile(contract, `# Inspect test\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\`\n`);
+    const commonDir = spawnSync("git", ["-C", clone, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
+    const stateRoot = join(commonDir, "pi-team", "v1");
+    const blackboardRoot = join(commonDir, "harness-blackboard", "v1");
+    const contractSnapshot = join(stateRoot, "contracts", `${taskId}.md`);
+    await mkdir(join(stateRoot, "contracts"), { recursive: true });
+    await copyFile(contract, contractSnapshot);
+    await mkdir(blackboardRoot, { recursive: true });
+    const cli = join(clone, "plugins/agent-blackboard/server/blackboard-cli.mjs");
+    const publish = spawnSync("node", [cli, "publish", clone, contract], { encoding: "utf8" });
+    assert.equal(publish.status, 0, publish.stderr || publish.stdout);
+    await appendAgentEvent(clone, { task_id: taskId, role: "reviewer", agent_id: "reviewer-inspect", worktree }, {
+      state: "reviewing", activity: "Stale reviewer observation for inspect.", next: "Awaiting Lead.",
+    });
+    const statePath = join(stateRoot, `${taskId}.json`);
+    const state = { version: 2, task_id: taskId, name: value.name, description: value.description, execution_status: "active", outcome: "pending", worktree, contract_path: contractSnapshot, sessions: {} };
+    await writeFile(statePath, JSON.stringify(state, null, 2));
+    const before = await readFile(statePath, "utf8");
+    const finalized = spawnSync("powershell.exe", ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", join(clone, "scripts/pi-team.ps1"), "inspect", taskId, "--json", "--skip-tests", "--output", report], { cwd: clone, encoding: "utf8" });
+    assert.equal(finalized.status, 0, finalized.stderr || finalized.stdout);
+    const result = parseJsonText(finalized.stdout);
+    assert.equal(result.task_id, taskId);
+    assert.equal(result.status, "warnings", JSON.stringify(result, null, 2));
+    assert.equal(result.checks.tests.status, "skipped");
+    assert.equal(result.checks.scope.status, "passed");
+    assert.equal(result.checks.artifacts.status, "passed");
+    assert.equal(result.checks.blackboard.status, "warning");
+    assert.match(result.warnings.join(";"), /blackboard_agent_state:reviewer=reviewing/);
+    assert.equal(result.output_path, report);
+    const savedReport = parseJsonText(await readFile(report, "utf8"));
+    assert.equal(savedReport.task_id, result.task_id);
+    assert.equal(savedReport.status, result.status);
+    assert.equal(savedReport.output_path, undefined);
+    assert.equal(await readFile(statePath, "utf8"), before);
   } finally {
     spawnSync("git", ["-C", clone, "worktree", "remove", "--force", worktree], { encoding: "utf8" });
     spawnSync("git", ["-C", clone, "branch", "-D", branch], { encoding: "utf8" });
@@ -1021,7 +1102,8 @@ test("shared AGENTS context and Lead skill keep separate responsibilities", asyn
   const launcher = await readFile(join(REPO, "scripts/pi-team.ps1"), "utf8");
   assert.match(launcher, /function Preflight/);
   assert.match(launcher, /function Finalize-Task/);
-  assert.match(launcher, /'finalize' \{Finalize-Task \$Arg1\}/);
+  assert.match(launcher, /'finalize' \{\$result=Finalize-Task \$Arg1/);
+  assert.match(launcher, /'inspect' \{Inspect \$Arg1/);
   assert.match(launcher, /merged_to_target/);
   assert.match(launcher, /github_issue_synced/);
 });

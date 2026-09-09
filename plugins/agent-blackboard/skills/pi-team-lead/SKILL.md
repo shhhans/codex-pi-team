@@ -146,10 +146,11 @@ bridge.
 
 ## Accept and close
 
-After Reviewer reports `ready_for_acceptance`, treat the Reviewer result as the
-first acceptance gate, then perform an independent Lead acceptance gate. The
-Reviewer verifies implementation quality, scope, regressions, and evidence;
-the Lead alone verifies the frozen contract and authorizes delivery. Inspect
+When Reviewer reports `ready_for_acceptance`, treat the Reviewer result as
+evidence, then perform an independent Lead acceptance gate. If the Reviewer
+projection is stale or unavailable, the Lead may proceed after recording that
+warning in the acceptance evidence. The Reviewer verifies implementation
+quality, scope, regressions, and evidence; the Lead alone verifies the frozen contract and authorizes delivery. Inspect
 the actual diff, artifacts, and test results against the contract. As part of
 that inspection, review every changed reusable prompt and skill for
 task-specific contamination, including task IDs, Issue numbers, task-only
@@ -162,16 +163,20 @@ If both gates pass:
 1. Write acceptance evidence that covers every frozen criterion ID and its
    required artifacts, then run `<project-root>\pi-team.cmd accept <task-id>
    <acceptance-file>`.
-2. Run `<project-root>\pi-team.cmd finalize <task-id>` exactly once as the
-   canonical delivery operation. The command verifies the accepted state,
-   stages only contract-scoped changes, creates the integration commit,
-   merges it into the target branch, runs integration tests, reclaims owned
-   role/Terminal processes, removes the task worktree and merged branch,
-   synchronizes the GitHub issue, and only then archives the Blackboard task.
-3. Treat the finalizer's JSON result as the lifecycle report. Do not manually
+2. Run `<project-root>\pi-team.cmd inspect <task-id>` to collect the final
+   read-only evidence. Blackboard lag is a warning, not a replacement for
+   Lead judgment.
+3. Run `<project-root>\pi-team.cmd finalize <task-id>` as the canonical
+   delivery operation. It stages only contract-scoped changes, creates the
+   integration commit, merges it into the selected target branch, runs
+   integration tests, reclaims owned role/Terminal processes, removes the task
+   worktree and merged branch, synchronizes the GitHub issue, and attempts
+   Blackboard archival.
+4. Treat the finalizer's JSON result as the lifecycle report. Do not manually
    interleave `reclaim`, `cleanup`, Blackboard archive, or GitHub close with
-   finalization. A blocked finalizer preserves the remaining evidence and
-   requires Lead/user handling of the reported conflict; it is safe to retry.
+   finalization. A blocked finalizer preserves remaining evidence and is safe
+   to retry from its last completed phase. Use `--target-branch` only for an
+   explicit Lead decision when a historical contract has a stale base ref.
 
 For unmet criteria, write a closure with the missing criterion IDs and run
 `<project-root>\pi-team.cmd close-incomplete <task-id> <closure-file>`, then run

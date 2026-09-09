@@ -23,11 +23,13 @@ append-only Agent events never live in the worktree.
 - The launcher contract contains `base_ref`, but the current `start` path must
   still be corrected or guarded so a task branch is created from that exact
   ref rather than from the invoking worktree's incidental `HEAD`.
-- The main worktree is reserved for the stable branch and Lead-controlled
+- The main worktree is reserved for the stable `develop` branch and Lead-controlled
   integration. Task worktrees are sibling directories with one focused branch
-  per task; `pi-team.cmd finalize <task-id>` integrates accepted changes and
-  removes the task worktree and successfully merged branch as one retryable
-  lifecycle operation.
+  per task. Lead uses `pi-team.cmd inspect <task-id>` for read-only evidence and
+  `pi-team.cmd finalize <task-id>` to integrate accepted changes, reclaim
+  resources, and remove the task worktree and successfully merged branch as one
+  retryable lifecycle operation. Blackboard lag is reported, not treated as a
+  finalizer authorization gate.
 
 ## Defect and runtime artifact policy
 

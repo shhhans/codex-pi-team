@@ -5,12 +5,19 @@ the Lead; Pi supplies the Researcher, Executor, and Reviewer sessions.
 
 ## Repository workflow
 
-`master` is the stable integration baseline. Each delegated task owns one
+`develop` is the stable integration baseline. Each delegated task owns one
 focused branch and one isolated worktree; the task branch is merged back only
 after Lead acceptance and review. A worktree is a checkout location, not a
 separate source of truth. The canonical `finalize <task-id>` command performs
 the reviewed integration and then removes the task worktree and successfully
 merged task branch.
+
+Before acceptance, Lead may run `pi-team.cmd inspect <task-id>` to collect a
+read-only report covering the contract, diff scope, artifacts, tests, process
+ownership, GitHub issue state, and Blackboard observations. Blackboard lag is
+reported as a warning and does not replace Lead judgment. Use `--json` for a
+machine-readable result, `--skip-tests` only when explicitly appropriate, and
+`--output <path>` to persist a sanitized report.
 
 When a task discovers an unrelated defect, the Agent reports it to Lead and the
 current task remains within its frozen scope. Once this repository has a
@@ -28,7 +35,7 @@ branch happens to be checked out is not a valid substitute.
 
 The project is published at
 [github.com/shhhans/codex-pi-team](https://github.com/shhhans/codex-pi-team).
-The local `master` branch is the current pushed baseline.
+The local `develop` branch is the current integration baseline.
 
 ## First-time setup
 

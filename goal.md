@@ -38,6 +38,11 @@ The routine development path runs as a minimal three-agent loop:
   pairing, acceptance, and reclamation; and arbitrates decisions with
   the User.
 
+Lead decisions are supported by the read-only `inspect` evidence command and
+executed by the deterministic `finalize` command. Inspection informs Lead but
+does not accept a task; finalization performs the accepted integration and
+cleanup without re-deciding from lagging Blackboard projections.
+
 The path is fully traceable: every task has an ID supplied by Lead,
 every artifact lands at a known project-root path, and every peer
 exchange goes through the shared intercom implementation with
