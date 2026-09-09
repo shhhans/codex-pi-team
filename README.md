@@ -245,7 +245,7 @@ The defaults are:
 | Field | Default | Range |
 | --- | --- | --- |
 | `compression.threshold_percent` | `0.5` | `(0, 1]` |
-| `compression.max_tool_calls_per_segment` | `40` | `[1, 1000]` |
+| `compression.max_tool_calls_per_segment` | `0` (disabled) | `[0, 1000]` |
 | `compression.max_compact_retries` | `1` | `[0, 5]` |
 | `compression.output_token_limit` | `65536` | `[1024, 1048576]` |
 
@@ -262,10 +262,10 @@ Behavior:
   remains, it triggers `ctx.compact()` with a custom instruction that
   preserves the frozen contract, the latest artifact paths, and the open
   implementation decisions.
-- A per-segment tool-call counter enforces `max_tool_calls_per_segment`. A
-  successful `session_compact` resets the counter; a `session_before_compact`
-  event checks the retry budget and refuses further retries when the cap is
-  reached.
+- A per-segment tool-call counter can enforce `max_tool_calls_per_segment` when
+  set to a positive integer. The default `0` disables this cap. A successful
+  `session_compact` resets the counter; a `session_before_compact` event checks
+  the retry budget and refuses further retries when that cap is reached.
 - When a limit stops the role, the extension writes a credential-free,
   versioned checkpoint to `<state_root>/checkpoints/task-checkpoint-<task>-<role>-<iso>.json`
   and persists the stop reason, frozen policy, stats, and checkpoint path

@@ -7,7 +7,7 @@
 // The extension deliberately uses only Pi-published event APIs:
 //   - session_start: load and validate the project policy.
 //   - tool_call: increment the per-segment counter; on overflow, persist a
-//     checkpoint and request a graceful shutdown.
+//     checkpoint and request a graceful shutdown when a cap is configured.
 //   - session_before_compact / session_compact: track retries; reset the
 //     per-segment counter when compaction succeeds.
 //   - turn_end: read ctx.getContextUsage() and trigger ctx.compact() when
@@ -198,9 +198,9 @@ export default function (pi: ExtensionAPI) {
     if (!state || state.stopped) return undefined;
     if (state.stopReason) return { block: true, reason: `compression-extension: role ${ROLE_ENV} already stopped (${state.stopReason.code}); awaiting session_shutdown`, terminate: true };
     state.segmentSinceLastCompact += 1;
-    if (state.segmentSinceLastCompact > state.policy.max_tool_calls_per_segment) {
+    const limit = state.policy.max_tool_calls_per_segment;
+    if (limit > 0 && state.segmentSinceLastCompact > limit) {
       state.stats.tool_calls_in_segment = state.segmentSinceLastCompact;
-      const limit = state.policy.max_tool_calls_per_segment;
       triggerLimitShutdown(
         _ctx,
         state,

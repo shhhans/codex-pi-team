@@ -209,6 +209,30 @@ test("C-004 behavior 3: resource cap stops the role and writes a credential-free
   }
 });
 
+test("configured default with no tool-call cap does not stop after 40 calls", async () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "c004b6-sr-"));
+  const worktree = mkdtempSync(join(tmpdir(), "c004b6-wt-"));
+  const prev = makeEnv(stateRoot, worktree, { maxToolCalls: 0 });
+  try {
+    const handlers = {};
+    const pi = { on: (e, h) => { handlers[e] = h; } };
+    const ctx = { hasUI: false, ui: { notify() {} } };
+    const { default: extension } = await freshExtension();
+    extension(pi);
+    await handlers.session_start({}, ctx);
+
+    for (let i = 0; i < 41; i++) {
+      const result = await handlers.tool_call({}, ctx);
+      assert.equal(result, undefined, `disabled cap must not terminate call ${i + 1}`);
+    }
+    assert.equal(existsSync(join(stateRoot, "checkpoints")), false);
+  } finally {
+    restoreEnv(prev);
+    rmSync(stateRoot, { recursive: true, force: true });
+    rmSync(worktree, { recursive: true, force: true });
+  }
+});
+
 test("C-004 behavior 5: plain resume must not silently reuse a session that was stopped by a resource cap", () => {
   const text = readFileSync(join(REPO, "scripts/pi-team.ps1"), "utf8");
   // When a role was stopped by a resource limit, the task state carries

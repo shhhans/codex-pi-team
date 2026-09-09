@@ -16,16 +16,19 @@ export const ACTIVE_ROLE_NAMES = new Set(["researcher", "executor", "reviewer"])
 
 export const COMPRESSION_DEFAULTS = Object.freeze({
   threshold_percent: 0.5,
-  max_tool_calls_per_segment: 40,
+  // Disabled by default. Set a positive integer when an explicit tool-call
+  // budget is needed for a constrained run.
+  max_tool_calls_per_segment: 0,
   max_compact_retries: 1,
   output_token_limit: 65536,
 });
 
 // Strict ranges for scalar fields. The bounds are conservative: thresholds
 // must be in (0, 1]; tool-call and retry caps are small non-negative
-// integers; the output token limit is a positive integer at most 1MiB.
+// integers (zero disables the tool-call cap); the output token limit is a
+// positive integer at most 1MiB.
 const THRESHOLD_RANGE = { min: 0, max: 1, exclusiveMin: false };
-const TOOL_CALL_RANGE = { min: 1, max: 1000 };
+const TOOL_CALL_RANGE = { min: 0, max: 1000 };
 const RETRY_RANGE = { min: 0, max: 5 };
 const OUTPUT_TOKEN_RANGE = { min: 1024, max: 1048576 };
 

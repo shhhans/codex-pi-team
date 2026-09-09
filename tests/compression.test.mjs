@@ -50,7 +50,7 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-test("default config uses the documented thresholds and validates against strict ranges", async () => {
+test("default config leaves the optional tool-call cap disabled", async () => {
   const root = setupWorktree();
   try {
     writeJson(join(root, ".pi/team-runtime.json"), {
@@ -62,7 +62,7 @@ test("default config uses the documented thresholds and validates against strict
     for (const role of ACTIVE_ROLE_NAMES) {
       const policy = resolveCompressionPolicy(role, config);
       assert.equal(policy.threshold_percent, 0.5);
-      assert.equal(policy.max_tool_calls_per_segment, 40);
+      assert.equal(policy.max_tool_calls_per_segment, 0);
       assert.equal(policy.max_compact_retries, 1);
       assert.equal(policy.output_token_limit, 65536);
     }
@@ -105,7 +105,7 @@ test("role overrides apply per-role and never below the type/range floor", async
     assert.equal(researcher.max_compact_retries, 0);
     const executor = resolveCompressionPolicy("executor", config);
     assert.equal(executor.threshold_percent, 0.5);
-    assert.equal(executor.max_tool_calls_per_segment, 40);
+    assert.equal(executor.max_tool_calls_per_segment, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -122,15 +122,15 @@ test("non-positive threshold_percent is rejected", () => {
   }), /threshold_percent/);
 });
 
-test("non-integer tool-call and retry caps are rejected", () => {
+test("non-integer tool-call and retry caps are rejected, while zero disables the tool cap", () => {
   assert.throws(() => validateCompressionConfig({
     version: 1,
     compression: { threshold_percent: 0.5, max_tool_calls_per_segment: 40.5, max_compact_retries: 1, output_token_limit: 65536, role_overrides: {} },
   }), /max_tool_calls_per_segment must be an integer/);
-  assert.throws(() => validateCompressionConfig({
+  assert.doesNotThrow(() => validateCompressionConfig({
     version: 1,
     compression: { threshold_percent: 0.5, max_tool_calls_per_segment: 0, max_compact_retries: 1, output_token_limit: 65536, role_overrides: {} },
-  }), /max_tool_calls_per_segment must be in/);
+  }));
   assert.throws(() => validateCompressionConfig({
     version: 1,
     compression: { threshold_percent: 0.5, max_tool_calls_per_segment: 40, max_compact_retries: -1, output_token_limit: 65536, role_overrides: {} },
@@ -656,7 +656,7 @@ test("README documents the compression config, checkpoint location, and resume c
   const readme = readFileSync(join(REPO, "README.md"), "utf8");
   assert.match(readme, /Automatic compression and checkpoint resume/);
   assert.match(readme, /threshold_percent.*0\.5/);
-  assert.match(readme, /max_tool_calls_per_segment.*40/);
+  assert.match(readme, /max_tool_calls_per_segment.*0.*disabled/);
   assert.match(readme, /65536/);
   assert.match(readme, /resume-checkpoint <task-id> <checkpoint-path> <executor\|reviewer>/);
   assert.match(readme, /checkpoints\/task-checkpoint-<task>-<role>-<iso>\.json/);
