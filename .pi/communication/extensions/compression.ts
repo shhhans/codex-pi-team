@@ -10,8 +10,10 @@
 //     checkpoint and request a graceful shutdown when a cap is configured.
 //   - session_before_compact / session_compact: track retries; reset the
 //     per-segment counter when compaction succeeds.
-//   - turn_end: read ctx.getContextUsage() and trigger ctx.compact() when
-//     the threshold is crossed and a retry budget remains.
+//   - agent_settled: after Pi finishes the complete agent run, read
+//     ctx.getContextUsage() and trigger ctx.compact() when the threshold is
+//     crossed and a retry budget remains. Running only after settlement avoids
+//     racing Pi's own post-response compaction check.
 //
 // The extension never reads API keys, OAuth tokens, or host-absolute paths
 // and never includes them in checkpoints. It does not modify Blackboard,
@@ -249,13 +251,12 @@ export default function (pi: ExtensionAPI) {
     state.compactionInFlight = false;
   });
 
-  pi.on("turn_end", async (event, ctx) => {
+  pi.on("agent_settled", async (event, ctx) => {
     const state = runtime;
     if (!state || state.stopped) return;
     // ctx.compact() is fire-and-forget in Pi. Guard the interval between the
-    // request and session_before_compact/session_compact; without this, two
-    // turn_end events can start concurrent compactions and race Pi's shared
-    // auto-compaction AbortController, producing an undefined.signal error.
+    // request and session_before_compact/session_compact as a second line of
+    // defense against duplicate settlement notifications.
     if (state.compactionInFlight) return;
     let usage: { tokens?: number | null; contextWindow?: number; percent?: number | null } | undefined;
     try {

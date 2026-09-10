@@ -95,20 +95,20 @@ test("C-004 behavior 1: threshold compression triggers compact at most once per 
     // A real Pi ContextUsage.percent is in the range 0..100. A 10% context
     // must remain below the 50% policy threshold.
     ctx.getContextUsage = () => ({ tokens: 20000, contextWindow: 200000, percent: 10 });
-    await handlers.turn_end({}, ctx);
+    await handlers.agent_settled({}, ctx);
     assert.equal(compactCalls.length, 0, "10% usage must not trigger compaction");
 
-    // First turn_end above threshold -> exactly one compact.
+    // First settled agent run above threshold -> exactly one compact.
     ctx.getContextUsage = () => ({ tokens: 150000, contextWindow: 200000, percent: 75 });
-    await handlers.turn_end({}, ctx);
+    await handlers.agent_settled({}, ctx);
     assert.equal(compactCalls.length, 1, "threshold crossing must trigger exactly one compact");
     // Fire the before/after compact events as Pi would after a successful compact.
     await handlers.session_before_compact({}, ctx);
     await handlers.session_compact({}, ctx);
-    // A second turn_end at the same usage would re-cross the threshold only if
+    // A second settled run at the same usage would re-cross the threshold only if
     // usage actually stayed high after compaction; the retry-budget guard must
     // not have silently counted the first attempt twice.
-    assert.equal(compactCalls.length, 1, "a single turn_end must not emit multiple compact calls");
+    assert.equal(compactCalls.length, 1, "a single settled run must not emit multiple compact calls");
   } finally {
     restoreEnv(prev);
     rmSync(stateRoot, { recursive: true, force: true });
@@ -135,7 +135,7 @@ test("C-004 behavior 2: length-error recovery retries at most once, then cancels
     await handlers.session_start({}, ctx);
 
     // Initial attempt: allowed.
-    await handlers.turn_end({}, ctx);
+    await handlers.agent_settled({}, ctx);
     assert.equal(compactCalls.length, 1, "initial threshold compact must be triggered");
     const first = await handlers.session_before_compact({}, ctx);
     assert.ok(!first || !first.cancel, "initial compact attempt must be allowed");
@@ -144,10 +144,10 @@ test("C-004 behavior 2: length-error recovery retries at most once, then cancels
     // further retries ({cancel:true} or the role is stopped), never an
     // unbounded retry loop, and compact must not be re-triggered past the
     // initial + one retry.
-    await handlers.turn_end({}, ctx);
+    await handlers.agent_settled({}, ctx);
     const second = await handlers.session_before_compact({}, ctx);
     assert.ok(second && second.cancel === true, "a retry beyond the cap must be cancelled (at most one retry)");
-    await handlers.turn_end({}, ctx);
+    await handlers.agent_settled({}, ctx);
     assert.ok(compactCalls.length <= 2, "compact must not be re-triggered beyond initial + one retry");
   } finally {
     restoreEnv(prev);
@@ -251,12 +251,12 @@ test("automatic compaction does not start concurrently while the prior request i
     extension(pi);
     await handlers.session_start({}, ctx);
 
-    await handlers.turn_end({}, ctx);
-    await handlers.turn_end({}, ctx);
-    assert.equal(compactCalls.length, 1, "overlapping turn_end events must share one compaction request");
+    await handlers.agent_settled({}, ctx);
+    await handlers.agent_settled({}, ctx);
+    assert.equal(compactCalls.length, 1, "overlapping settled events must share one compaction request");
 
     compactCalls[0].onError(new Error("simulated abort"));
-    await handlers.turn_end({}, ctx);
+    await handlers.agent_settled({}, ctx);
     assert.equal(compactCalls.length, 2, "an error callback must release the in-flight guard");
   } finally {
     restoreEnv(prev);
