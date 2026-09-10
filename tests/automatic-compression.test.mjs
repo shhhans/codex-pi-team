@@ -233,6 +233,38 @@ test("configured default with no tool-call cap does not stop after 40 calls", as
   }
 });
 
+test("automatic compaction does not start concurrently while the prior request is in flight", async () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), "c004b7-sr-"));
+  const worktree = mkdtempSync(join(tmpdir(), "c004b7-wt-"));
+  const prev = makeEnv(stateRoot, worktree, { maxToolCalls: 0 });
+  try {
+    const handlers = {};
+    const compactCalls = [];
+    const pi = { on: (e, h) => { handlers[e] = h; } };
+    const ctx = {
+      hasUI: false,
+      ui: { notify() {} },
+      getContextUsage: () => ({ tokens: 150000, contextWindow: 200000, percent: 75 }),
+      compact: (options) => compactCalls.push(options),
+    };
+    const { default: extension } = await freshExtension();
+    extension(pi);
+    await handlers.session_start({}, ctx);
+
+    await handlers.turn_end({}, ctx);
+    await handlers.turn_end({}, ctx);
+    assert.equal(compactCalls.length, 1, "overlapping turn_end events must share one compaction request");
+
+    compactCalls[0].onError(new Error("simulated abort"));
+    await handlers.turn_end({}, ctx);
+    assert.equal(compactCalls.length, 2, "an error callback must release the in-flight guard");
+  } finally {
+    restoreEnv(prev);
+    rmSync(stateRoot, { recursive: true, force: true });
+    rmSync(worktree, { recursive: true, force: true });
+  }
+});
+
 test("C-004 behavior 5: plain resume must not silently reuse a session that was stopped by a resource cap", () => {
   const text = readFileSync(join(REPO, "scripts/pi-team.ps1"), "utf8");
   // When a role was stopped by a resource limit, the task state carries

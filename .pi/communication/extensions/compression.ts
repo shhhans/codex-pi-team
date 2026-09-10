@@ -56,6 +56,7 @@ type RuntimeState = {
   checkpointPath: string | null;
   segmentSinceLastCompact: number;
   hasInjectedContract: boolean;
+  compactionInFlight: boolean;
 };
 
 const ROLE_ENV = process.env.PI_TEAM_ROLE ?? "";
@@ -84,6 +85,7 @@ function emptyState(policy: CompactPolicy): RuntimeState {
     checkpointPath: null,
     segmentSinceLastCompact: 0,
     hasInjectedContract: false,
+    compactionInFlight: false,
   };
 }
 
@@ -220,6 +222,7 @@ export default function (pi: ExtensionAPI) {
     const state = runtime;
     if (!state || state.stopped) return undefined;
     if (state.stopReason) return { cancel: true };
+    state.compactionInFlight = true;
     state.stats.compaction_attempts += 1;
     if (state.stats.compaction_attempts - state.stats.compaction_completed > state.policy.max_compact_retries) {
       state.stats.compaction_retries_exhausted += 1;
@@ -231,6 +234,7 @@ export default function (pi: ExtensionAPI) {
         `Compaction retry budget exhausted (${retries}); role ${ROLE_ENV} must checkpoint and stop.`,
       );
       state.stopped = true;
+      state.compactionInFlight = false;
       return { cancel: true };
     }
     return undefined;
@@ -242,11 +246,17 @@ export default function (pi: ExtensionAPI) {
     state.stats.compaction_completed += 1;
     state.stats.segment_count += 1;
     state.segmentSinceLastCompact = 0;
+    state.compactionInFlight = false;
   });
 
   pi.on("turn_end", async (event, ctx) => {
     const state = runtime;
     if (!state || state.stopped) return;
+    // ctx.compact() is fire-and-forget in Pi. Guard the interval between the
+    // request and session_before_compact/session_compact; without this, two
+    // turn_end events can start concurrent compactions and race Pi's shared
+    // auto-compaction AbortController, producing an undefined.signal error.
+    if (state.compactionInFlight) return;
     let usage: { tokens?: number | null; contextWindow?: number; percent?: number | null } | undefined;
     try {
       usage = ctx.getContextUsage();
@@ -265,10 +275,13 @@ export default function (pi: ExtensionAPI) {
     const threshold = state.policy.threshold_percent;
     if (effectivePercent < threshold) return;
     if (state.stats.compaction_attempts - state.stats.compaction_completed >= state.policy.max_compact_retries) return;
+    state.compactionInFlight = true;
     ctx.compact({
       customInstructions:
         `Auto-compaction triggered by Pi Team runtime policy: context usage ${(effectivePercent * 100).toFixed(1)}% >= ${(threshold * 100).toFixed(1)}% threshold. ` +
         `Preserve the frozen contract identity, the latest worktree-relative artifact paths, and the open implementation decisions. Drop redundant tool transcripts.`,
+      onComplete: () => { state.compactionInFlight = false; },
+      onError: () => { state.compactionInFlight = false; },
     });
   });
 
