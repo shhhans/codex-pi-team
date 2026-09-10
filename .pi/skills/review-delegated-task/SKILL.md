@@ -46,7 +46,7 @@ inspection; use `bash` only when a command is actually needed.
 
 ## Workflow
 
-1. Register the Lead task and pair. If no `READY_FOR_REVIEW` or `FIX_READY` event is present, end the turn idle without polling.
+1. Register the Lead task and pair. If no `READY_FOR_REVIEW` or `FIX_READY` event is present, end the turn idle without polling. The runtime also enforces a Reviewer-side Blackboard protocol: `activity` is the observed fact, `blocker` is required whenever the state is `blocked` or `changes_requested`, `next` is required for every non-terminal state except `changes_requested`, `ready_for_review`, and `ready_for_acceptance`, and identical repeats of the prior event are refused.
 2. Read `implementation_notes/<task-id>.md`, inspect the Git diff, and read changed files with `read`, `grep`, `find`, `ls`, and read-only Git commands.
 3. Reproduce Executor's validation with `bash`; capture results.
 4. Verify scope: changed files match the Lead-assigned objective; flag unrelated edits.

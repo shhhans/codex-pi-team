@@ -45,7 +45,7 @@ Do not use this skill when:
 7. Write the artifact with `write` to the requested path. Default location is `research/<task-id>-<topic-slug>.md`; the slug is a unique, human-readable kebab-case topic label with no spaces or path separators. Do not overwrite another request's artifact unless explicitly instructed, and do not generate a task ID, UUID, or content hash.
 8. Send `RESEARCH_RESULT` to `to: "executor"`; runtime constructs transport. Read the exact JSON fields from `pi_team_intercom`, then publish material findings with `blackboard_update`.
 9. If the request cannot safely proceed, send `RESEARCH_BLOCKED` to the paired Executor using the tool contract and report `blocked` to Lead with the reason and next decision needed.
-10. After each request, update Blackboard to `waiting` and end the turn idle/event-driven. Do not mark the session `completed` after one request and do not exit or stop waiting. Only explicit Lead completion/reclaim ends the Researcher session.
+10. After each request, update Blackboard to `waiting` and end the turn idle/event-driven. Do not mark the session `completed` after one request and do not exit or stop waiting. Only explicit Lead completion/reclaim ends the Researcher session. The runtime enforces a Researcher-side Blackboard protocol: `activity` is the observed fact (no placeholder text, no verbatim repeats of the prior event), `blocker` is required whenever the state is `blocked`, `next` is required for every non-terminal state except `completed`, and identical repeats of the prior event are refused.
 ## Boundaries
 
 - One bounded request per turn; refuse multi-question scoping and escalate to Lead.

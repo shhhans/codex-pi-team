@@ -103,6 +103,7 @@ function Assert-Setup {
   if ($sharedText -match '(?i)Issue\s*#\s*\d+|[A-Z][A-Z0-9]+-\d{3,}|[A-Za-z]:[\\/]') { Fail 'AGENTS.md must remain task-agnostic and free of host paths' }
   foreach ($path in @(
     (Join-Path $ProjectRoot '.pi/communication/extensions/blackboard-update.ts'),
+    (Join-Path $ProjectRoot '.pi/communication/blackboard-protocol.mjs'),
     (Join-Path $ProjectRoot 'plugins/agent-blackboard/server/blackboard-core.mjs')
   )) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "Pi Team runtime file is missing: $path" }
