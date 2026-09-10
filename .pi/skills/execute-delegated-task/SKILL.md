@@ -34,7 +34,7 @@ Do not use this skill when:
 - `read`, `grep`, `find`, `ls` — local inspection within the worktree only.
 - `bash` — run tests, formatters, and verification commands inside the worktree.
 - `edit`, `write` — change code and persist artifacts only inside the worktree.
-- `blackboard_update` — publish task status and request a Lead wakeup with `blocked`, `changes_requested`, or `ready_for_review` when Lead attention is required.
+- `blackboard_update` — publish task status and request a Lead wakeup with `blocked`, `changes_requested`, or `ready_for_review` when Lead attention is required. The runtime enforces a Blackboard protocol: `activity` is the observed fact, `blocker` is required whenever the state is `blocked` or `changes_requested`, `next` is required for every non-terminal state, and identical repeats of the prior event are refused. The lifecycle gate fires on the first substantive tool call and again after every 20 substantive tool calls without an update; it fails open after 2 consecutive blocks.
 - `pi_team_intercom` — direct peer channel only with the paired Researcher and Reviewer. Its registered description is the sole JSON event contract; never hand-build transport data.
 
 ### Command tool contract
