@@ -302,9 +302,9 @@ test("pi_team_intercom permits send only and native intercom is denied", async (
   }
 });
 
-test("reviewer inbound reviewer<-researcher is denied before context; reviewer<-executor is accepted", async (t) => {
+test("Validator inbound Validator<-Researcher is denied before context; Validator<-Executor is accepted", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
-  const reviewerPolicy = createRoleRuntimePolicy("reviewer", { auditDir, replyStoreDir });
+  const validatorPolicy = createRoleRuntimePolicy("validator", { auditDir, replyStoreDir });
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   process.env.PI_TEAM_TASK_ID = "INBOUND-001";
   try {
@@ -317,13 +317,13 @@ test("reviewer inbound reviewer<-researcher is denied before context; reviewer<-
         details: {
           from: { name: "researcher" },
           message: { id: "11111111-1111-4111-8111-111111111111" },
-          bodyText: makeInboundStructuredEnvelope("11111111-1111-4111-8111-111111111111", { type: "READY_FOR_REVIEW", task_id: "INBOUND-001", delegation_id: "EXECUTOR-INBOUND-001", worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" }),
+          bodyText: makeInboundStructuredEnvelope("11111111-1111-4111-8111-111111111111", { type: "READY_FOR_VALIDATION", task_id: "INBOUND-001", delegation_id: "EXECUTOR-INBOUND-001", worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" }),
         },
       },
     ],
   };
   const deniedCtx = { messages: deniedInbound.messages };
-  const deniedResult = await reviewerPolicy.onContext(deniedInbound, deniedCtx);
+  const deniedResult = await validatorPolicy.onContext(deniedInbound, deniedCtx);
   assert.ok(deniedResult, "context hook must return a result for denied researcher -> reviewer inbound");
   const deniedTypes = (deniedResult.messages ?? []).map((m) => m.customType);
   assert.equal(deniedTypes.includes("intercom_message"), false, "researcher -> reviewer inbound must be filtered before context");
@@ -336,15 +336,15 @@ test("reviewer inbound reviewer<-researcher is denied before context; reviewer<-
         details: {
           from: { name: "executor" },
           message: { id: "22222222-2222-4222-8222-222222222222" },
-          bodyText: makeInboundStructuredEnvelope("22222222-2222-4222-8222-222222222222", { type: "READY_FOR_REVIEW", task_id: "INBOUND-001", delegation_id: "EXECUTOR-INBOUND-001", worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" }),
+          bodyText: makeInboundStructuredEnvelope("22222222-2222-4222-8222-222222222222", { type: "READY_FOR_VALIDATION", task_id: "INBOUND-001", delegation_id: "EXECUTOR-INBOUND-001", worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" }),
         },
       },
     ],
   };
   const acceptedCtx = { messages: acceptedInbound.messages };
-  const acceptedResult = await reviewerPolicy.onContext(acceptedInbound, acceptedCtx);
+  const acceptedResult = await validatorPolicy.onContext(acceptedInbound, acceptedCtx);
   assert.equal(acceptedResult.messages[0].customType, "pi_team_event");
-  assert.deepEqual(JSON.parse(acceptedResult.messages[0].content), { type: "READY_FOR_REVIEW", task_id: "INBOUND-001", delegation_id: "EXECUTOR-INBOUND-001", worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" });
+  assert.deepEqual(JSON.parse(acceptedResult.messages[0].content), { type: "READY_FOR_VALIDATION", task_id: "INBOUND-001", delegation_id: "EXECUTOR-INBOUND-001", worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" });
   assert.equal(JSON.stringify(acceptedResult.messages[0]).includes("base64"), false);
   assert.equal(JSON.stringify(acceptedResult.messages[0]).includes("agent-team/v1"), false);
   } finally {
@@ -352,9 +352,9 @@ test("reviewer inbound reviewer<-researcher is denied before context; reviewer<-
   }
 });
 
-test("denied inbound reviewer<-researcher must not create a pending reply-store reservation; allowed executor->reviewer must be accepted", async (t) => {
+test("denied inbound Validator<-Researcher must not create a pending reply-store reservation; allowed Executor->Validator is accepted", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
-  const reviewerPolicy = createRoleRuntimePolicy("reviewer", { auditDir, replyStoreDir });
+  const validatorPolicy = createRoleRuntimePolicy("validator", { auditDir, replyStoreDir });
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   process.env.PI_TEAM_TASK_ID = "INBOUND-002";
   try {
@@ -386,7 +386,7 @@ test("denied inbound reviewer<-researcher must not create a pending reply-store 
       },
     ],
   };
-  const deniedResult = await reviewerPolicy.onContext(deniedInbound, { messages: deniedInbound.messages });
+  const deniedResult = await validatorPolicy.onContext(deniedInbound, { messages: deniedInbound.messages });
   assert.ok(deniedResult, "denied researcher -> reviewer inbound must produce a context result");
   const deniedTypes = (deniedResult.messages ?? []).map((m) => m.customType);
   assert.equal(deniedTypes.includes("intercom_message"), false, "researcher -> reviewer inbound must be filtered from model context");
@@ -394,16 +394,16 @@ test("denied inbound reviewer<-researcher must not create a pending reply-store 
   // No reply-store file may be created for an unauthorized sender. A pending
   // reservation written before authorization is a side-effect leak that can
   // later be replayed against a legitimate executor send carrying the same id.
-  const deniedPath = join(replyStoreDir, "reviewer", `${deniedId}.json`);
+  const deniedPath = join(replyStoreDir, "validator", `${deniedId}.json`);
   const deniedExists = await stat(deniedPath).then(() => true, () => false);
   assert.equal(deniedExists, false, `denied researcher -> reviewer inbound must not create a pending reservation at ${deniedPath}`);
 
   // The accepted executor -> reviewer path on a fresh reviewer instance must
   // produce a context that retains the inbound message (no filtering).
   const { auditDir: acceptedAudit, replyStoreDir: acceptedReply } = freshRuntimePaths(t);
-  const acceptedPolicy = createRoleRuntimePolicy("reviewer", { auditDir: acceptedAudit, replyStoreDir: acceptedReply });
+  const acceptedPolicy = createRoleRuntimePolicy("validator", { auditDir: acceptedAudit, replyStoreDir: acceptedReply });
   const acceptedId = "44444444-4444-4444-8444-444444444444";
-  const acceptedEnvelope = makeInboundStructuredEnvelope(acceptedId, { type: "READY_FOR_REVIEW", task_id: "INBOUND-002", delegation_id: "EXECUTOR-INBOUND-002", worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" });
+  const acceptedEnvelope = makeInboundStructuredEnvelope(acceptedId, { type: "READY_FOR_VALIDATION", task_id: "INBOUND-002", delegation_id: "EXECUTOR-INBOUND-002", worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" });
   const acceptedInbound = {
     messages: [
       {
@@ -423,7 +423,7 @@ test("denied inbound reviewer<-researcher must not create a pending reply-store 
   // contract is enforced by read() at the next inbound. Either way, accepting
   // must not have written a file in this single-message scenario because
   // `replyStore.write()` is the only place that persists a record on accept.
-  const acceptedPath = join(acceptedReply, "reviewer", `${acceptedId}.json`);
+  const acceptedPath = join(acceptedReply, "validator", `${acceptedId}.json`);
   const acceptedExists = await stat(acceptedPath).then(() => true, () => false);
   assert.equal(acceptedExists, false, `accepted executor -> reviewer inbound must not persist a reply-store file from onContext alone; ${acceptedPath}`);
   } finally {
@@ -461,15 +461,15 @@ test("researcher subagentOnlyExtensions wires shared intercom, shared web access
   assert.doesNotMatch(policyText, /researcher-local-discovery/);
 });
 
-test("executor and reviewer each load their own communication policy extension", async () => {
-  for (const role of ["executor", "reviewer"]) {
+test("executor and validator each load their active communication policy extensions", async () => {
+  for (const role of ["executor", "validator"]) {
     const text = await readFile(join(REPO, `.pi/agents/${role}.md`), "utf8");
     const fm = parseFrontmatter(text);
     const exts = parseScalarList(fm.subagentOnlyExtensions);
     assert.deepEqual(
       exts,
-      ["~/.pi/agent/npm/node_modules/pi-intercom/index.ts", `../communication/extensions/${role}.ts`, "../communication/extensions/blackboard-update.ts", "../communication/extensions/compression.ts"],
-      `${role} must load shared intercom, Blackboard, and compression policy extensions`,
+      ["~/.pi/agent/npm/node_modules/pi-intercom/index.ts", `../communication/extensions/${role}.ts`, "../communication/extensions/blackboard-update.ts", "../communication/extensions/contract-tools.ts", "../communication/extensions/compression.ts"],
+      `${role} must load shared intercom, Blackboard, contract, and compression policy extensions`,
     );
     assert.equal(fm.extensions, "", `${role} must disable ambient extensions`);
     assert.doesNotMatch(text, /pi-web-access/, `${role} must not load pi-web-access`);
@@ -688,7 +688,7 @@ test("Issue #3 P1: well-formed Executor→Researcher RESEARCH_REQUEST is allowed
   }
 });
 
-test.skip("Issue #3 N1: cross-task Executor→Researcher RESEARCH_REQUEST is refused at onToolCall", async (t) => {
+test("Issue #3 N1: cross-task Executor→Researcher RESEARCH_REQUEST is refused at onToolCall", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   const previousDelegations = process.env.PI_TEAM_ALLOWED_DELEGATIONS;
@@ -700,9 +700,9 @@ test.skip("Issue #3 N1: cross-task Executor→Researcher RESEARCH_REQUEST is ref
     const envelope = makeResearchEnvelopeText("executor", "researcher", requestId, "RESEARCH_REQUEST", makeResearchRequestBody({ task_id: "ISSUE-001", request_id: requestId }));
     const result = await policy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-003--researcher--abc", envelope));
     assert.ok(result && result.block === true, "cross-task RESEARCH_REQUEST must be blocked");
-    assert.match(result.reason, /research-task-id-mismatch/);
+    assert.match(result.reason, /structured-message-task-id-mismatch/);
     const rows = await readAuditRows(auditDir, "executor");
-    const refused = rows.find((row) => row.direction === "outbound" && row.outcome === "refused" && row.reason?.includes("research-task-id-mismatch"));
+    const refused = rows.find((row) => row.direction === "outbound" && row.outcome === "refused" && row.reason?.includes("structured-message-task-id-mismatch"));
     assert.ok(refused, "audit must record the cross-task refusal with the task-id-mismatch reason");
   } finally {
     if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
@@ -710,7 +710,7 @@ test.skip("Issue #3 N1: cross-task Executor→Researcher RESEARCH_REQUEST is ref
   }
 });
 
-test.skip("Issue #3 N2: RESEARCH_REQUEST with bash capability is refused at onToolCall", async (t) => {
+test("Issue #3 N2: RESEARCH_REQUEST with bash capability is refused at onToolCall", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   const previousDelegations = process.env.PI_TEAM_ALLOWED_DELEGATIONS;
@@ -722,9 +722,9 @@ test.skip("Issue #3 N2: RESEARCH_REQUEST with bash capability is refused at onTo
     const envelope = makeResearchEnvelopeText("executor", "researcher", requestId, "RESEARCH_REQUEST", makeResearchRequestBody({ required_capabilities: ["bash", "write"], request_id: requestId }));
     const result = await policy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-003--researcher--abc", envelope));
     assert.ok(result && result.block === true, "bash-capability RESEARCH_REQUEST must be blocked");
-    assert.match(result.reason, /research-capability-blocked/);
+    assert.match(result.reason, /structured-message-schema-invalid:RESEARCH_REQUEST:capability_blocked/);
     const rows = await readAuditRows(auditDir, "executor");
-    const refused = rows.find((row) => row.direction === "outbound" && row.outcome === "refused" && row.reason?.includes("research-capability-blocked"));
+    const refused = rows.find((row) => row.direction === "outbound" && row.outcome === "refused" && row.reason?.includes("structured-message-schema-invalid:RESEARCH_REQUEST:capability_blocked"));
     assert.ok(refused, "audit must record the bash-capability refusal");
   } finally {
     if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
@@ -732,7 +732,7 @@ test.skip("Issue #3 N2: RESEARCH_REQUEST with bash capability is refused at onTo
   }
 });
 
-test.skip("Issue #3 N3: architectural RESEARCH_REQUEST is refused at onToolCall", async (t) => {
+test("Issue #3 N3: architectural RESEARCH_REQUEST is refused at onToolCall", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   const previousDelegations = process.env.PI_TEAM_ALLOWED_DELEGATIONS;
@@ -744,7 +744,7 @@ test.skip("Issue #3 N3: architectural RESEARCH_REQUEST is refused at onToolCall"
     const envelope = makeResearchEnvelopeText("executor", "researcher", requestId, "RESEARCH_REQUEST", makeResearchRequestBody({ objective: "should we replace intercom with a custom bus?", request_id: requestId }));
     const result = await policy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-003--researcher--abc", envelope));
     assert.ok(result && result.block === true, "architectural RESEARCH_REQUEST must be blocked");
-    assert.match(result.reason, /research-schema-invalid/);
+    assert.match(result.reason, /structured-message-schema-invalid/);
     assert.match(result.reason, /architectural/);
   } finally {
     if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
@@ -771,17 +771,23 @@ test("Issue #3 N14: hash-in-slug RESEARCH_REQUEST is refused at onToolCall", asy
   }
 });
 
-test.skip("Issue #3 N12 + N13: existing peer ACL still refuses Executor→Lead and Reviewer→Researcher", async (t) => {
+test("Issue #3 N12 + N13: role-level routing refuses Executor→Lead and Validator→Researcher", async (t) => {
+  const previousTaskId = process.env.PI_TEAM_TASK_ID;
+  process.env.PI_TEAM_TASK_ID = "ISSUE-003";
   const { auditDir: a, replyStoreDir: r1 } = freshRuntimePaths(t);
-  const executorPolicy = createRoleRuntimePolicy("executor", { auditDir: a, replyStoreDir: r1 });
-  const executorToLead = await executorPolicy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-003--lead--abc", "agent-team/v1\nid: 77777777-7777-4777-8777-777777777777\ncorrelation_id: 77777777-7777-4777-8777-777777777777\nkind: request\nbody_encoding: base64url\nreferences: {}\nsubject: hi\nbody: YQ"));
-  assert.ok(executorToLead && executorToLead.block === true, "executor must not send to lead");
-  assert.match(executorToLead.reason, /Agent communication policy refused/);
-  const { auditDir: a2, replyStoreDir: r2 } = freshRuntimePaths(t);
-  const reviewerPolicy = createRoleRuntimePolicy("reviewer", { auditDir: a2, replyStoreDir: r2 });
-  const reviewerToResearcher = await reviewerPolicy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-003--researcher--abc", "agent-team/v1\nid: 88888888-8888-4888-8888-888888888888\ncorrelation_id: 88888888-8888-4888-8888-888888888888\nkind: request\nbody_encoding: base64url\nreferences: {}\nsubject: hi\nbody: YQ"));
-  assert.ok(reviewerToResearcher && reviewerToResearcher.block === true, "reviewer must not send to researcher");
-  assert.match(reviewerToResearcher.reason, /Agent communication policy refused/);
+  try {
+    const executorPolicy = createRoleRuntimePolicy("executor", { auditDir: a, replyStoreDir: r1 });
+    const executorToLead = await executorPolicy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-003--lead--abc", "agent-team/v1\nid: 77777777-7777-4777-8777-777777777777\ncorrelation_id: 77777777-7777-4777-8777-777777777777\nkind: request\nbody_encoding: base64url\nreferences: {}\nsubject: hi\nbody: YQ"));
+    assert.ok(executorToLead && executorToLead.block === true, "executor must not send to lead");
+    assert.match(executorToLead.reason, /requires a peer role name/);
+    const { auditDir: a2, replyStoreDir: r2 } = freshRuntimePaths(t);
+    const validatorPolicy = createRoleRuntimePolicy("validator", { auditDir: a2, replyStoreDir: r2 });
+    const validatorToResearcher = await validatorPolicy.onToolCall(makeIntercomEvent("send", "researcher", JSON.stringify({ type: "VALIDATION_PASS", task_id: "ISSUE-003", delegation_id: "EXECUTOR-ISSUE-003", evidence_paths: ["tests/validation.test.mjs"] })));
+    assert.ok(validatorToResearcher && validatorToResearcher.block === true, "validator must not send to researcher");
+    assert.match(validatorToResearcher.reason, /not allowed for validator/);
+  } finally {
+    if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
+  }
 });
 
 test("Issue #3 N15: inbound cross-task RESEARCH_RESULT is filtered at onContext before reaching model context", async (t) => {
@@ -856,16 +862,15 @@ test("Issue #3 inbound malformed RESEARCH_BLOCKED is filtered at onContext (miss
   }
 });
 
-test("Issue #3 outbound: non-research messages pass through the body gate unchanged (existing tests not regressed)", async (t) => {
+test("Issue #3 outbound: non-research lifecycle messages are not blocked by the research body gate", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   process.env.PI_TEAM_TASK_ID = "ISSUE-003";
   try {
     const policy = createRoleRuntimePolicy("executor", { auditDir, replyStoreDir });
-    // Body "a" is not JSON, so the research gate must pass through.
-    const envelope = "agent-team/v1\nid: bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\ncorrelation_id: bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb\nkind: progress\nbody_encoding: base64url\nreferences: {}\nsubject: hi\nbody: YQ";
-    const result = await policy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-003--reviewer--abc", envelope));
-    assert.equal(result, undefined, "non-research message must not be blocked by the body gate");
+    const event = { type: "READY_FOR_VALIDATION", task_id: "ISSUE-003", delegation_id: "EXECUTOR-ISSUE-003", worktree: "D:/task", implementation_notes_path: "implementation_notes/ISSUE-003.md" };
+    const result = await policy.onToolCall(makeIntercomEvent("send", "validator", JSON.stringify(event)));
+    assert.equal(result, undefined, "non-research lifecycle message must not be blocked by the research body gate");
   } finally {
     if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
   }
@@ -938,47 +943,40 @@ test("Issue #11 P2: formatAuditEvent writes a redacted audit row whose JSON neve
   assert.equal("envelope" in row, false, "envelope source field must be stripped from the audit row");
 });
 
-test.skip("Issue #11 N1: cross-task peer rediscovery is refused with peer_wrong_task typed diagnostic", async (t) => {
+test("Issue #11 N1: session IDs are refused before role-level peer discovery", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   process.env.PI_TEAM_TASK_ID = "ISSUE-011";
   try {
     const policy = createRoleRuntimePolicy("executor", { auditDir, replyStoreDir });
     const envelope = makeFakeIntercomEnvelope({ subject: "cross-task test" });
-    const result = await policy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-010--researcher--old-launch", envelope));
+    const result = await policy.onToolCall({ toolName: "pi_team_intercom", input: { action: "send", to: "pi-team--ISSUE-010--researcher--old-launch", message: envelope } });
     assert.ok(result && result.block === true, "cross-task rediscovery must be blocked");
-    assert.match(result.reason, /cross-task peer rediscovery/);
-    assert.match(result.reason, /ISSUE-010/);
-    assert.match(result.reason, /ISSUE-011/);
-    assert.match(result.reason, /list-cwd/);
+    assert.match(result.reason, /requires a peer role name/);
     const rows = await readAuditRows(auditDir, "executor");
-    const refused = rows.find((row) => row.direction === "outbound" && row.outcome === "refused" && row.reason?.includes("peer_wrong_task"));
-    assert.ok(refused, "audit row must carry the peer_wrong_task typed diagnostic");
-    assert.equal(refused.recipient, "researcher", "audit row recipient must carry the resolved role, not the raw target string");
+    const refused = rows.find((row) => row.direction === "outbound" && row.outcome === "refused" && row.reason === "structured-recipient-must-be-role");
+    assert.ok(refused, "audit row must record the role-level recipient refusal");
   } finally {
     if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
   }
 });
 
-test.skip("Issue #11 N2: cross-role peer rediscovery is refused with peer_wrong_role typed diagnostic (Executor→Reviewer with RESEARCH_REQUEST body)", async (t) => {
+test("Issue #11 N2: Executor→Validator lifecycle send uses the active bounded peer", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   process.env.PI_TEAM_TASK_ID = "ISSUE-011";
   try {
     const policy = createRoleRuntimePolicy("executor", { auditDir, replyStoreDir });
-    // Send a non-research envelope to the executor's other allowed peer (reviewer);
-    // a stale-session classification would not fire because the recipient is
-    // in-bounded. The test asserts that a deliverable send still passes.
-    const envelope = makeFakeIntercomEnvelope({ subject: "executor-to-reviewer ok" });
-    const result = await policy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-011--reviewer--abc", envelope));
-    assert.equal(result, undefined, "executor->reviewer same-task non-research send must pass");
+    const event = { type: "READY_FOR_VALIDATION", task_id: "ISSUE-011", delegation_id: "EXECUTOR-ISSUE-011", worktree: "D:/task", implementation_notes_path: "implementation_notes/ISSUE-011.md" };
+    const result = await policy.onToolCall(makeIntercomEvent("send", "validator", JSON.stringify(event)));
+    assert.equal(result, undefined, "executor->validator lifecycle send must pass");
     const rows = await readAuditRows(auditDir, "executor");
     const allowed = rows.find((row) => row.direction === "outbound" && row.outcome === "allowed");
-    assert.ok(allowed, "audit row must record the allowed same-task executor->reviewer send");
-    assert.equal(allowed.recipient, "reviewer");
+    assert.ok(allowed, "audit row must record the allowed same-task executor->validator send");
+    assert.equal(allowed.recipient, "validator");
     // The audit row must carry the redacted envelope fields.
     assert.equal(allowed.kind, "progress");
-    assert.equal(allowed.subject, "executor-to-reviewer ok");
+    assert.equal(allowed.subject, "READY_FOR_VALIDATION ISSUE-011");
     assert.ok(allowed.bodyFingerprint, "audit row must carry the body fingerprint");
   } finally {
     if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
@@ -1069,7 +1067,7 @@ test("Issue #11 P3 (typed diagnostic via custom runtime): stale-session surfaces
   }
 });
 
-test.skip("Issue #11 N3: malformed envelope refusal path does not expose the base64 body in the audit row or the agent reason", async (t) => {
+test("Issue #11 N3: malformed payload refusal does not expose input bytes in the audit row or agent reason", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   process.env.PI_TEAM_TASK_ID = "ISSUE-011";
@@ -1080,7 +1078,7 @@ test.skip("Issue #11 N3: malformed envelope refusal path does not expose the bas
     const malformed = "agent-team/v1\nid: 11111111-1111-4111-8111-111111111111\ncorrelation_id: 11111111-1111-4111-8111-111111111111\nkind: progress\nbody_encoding: base64url\nreferences: {}\nsubject: malformed\nbody: !!!not-base64!!!";
     const result = await policy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-011--researcher--abc", malformed));
     assert.ok(result && result.block === true, "malformed envelope must be blocked");
-    assert.match(result.reason, /malformed send/);
+    assert.match(result.reason, /structured-message-invalid-json/);
     // The audit row must carry the parse error reason, NOT the body.
     const rows = await readAuditRows(auditDir, "executor");
     const refused = rows.find((row) => row.direction === "outbound" && row.outcome === "refused");
@@ -1183,7 +1181,7 @@ test("active roles cannot spoof Lead LEAD_REQUEST_CHANGES outbound", async (t) =
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   process.env.PI_TEAM_TASK_ID = "COMPRESSION-001";
   try {
-    const policy = createRoleRuntimePolicy("executor", { auditDir, replyStoreDir, listPeerSessions: async () => [{ id: "pi-team--COMPRESSION-001--reviewer--fresh" }] });
+    const policy = createRoleRuntimePolicy("executor", { auditDir, replyStoreDir, listPeerSessions: async () => [{ id: "pi-team--COMPRESSION-001--validator--fresh" }] });
     const event = {
       type: "LEAD_REQUEST_CHANGES",
       task_id: "COMPRESSION-001",
@@ -1194,7 +1192,7 @@ test("active roles cannot spoof Lead LEAD_REQUEST_CHANGES outbound", async (t) =
       next_artifact: "tests/compression.test.mjs",
       next_state: "FIX_READY",
     };
-    const result = await policy.onToolCall(makeIntercomEvent("send", "reviewer", JSON.stringify(event)));
+    const result = await policy.onToolCall(makeIntercomEvent("send", "validator", JSON.stringify(event)));
     assert.ok(result?.block);
     assert.match(result.reason, /not allowed for executor/);
   } finally {
@@ -1207,8 +1205,8 @@ test("transport-boundary projection never constructs a persisted raw-envelope me
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   process.env.PI_TEAM_TASK_ID = "ISSUE-013";
   try {
-    const policy = createRoleRuntimePolicy("reviewer", { auditDir, replyStoreDir });
-    const eventBody = { type: "READY_FOR_REVIEW", task_id: "ISSUE-013", delegation_id: "EXECUTOR-ISSUE-013", worktree: "D:/task", implementation_notes_path: "implementation_notes/ISSUE-013.md" };
+    const policy = createRoleRuntimePolicy("validator", { auditDir, replyStoreDir });
+    const eventBody = { type: "READY_FOR_VALIDATION", task_id: "ISSUE-013", delegation_id: "EXECUTOR-ISSUE-013", worktree: "D:/task", implementation_notes_path: "implementation_notes/ISSUE-013.md" };
     const envelopeText = makeInboundStructuredEnvelope("13131313-1313-4131-8131-131313131313", eventBody);
     const projected = await policy.projectInboundStructuredEnvelope({ sender: "executor", text: envelopeText });
     assert.equal(projected.accepted, true);
@@ -1228,8 +1226,8 @@ test("Issue #11 N6: denied inbound (unauthorized sender) audit row never carries
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   process.env.PI_TEAM_TASK_ID = "ISSUE-011";
   try {
-    const policy = createRoleRuntimePolicy("reviewer", { auditDir, replyStoreDir });
-    // researcher -> reviewer is forbidden by the bounded-peer ACL.
+    const policy = createRoleRuntimePolicy("validator", { auditDir, replyStoreDir });
+    // researcher -> validator is forbidden by the bounded-peer ACL.
     const envelopeText = makeEnvelope({
       id: "ffffffff-ffff-4fff-8fff-ffffffffffff",
       correlationId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
@@ -1251,10 +1249,10 @@ test("Issue #11 N6: denied inbound (unauthorized sender) audit row never carries
       ],
     };
     const result = await policy.onContext(inbound, { messages: inbound.messages });
-    assert.ok(result, "context hook must return a result for denied researcher->reviewer inbound");
+    assert.ok(result, "context hook must return a result for denied researcher->validator inbound");
     const types = (result.messages ?? []).map((m) => m.customType);
     assert.equal(types.includes("intercom_message"), false, "denied inbound must be filtered before context");
-    const rows = await readAuditRows(auditDir, "reviewer");
+    const rows = await readAuditRows(auditDir, "validator");
     const refused = rows.find((row) => row.direction === "inbound" && row.outcome === "refused");
     assert.ok(refused, "audit row must record the denied inbound");
     const serialized = JSON.stringify(refused);
@@ -1313,7 +1311,7 @@ test("Issue #11 control: appendPolicyAudit (via runtime onToolCall) strips the e
 // and the cross-role branch returns the `peer_wrong_role` typed
 // diagnostic.
 
-test.skip("Issue #11 N2 (runtime path): executor→lead same-task rediscovery is refused with peer_wrong_role typed diagnostic", async (t) => {
+test("Issue #11 N2 (runtime path): executor→lead is refused before role-level peer discovery", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   process.env.PI_TEAM_TASK_ID = "ISSUE-011";
@@ -1322,16 +1320,10 @@ test.skip("Issue #11 N2 (runtime path): executor→lead same-task rediscovery is
     const envelope = makeFakeIntercomEnvelope({ subject: "executor->lead" });
     const result = await policy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-011--lead--abc", envelope));
     assert.ok(result && result.block === true, "executor->lead rediscovery must be blocked");
-    // The agent-facing block reason is human-readable text with the recovery
-    // hint; the structured prefix lives in the audit row's reason field.
-    assert.match(result.reason, /sender's bounded peer set does not include lead/);
-    assert.match(result.reason, /call intercom list-cwd/);
+    assert.match(result.reason, /requires a peer role name/);
     const rows = await readAuditRows(auditDir, "executor");
-    const refused = rows.find((row) => row.direction === "outbound" && row.outcome === "refused" && row.reason?.includes("peer_wrong_role"));
-    assert.ok(refused, "audit row must carry the peer_wrong_role typed diagnostic");
-    assert.match(refused.reason, /peer_wrong_role:sender=executor/);
-    assert.match(refused.reason, /role=lead/);
-    assert.equal(refused.recipient, "lead", "audit row recipient must carry the resolved role");
+    const refused = rows.find((row) => row.direction === "outbound" && row.outcome === "refused" && row.reason === "structured-recipient-must-be-role");
+    assert.ok(refused, "audit row must record the role-level recipient refusal");
     // Refused rows must NOT carry envelope-derived fields.
     assert.equal(refused.bodySummary, undefined);
     assert.equal(refused.bodyFingerprint, undefined);
@@ -1351,7 +1343,7 @@ test.skip("Issue #11 N2 (runtime path): executor→lead same-task rediscovery is
 // `stale-session:role=researcher:task_id=ISSUE-011:launch_id=<old>:retry=list-cwd`
 // and the agent-facing block reason must carry the recovery hint.
 
-test.skip("Issue #11 P3 (runtime path): executor→researcher stale session surfaces typed diagnostic with recovery hint", async (t) => {
+test("Issue #11 P3 (runtime path): executor→researcher stale session surfaces typed diagnostic with recovery hint", async (t) => {
   const { auditDir, replyStoreDir } = freshRuntimePaths(t);
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   process.env.PI_TEAM_TASK_ID = "ISSUE-011";
@@ -1360,10 +1352,11 @@ test.skip("Issue #11 P3 (runtime path): executor→researcher stale session surf
     const policy = createRoleRuntimePolicy("executor", {
       auditDir,
       replyStoreDir,
+      listPeerSessions: async () => [{ id: "pi-team--ISSUE-011--researcher--stale-launch-A" }],
       client: { send: async () => ({ delivered: false, reason: "no-such-session" }) },
     });
-    const envelope = makeFakeIntercomEnvelope({ subject: "stale session" });
-    const result = await policy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-011--researcher--stale-launch-A", envelope));
+    const event = { type: "READY_FOR_VALIDATION", task_id: "ISSUE-011", delegation_id: "EXECUTOR-ISSUE-011", worktree: "D:/task", implementation_notes_path: "implementation_notes/ISSUE-011.md" };
+    const result = await policy.onToolCall(makeIntercomEvent("send", "researcher", JSON.stringify(event)));
     assert.ok(result && result.block === true, "stale session must be blocked at the runtime path");
     // The agent-facing block reason is human-readable text with the recovery
     // hint; the structured prefix lives in the audit row's reason field.
@@ -1403,15 +1396,15 @@ test("structured send builds the canonical envelope and resolves the current sam
     const policy = createRoleRuntimePolicy("executor", {
       auditDir,
       replyStoreDir,
-      listPeerSessions: async () => [{ id: "live-reviewer", name: "pi-team--ISSUE-012--reviewer--new-launch" }],
+      listPeerSessions: async () => [{ id: "live-validator", name: "pi-team--ISSUE-012--validator--new-launch" }],
     });
-    const event = { type: "READY_FOR_REVIEW", task_id: "ISSUE-012", worktree: "D:/task", implementation_notes_path: "implementation_notes/ISSUE-012.md" };
-    const call = makeIntercomEvent("send", "reviewer", JSON.stringify(event));
+    const event = { type: "READY_FOR_VALIDATION", task_id: "ISSUE-012", worktree: "D:/task", implementation_notes_path: "implementation_notes/ISSUE-012.md" };
+    const call = makeIntercomEvent("send", "validator", JSON.stringify(event));
     assert.equal(await policy.onToolCall(call), undefined);
-    assert.equal(call.input.to, "live-reviewer");
+    assert.equal(call.input.to, "live-validator");
     const envelope = parseEnvelope(call.input.message);
     assert.equal(envelope.kind, "progress");
-    assert.equal(envelope.subject, "READY_FOR_REVIEW ISSUE-012");
+    assert.equal(envelope.subject, "READY_FOR_VALIDATION ISSUE-012");
     assert.deepEqual(JSON.parse(envelope.body), event);
   } finally {
     if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
@@ -1427,14 +1420,14 @@ test("structured peer resolution uses the canonical session ID when name is a di
       auditDir,
       replyStoreDir,
       listPeerSessions: async () => [{
-        id: "pi-team--SMK-008--reviewer--fresh-launch",
-        name: "pi-team--SMK-008--reviewer",
+        id: "pi-team--SMK-008--validator--fresh-launch",
+        name: "pi-team--SMK-008--validator",
       }],
     });
-    const event = { type: "READY_FOR_REVIEW", task_id: "SMK-008", delegation_id: "EXECUTOR-SMK-008", worktree: "D:/task", implementation_notes_path: "implementation_notes/SMK-008.md" };
-    const call = makeIntercomEvent("send", "reviewer", JSON.stringify(event));
+    const event = { type: "READY_FOR_VALIDATION", task_id: "SMK-008", delegation_id: "EXECUTOR-SMK-008", worktree: "D:/task", implementation_notes_path: "implementation_notes/SMK-008.md" };
+    const call = makeIntercomEvent("send", "validator", JSON.stringify(event));
     assert.equal(await policy.onToolCall(call), undefined);
-    assert.equal(call.input.to, "pi-team--SMK-008--reviewer--fresh-launch");
+    assert.equal(call.input.to, "pi-team--SMK-008--validator--fresh-launch");
   } finally {
     if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
   }
@@ -1442,7 +1435,7 @@ test("structured peer resolution uses the canonical session ID when name is a di
 
 test("structured lifecycle handoffs accept their delegation identifier", () => {
   const event = {
-    type: "READY_FOR_REVIEW",
+    type: "READY_FOR_VALIDATION",
     task_id: "SMK-005",
     delegation_id: "EXECUTOR-SMK-005",
     worktree: "D:/Coding/Harness/Pi-team-SMK-005-minimal-peer-handoff",
@@ -1459,10 +1452,10 @@ test("structured send rejects raw envelopes, session IDs, and ambiguous peers be
   try {
     const policy = createRoleRuntimePolicy("executor", { auditDir, replyStoreDir, listPeerSessions: async () => [] });
     const raw = makeEnvelope({ id: "12121212-1212-4121-8121-121212121212", kind: "progress", subject: "raw", body: "no" });
-    const rawResult = await policy.onToolCall({ toolName: "pi_team_intercom", input: { action: "send", to: "reviewer", message: raw } });
+    const rawResult = await policy.onToolCall({ toolName: "pi_team_intercom", input: { action: "send", to: "validator", message: raw } });
     assert.ok(rawResult?.block);
     assert.match(rawResult.reason, /structured-message-invalid-json/);
-    const idResult = await policy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-012--reviewer--old", JSON.stringify({ type: "READY_FOR_REVIEW", task_id: "ISSUE-012", worktree: "D:/task", implementation_notes_path: "implementation_notes/x.md" })));
+    const idResult = await policy.onToolCall(makeIntercomEvent("send", "pi-team--ISSUE-012--validator--old", JSON.stringify({ type: "READY_FOR_VALIDATION", task_id: "ISSUE-012", worktree: "D:/task", implementation_notes_path: "implementation_notes/x.md" })));
     assert.ok(idResult?.block);
     assert.match(idResult.reason, /peer role name/);
   } finally {
