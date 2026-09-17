@@ -1,6 +1,6 @@
 ---
 name: pi-team-lead
-description: "Run Lead-owned development and research tasks through the local Pi Team with Agent Blackboard observability. Use whenever Codex is asked to use Pi Team, delegate to Researcher, Executor, or Reviewer, publish or start a Pi task, manage a persistent Executor-Reviewer pair, or coordinate acceptance, reclamation, and Blackboard archival, including when the session starts above the Pi-team repository."
+description: "Run Lead-owned development and research tasks through the local Pi Team with Agent Blackboard observability. Use whenever Codex is asked to use Pi Team, delegate to Researcher, Executor, or Validator, publish or start a Pi task, manage a persistent Executor-Validator pair, or coordinate acceptance, reclamation, and Blackboard archival, including when the session starts above the Pi-team repository."
 ---
 
 # Pi Team Lead
@@ -32,7 +32,7 @@ skills, or `AGENTS.md`.
 ## Own the task as Lead
 
 The User and Lead own architecture and product decisions. The Lead owns the
-task ID, name, objective, context, acceptance results, Executor-Reviewer
+task ID, name, objective, context, acceptance results, Executor-Validator
 pairing, acceptance, and resource reclamation. Keep decisions in `ADR/` and align
 `architect.md`, `goal.md`, and `project_state.md` when their content changes.
 
@@ -92,7 +92,7 @@ proposal is recorded; the proposal is still required for every issue.
    or aligns its Lead-owned name and description with the current contract.
 2. Run `<project-root>\pi-team.cmd validate <absolute-contract-path>`.
 3. Run `<project-root>\pi-team.cmd start <absolute-contract-path>` explicitly.
-   This manual command starts the persistent Executor-Reviewer pair; publishing
+   This manual command starts the persistent Executor-Validator pair; publishing
    the Blackboard lane alone never starts either role.
 4. For explicit continuous supervision, retain the Blackboard cursor and call
    `blackboard_watch` for new Agent activity. Compare each activity with the
@@ -120,13 +120,14 @@ For a bounded question, write the Researcher question file and run:
 ```
 
 Researcher answers the specific question and maintains `research/`. Executor
-maintains `implementation_notes/`. Reviewer writes tests, reviews code, and
-uses `failures/` only for real failures.
+maintains `implementation_notes/`. Validator writes independent black-box
+tests from the frozen contract and uses `failures/` only for real failures.
 
 ## Supervise the persistent pair
 
-Executor and Reviewer communicate directly as the Lead-assigned pair and stay
-alive through implementation, review, fixes, and re-review. A completed turn
+Executor and Validator communicate directly as the Lead-assigned pair and stay
+alive through contract negotiation, implementation, validation, fixes, and
+re-validation. A completed turn
 means the role reports its slice and becomes idle/event-driven. Do not stop and
 resume roles for normal handoff, and do not reclaim either role early.
 
@@ -138,7 +139,7 @@ When a Codex heartbeat performs a periodic check, call `blackboard_snapshot`
 with the cursor returned by the previous heartbeat. Inspect only its
 `changes`; the first call establishes a baseline from active tasks, and an
 empty `changes` list ends the heartbeat turn. Heartbeat changes are limited to
-`blocked`, `changes_requested`, `ready_for_review`, `ready_for_acceptance`, and
+`blocked`, `changes_requested`, `ready_for_validation`, `ready_for_acceptance`, and
 `completed`. If changes exist, read the current contract, diff, and artifacts
 and continue the ordinary Lead acceptance or supervision flow. Keep the new
 cursor, and retry with the old cursor if the heartbeat fails. This is
@@ -148,11 +149,11 @@ bridge.
 
 ## Accept and close
 
-When Reviewer reports `ready_for_acceptance`, treat the Reviewer result as
-evidence, then perform an independent Lead acceptance gate. If the Reviewer
+When Validator reports `ready_for_acceptance`, treat the Validator result as
+evidence, then perform an independent Lead acceptance gate. If the Validator
 projection is stale or unavailable, the Lead may proceed after recording that
-warning in the acceptance evidence. The Reviewer verifies implementation
-quality, regressions, and evidence; the Lead alone decides whether the actual changes satisfy the objective and authorizes delivery. Inspect
+warning in the acceptance evidence. The Validator verifies public behavior,
+regressions, and evidence without reading target source; the Lead alone decides whether the actual changes satisfy the objective and authorizes delivery. Inspect
 the actual diff, artifacts, and test results against the contract. As part of
 that inspection, review every changed reusable prompt and skill for
 task-specific contamination, including task IDs, Issue numbers, task-only
