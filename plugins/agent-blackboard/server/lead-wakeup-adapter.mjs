@@ -14,6 +14,10 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const WAKEUP_STATUS_DELIVERED = "delivered";
 const WAKEUP_STATUS_FAILED = "failed";
 const WAKEUP_STATUS_IN_FLIGHT = "in_flight";
+// The Harness owns one dispatcher process. This local serialization protects
+// concurrent calls arriving in that process while the Runtime Store claim
+// record remains the recovery boundary across process restarts.
+const dispatchChains = new Map();
 
 function line(value) {
   return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -265,7 +269,7 @@ async function markInFlight(projectRoot, taskId, wakeupId) {
 // notification twice. Observability: a failed wakeup keeps its `last_error`
 // and `attempts`, and a `health` summary is returned so callers (and tests)
 // can detect degraded delivery.
-export async function dispatchLeadWakeups(projectRoot, taskId, sendMessageToThread, options = {}) {
+async function dispatchLeadWakeupsOnce(projectRoot, taskId, sendMessageToThread, options = {}) {
   if (typeof sendMessageToThread !== "function") throw new TypeError("sendMessageToThread must be a function");
   const maxAttempts = Number.isFinite(options.maxAttempts) ? Math.max(1, options.maxAttempts) : DEFAULT_MAX_ATTEMPTS;
   const dedupWindowMs = Number.isFinite(options.dedup_window_ms) ? options.dedup_window_ms : DEFAULT_DEDUP_WINDOW_MS;
@@ -323,6 +327,18 @@ export async function dispatchLeadWakeups(projectRoot, taskId, sendMessageToThre
     deduplicated: eligible.filter((wakeup) => !deduped.includes(wakeup)),
     health,
   };
+}
+
+export function dispatchLeadWakeups(projectRoot, taskId, sendMessageToThread, options = {}) {
+  const key = `${projectRoot}:${taskId}`;
+  const previous = dispatchChains.get(key) || Promise.resolve();
+  const current = previous.catch(() => undefined).then(() => dispatchLeadWakeupsOnce(projectRoot, taskId, sendMessageToThread, options));
+  const settled = current.then(
+    () => { if (dispatchChains.get(key) === settled) dispatchChains.delete(key); },
+    () => { if (dispatchChains.get(key) === settled) dispatchChains.delete(key); },
+  );
+  dispatchChains.set(key, settled);
+  return current;
 }
 
 export async function acknowledgeDeliveredWakeup(projectRoot, taskId, wakeupId, deliveryId) {

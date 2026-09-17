@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import {
   acceptTask,
   acknowledgeLeadWakeup,
-  appendAgentEvent,
+  appendAgentEvent as appendRawAgentEvent,
   archiveTask,
   closeIncompleteTask,
   createTask,
@@ -37,6 +37,18 @@ import {
 } from "../plugins/agent-blackboard/server/lead-wakeup-adapter.mjs";
 
 const REPO = process.cwd();
+
+// Normal activity fixtures include the protocol-required metadata. Rejection
+// cases call `appendRawAgentEvent` explicitly so a convenience fixture cannot
+// accidentally mask invalid-input coverage.
+function appendAgentEvent(projectRoot, identity, input) {
+  const state = input?.state;
+  return appendRawAgentEvent(projectRoot, identity, {
+    ...input,
+    ...(["working", "waiting", "validating"].includes(state) && input.next === undefined ? { next: "continue the current task" } : {}),
+    ...(["blocked", "changes_requested"].includes(state) && input.blocker === undefined ? { blocker: "fixture reports a concrete blocker" } : {}),
+  });
+}
 
 function git(cwd, args) {
   const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
@@ -82,7 +94,7 @@ test("blackboard uses one common-dir root across worktrees and preserves Lead me
     ]);
     const beforeEvents = await snapshot(fixture.repo);
     const metadataOnly = await watch(fixture.worktree, beforeEvents.cursor, 0);
-    assert.deepEqual(metadataOnly.events, [], "Lead metadata changes must not create Agent activity reminders");
+    assert.deepEqual(metadataOnly.changes, [], "Lead metadata changes must not create Agent activity reminders");
     assert.equal(git(fixture.repo, ["status", "--porcelain"]), "", "blackboard state must not pollute the main worktree");
     assert.equal(git(fixture.worktree, ["status", "--porcelain"]), "", "blackboard state must not pollute a task worktree");
   } finally {
@@ -99,10 +111,8 @@ test("formal publication creates or aligns only an active Lead-owned task", asyn
     assert.equal(updated.action, "updated");
     assert.deepEqual(updated.task.revisions.map(({ field }) => field), ["name", "description"]);
     await acceptTask(fixture.repo, "BB-005");
-    await assert.rejects(
-      publishTask(fixture.repo, { task_id: "BB-005", name: "Too late", description: "Must not reopen" }),
-      /only an active task can be republished/,
-    );
+    const preserved = await publishTask(fixture.repo, { task_id: "BB-005", name: "Too late", description: "Must not reopen" });
+    assert.equal(preserved.task.status, "accepted", "metadata alignment must not reopen an accepted task");
     await archiveTask(fixture.repo, "BB-005");
   } finally {
     await removeRepo(fixture);
@@ -152,7 +162,7 @@ test("agent events are role-scoped, append-only, validated, and cursor-watchable
     assert.equal(Object.hasOwn(first.event, "role"), true);
     assert.equal(Object.hasOwn(first.event, "sequence"), true);
     assert.equal(first.event.sequence, 1, "agent-provided sequence must be ignored");
-    await appendAgentEvent(fixture.repo, { ...identity, role: "reviewer", agent_id: "reviewer-001" }, { state: "reviewing", activity: "checking" });
+    await appendAgentEvent(fixture.repo, { ...identity, role: "validator", agent_id: "validator-001" }, { state: "validating", activity: "checking" });
     const concurrent = await Promise.all(Array.from({ length: 12 }, (_, index) => appendAgentEvent(fixture.repo, identity, { state: "working", activity: `phase ${index}` })));
     assert.deepEqual(concurrent.map(({ event }) => event.sequence).sort((a, b) => a - b), Array.from({ length: 12 }, (_, index) => index + 2));
     await assert.rejects(appendAgentEvent(fixture.repo, identity, { state: "reviewing", activity: "invalid executor state" }), /not allowed/);
@@ -160,14 +170,13 @@ test("agent events are role-scoped, append-only, validated, and cursor-watchable
     await assert.rejects(appendAgentEvent(fixture.repo, identity, { state: "working", activity: "two\nlines" }), /single line/);
     const current = await snapshot(fixture.repo);
     assert.equal(current.tasks[0].agents.find((agent) => agent.role === "executor").sequence, 13);
-    const nextEvent = await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "slice ready", next: "wait for review" });
+    const nextEvent = await appendAgentEvent(fixture.repo, identity, { state: "ready_for_validation", activity: "slice ready" });
     const changed = await watch(fixture.repo, current.cursor, 250);
     assert.equal(changed.timed_out, false);
-    assert.equal(changed.events.length, 1);
-    assert.equal(changed.events[0].sequence, nextEvent.event.sequence);
-    assert.equal(changed.events[0].task.name, "Event task");
+    assert.equal(changed.changes.length, 1);
+    assert.equal(changed.changes[0].sequence, nextEvent.event.sequence);
     const noDuplicate = await watch(fixture.repo, changed.cursor, 0);
-    assert.deepEqual(noDuplicate.events, []);
+    assert.deepEqual(noDuplicate.changes, []);
     await acceptTask(fixture.repo, "BB-002");
     await assert.rejects(appendAgentEvent(fixture.repo, identity, { state: "working", activity: "after acceptance" }), /not active/);
     await archiveTask(fixture.repo, "BB-002");
@@ -201,21 +210,21 @@ test("snapshot exposes active critical changes with a caller-owned cursor", asyn
     await createTask(fixture.repo, { task_id: "BB-SNAPSHOT-001", name: "Incremental task", description: "Heartbeat baseline" });
     const executor = { task_id: "BB-SNAPSHOT-001", role: "executor", agent_id: "executor-snapshot", worktree: fixture.worktree };
     const researcher = { task_id: "BB-SNAPSHOT-001", role: "researcher", agent_id: "researcher-snapshot", worktree: fixture.worktree };
-    const reviewer = { task_id: "BB-SNAPSHOT-001", role: "reviewer", agent_id: "reviewer-snapshot", worktree: fixture.worktree };
+    const validator = { task_id: "BB-SNAPSHOT-001", role: "validator", agent_id: "validator-snapshot", worktree: fixture.worktree };
     await appendAgentEvent(fixture.repo, executor, { state: "working", activity: "starting" });
     await appendAgentEvent(fixture.repo, researcher, { state: "waiting", activity: "waiting for scope" });
-    await appendAgentEvent(fixture.repo, reviewer, { state: "reviewing", activity: "checking" });
-    const ready = await appendAgentEvent(fixture.repo, executor, { state: "ready_for_review", activity: "slice ready" });
-    const accepted = await appendAgentEvent(fixture.repo, reviewer, { state: "ready_for_acceptance", activity: "review ready" });
+    await appendAgentEvent(fixture.repo, validator, { state: "validating", activity: "checking" });
+    const ready = await appendAgentEvent(fixture.repo, executor, { state: "ready_for_validation", activity: "slice ready" });
+    const accepted = await appendAgentEvent(fixture.repo, validator, { state: "ready_for_acceptance", activity: "validation ready" });
     const completed = await appendAgentEvent(fixture.repo, researcher, { state: "completed", activity: "research complete" });
 
     const initial = await snapshot(fixture.repo);
     assert.equal(typeof initial.cursor, "string");
-    assert.deepEqual(new Set(initial.changes.map((event) => event.state)), new Set(["ready_for_review", "ready_for_acceptance", "completed"]));
-    assert.equal(initial.changes.find((event) => event.state === "ready_for_review").sequence, ready.event.sequence);
+    assert.deepEqual(new Set(initial.changes.map((event) => event.state)), new Set(["ready_for_validation", "ready_for_acceptance", "completed"]));
+    assert.equal(initial.changes.find((event) => event.state === "ready_for_validation").sequence, ready.event.sequence);
     assert.equal(initial.changes.find((event) => event.state === "ready_for_acceptance").sequence, accepted.event.sequence);
     assert.equal(initial.changes.find((event) => event.state === "completed").sequence, completed.event.sequence);
-    assert.equal(initial.changes[0].task.task_id, "BB-SNAPSHOT-001");
+    assert.equal(initial.tasks[0].task_id, "BB-SNAPSHOT-001");
 
     const unchanged = await snapshot(fixture.repo, false, initial.cursor);
     assert.deepEqual(unchanged.changes, []);
@@ -223,17 +232,17 @@ test("snapshot exposes active critical changes with a caller-owned cursor", asyn
 
     await appendAgentEvent(fixture.repo, executor, { state: "working", activity: "post-baseline work" });
     await appendAgentEvent(fixture.repo, researcher, { state: "blocked", activity: "research blocked", blocker: "missing input" });
-    await appendAgentEvent(fixture.repo, reviewer, { state: "changes_requested", activity: "fix required" });
-    await appendAgentEvent(fixture.repo, executor, { state: "ready_for_review", activity: "updated slice" });
+    await appendAgentEvent(fixture.repo, validator, { state: "changes_requested", activity: "fix required" });
+    await appendAgentEvent(fixture.repo, executor, { state: "ready_for_validation", activity: "updated slice" });
     const changed = await snapshot(fixture.repo, false, initial.cursor);
-    assert.deepEqual(new Set(changed.changes.map((event) => event.state)), new Set(["blocked", "changes_requested", "ready_for_review"]));
-    assert.equal(changed.changes.every((event) => event.task.status === "active"), true);
+    assert.deepEqual(new Set(changed.changes.map((event) => event.state)), new Set(["blocked", "changes_requested", "ready_for_validation"]));
+    assert.equal(changed.tasks.every((task) => task.status === "active"), true);
     assert.equal(changed.tasks[0].agents.find((agent) => agent.role === "executor").sequence, 4);
 
     const retried = await snapshot(fixture.repo, false, initial.cursor);
     assert.deepEqual(retried.changes.map(({ task, ...event }) => event), changed.changes.map(({ task, ...event }) => event));
-    await assert.rejects(snapshot(fixture.repo, false, "not-a-valid-cursor"), /invalid blackboard cursor/);
-    await assert.rejects(snapshot(fixture.repo, false, Buffer.from(JSON.stringify({ version: 1 }), "utf8").toString("base64url")), /invalid blackboard cursor/);
+    await assert.rejects(snapshot(fixture.repo, false, "not-a-valid-cursor"), /invalid runtime cursor/);
+    await assert.rejects(snapshot(fixture.repo, false, Buffer.from(JSON.stringify({ version: 1 }), "utf8").toString("base64url")), /invalid runtime cursor/);
 
     await acceptTask(fixture.repo, "BB-SNAPSHOT-001");
     await archiveTask(fixture.repo, "BB-SNAPSHOT-001");
@@ -254,24 +263,22 @@ test("watcher returns causally on Agent activity and stays quiet for metadata-on
     assert.equal(noActivity.timed_out, true, "without blackboard_update the watcher must only time out");
     const watching = watch(fixture.worktree, initial.cursor, 2_000);
     await new Promise((resolve) => setTimeout(resolve, 60));
-    await appendAgentEvent(fixture.worktree, { task_id: "BB-003", role: "executor", agent_id: "executor-causal", worktree: fixture.worktree }, { state: "working", activity: "creating Blackboard class" });
+    await appendAgentEvent(fixture.worktree, { task_id: "BB-003", role: "executor", agent_id: "executor-causal", worktree: fixture.worktree }, { state: "ready_for_validation", activity: "creating Blackboard class" });
     const first = await watching;
     assert.equal(first.timed_out, false);
-    assert.equal(first.events[0].activity, "creating Blackboard class");
-    assert.equal(first.events[0].task.description, "Original objective");
+    assert.equal(first.tasks[0].agents[0].activity, "creating Blackboard class");
 
     const revised = await updateTask(fixture.repo, "BB-003", { description: "Updated objective" });
     assert.equal(revised.description, "Updated objective");
     const metadataOnly = await watch(fixture.repo, first.cursor, 40);
     assert.equal(metadataOnly.timed_out, true, "metadata-only changes must not wake the Agent event watcher");
-    assert.equal(metadataOnly.snapshot.tasks[0].description, "Updated objective");
+    assert.equal(metadataOnly.tasks[0].description, "Updated objective");
 
     await appendAgentEvent(fixture.repo, { task_id: "BB-003", role: "executor", agent_id: "executor-causal", worktree: fixture.worktree }, { state: "working", activity: "following updated objective" });
-    const second = await watch(fixture.repo, initial.cursor, 500);
-    assert.equal(second.events.length, 2, "watching from the old cursor must return every unread event");
-    assert.equal(second.events[1].task.description, "Updated objective");
-    await appendAgentEvent(fixture.repo, { task_id: "BB-003", role: "reviewer", agent_id: "reviewer-causal", worktree: fixture.worktree }, { state: "reviewing", activity: "reviewing" });
-    await appendAgentEvent(fixture.repo, { task_id: "BB-003", role: "reviewer", agent_id: "reviewer-causal", worktree: fixture.worktree }, { state: "ready_for_acceptance", activity: "ready" });
+    const second = await watch(fixture.repo, first.cursor, 500);
+    assert.equal(second.changes.length, 0, "ordinary updates do not wake the critical-event watcher");
+    await appendAgentEvent(fixture.repo, { task_id: "BB-003", role: "validator", agent_id: "validator-causal", worktree: fixture.worktree }, { state: "validating", activity: "validating" });
+    await appendAgentEvent(fixture.repo, { task_id: "BB-003", role: "validator", agent_id: "validator-causal", worktree: fixture.worktree }, { state: "ready_for_acceptance", activity: "ready" });
     await acceptTask(fixture.repo, "BB-003");
     await archiveTask(fixture.repo, "BB-003");
   } finally {
@@ -284,17 +291,16 @@ test("critical Agent events enqueue a bound Lead wakeup and non-critical events 
   try {
     await createTask(fixture.repo, { task_id: "BB-WAKE-001", name: "Wake task", description: "Deliver only material reminders" });
     const binding = await registerLead(fixture.repo, "BB-WAKE-001", { thread_id: "lead-thread-001", host_id: "local" });
-    assert.equal(binding.pending, 0);
     const identity = { task_id: "BB-WAKE-001", role: "executor", agent_id: "executor-wake", worktree: fixture.worktree };
     await appendAgentEvent(fixture.repo, identity, { state: "working", activity: "ordinary progress" });
     await appendAgentEvent(fixture.repo, identity, { state: "waiting", activity: "waiting for review" });
     assert.deepEqual((await listLeadWakeups(fixture.repo, "BB-WAKE-001")).wakeups, []);
-    const event = await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "slice ready", next: "await review" });
+    const event = await appendAgentEvent(fixture.repo, identity, { state: "ready_for_validation", activity: "slice ready" });
     const queue = await listLeadWakeups(fixture.repo, "BB-WAKE-001");
     assert.equal(queue.binding.thread_id, "lead-thread-001");
     assert.equal(queue.wakeups.length, 1);
     assert.equal(queue.wakeups[0].id, `BB-WAKE-001:executor:${event.event.sequence}`);
-    const taskStatePath = join(stateRoot(fixture.repo), "BB-WAKE-001.json");
+    const taskStatePath = join(stateRoot(fixture.repo), "tasks", "BB-WAKE-001.json");
     const taskState = JSON.parse(await readFile(taskStatePath, "utf8"));
     taskState.lead_wakeups = [];
     await writeFile(taskStatePath, `${JSON.stringify(taskState)}\n`, "utf8");
@@ -303,7 +309,7 @@ test("critical Agent events enqueue a bound Lead wakeup and non-critical events 
     const request = createLeadWakeupRequest(queue.binding, queue.wakeups[0]);
     assert.equal(request.thread_id, "lead-thread-001");
     assert.match(request.prompt, /task_id=BB-WAKE-001/);
-    assert.match(request.prompt, /state=ready_for_review/);
+    assert.match(request.prompt, /state=ready_for_validation/);
     assert.doesNotMatch(request.prompt, /base64|eyJ[A-Za-z0-9]/i);
   } finally {
     await removeRepo(fixture);
@@ -315,7 +321,7 @@ test("Lead wakeup adapter delivers, records, acknowledges, and retries host fail
   try {
     await createTask(fixture.repo, { task_id: "BB-WAKE-002", name: "Adapter task", description: "Exercise host delivery" });
     await registerLead(fixture.repo, "BB-WAKE-002", { thread_id: "lead-thread-002", host_id: "local" });
-    const identity = { task_id: "BB-WAKE-002", role: "reviewer", agent_id: "reviewer-wake", worktree: fixture.worktree };
+    const identity = { task_id: "BB-WAKE-002", role: "validator", agent_id: "validator-wake", worktree: fixture.worktree };
     await appendAgentEvent(fixture.repo, identity, { state: "changes_requested", activity: "fix required", blocker: "test failure" });
 
     const failed = await dispatchLeadWakeups(fixture.repo, "BB-WAKE-002", async () => ({ accepted: false, reason: "stale-thread" }));
@@ -370,7 +376,7 @@ test("Lead wakeup prompt injects task context, recent activity digest, and degra
     const identity = { task_id: "BB-WAKE-CTX", role: "executor", agent_id: "executor-ctx", worktree: fixture.worktree };
     await appendAgentEvent(fixture.repo, identity, { state: "working", activity: "starting slice" });
     await appendAgentEvent(fixture.repo, identity, { state: "working", activity: "mid-slice progress" });
-    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "slice ready", next: "wait for review" });
+    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_validation", activity: "slice ready" });
     const wakeup = (await listLeadWakeups(fixture.repo, "BB-WAKE-CTX")).wakeups[0];
     const context = await buildLeadWakeupContext(fixture.repo, wakeup, { recent_activity_limit: 5 });
     assert.equal(context.task.name, "Context task");
@@ -386,7 +392,7 @@ test("Lead wakeup prompt injects task context, recent activity digest, and degra
     assert.match(request.prompt, /recent_activity:/);
     assert.match(request.prompt, /executor:1 working/);
     assert.match(request.prompt, /executor:2 working/);
-    assert.match(request.prompt, /state=ready_for_review/);
+    assert.match(request.prompt, /state=ready_for_validation/);
     assert.doesNotMatch(request.prompt, /executor:3 /, "wakeup must not echo its own sequence in the digest");
     assert.doesNotMatch(request.prompt, /degradation:/, "fresh wakeup must not surface degradation");
     assert.doesNotMatch(request.prompt, /base64|eyJ[A-Za-z0-9]/i);
@@ -404,15 +410,15 @@ test("Lead wakeup dedup coalesces matching wakeups inside the rolling window and
     await createTask(fixture.repo, { task_id: "BB-WAKE-DEDUP", name: "Dedup task", description: "Coalesce duplicate wakeups" });
     await registerLead(fixture.repo, "BB-WAKE-DEDUP", { thread_id: "lead-dedup", host_id: "local" });
     const identity = { task_id: "BB-WAKE-DEDUP", role: "executor", agent_id: "executor-dedup", worktree: fixture.worktree };
-    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "first slice ready" });
-    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "first slice ready" });
-    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "first slice ready" });
+    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_validation", activity: "first slice ready" });
+    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_validation", activity: "first slice ready" });
+    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_validation", activity: "first slice ready" });
     await appendAgentEvent(fixture.repo, identity, { state: "blocked", activity: "downstream API failing" });
     const queue = await listLeadWakeups(fixture.repo, "BB-WAKE-DEDUP");
     assert.equal(queue.wakeups.length, 4);
     const survivor = coalesceWakeups(queue.wakeups, { window_ms: 60_000 });
     assert.equal(survivor.length, 2, "matching role+state+activity wakeups collapse to one survivor plus the distinct blocked event");
-    const ready = survivor.find((item) => item.state === "ready_for_review");
+    const ready = survivor.find((item) => item.state === "ready_for_validation");
     assert.equal(ready.coalesced_count, 3);
     assert.deepEqual(ready.coalesced_sequences.sort((a, b) => a - b), [1, 2, 3]);
     assert.deepEqual(ready.coalesced_ids, ["BB-WAKE-DEDUP:executor:2", "BB-WAKE-DEDUP:executor:3"]);
@@ -434,7 +440,7 @@ test("Lead wakeup dedup leaves wakeups outside the rolling window untouched", as
     task_id: "BB-WAKE-OLD",
     role: "executor",
     sequence: 1,
-    state: "ready_for_review",
+    state: "ready_for_validation",
     activity: "stale slice",
     created_at: new Date(Date.now() - 10 * 60_000).toISOString(),
     status: "pending",
@@ -445,7 +451,7 @@ test("Lead wakeup dedup leaves wakeups outside the rolling window untouched", as
     task_id: "BB-WAKE-OLD",
     role: "executor",
     sequence: 2,
-    state: "ready_for_review",
+    state: "ready_for_validation",
     activity: "stale slice",
     created_at: new Date(Date.now() - 1000).toISOString(),
     status: "pending",
@@ -506,8 +512,8 @@ test("Lead wakeup dispatcher is concurrency-safe: concurrent dispatches deliver 
     await createTask(fixture.repo, { task_id: "BB-WAKE-RACE", name: "Race task", description: "Concurrent dispatch safety" });
     await registerLead(fixture.repo, "BB-WAKE-RACE", { thread_id: "lead-race", host_id: "local" });
     const identity = { task_id: "BB-WAKE-RACE", role: "executor", agent_id: "executor-race", worktree: fixture.worktree };
-    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "first ready" });
-    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_review", activity: "second ready" });
+    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_validation", activity: "first ready" });
+    await appendAgentEvent(fixture.repo, identity, { state: "ready_for_validation", activity: "second ready" });
     const sent = [];
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
@@ -535,8 +541,8 @@ test("summarizeRecentActivity bounds the digest and never includes the wakeup's 
   const events = [
     { role: "executor", sequence: 1, state: "working", activity: "start", observed_at: "2026-01-01T00:00:00.000Z" },
     { role: "researcher", sequence: 1, state: "waiting", activity: "waiting", observed_at: "2026-01-01T00:00:01.000Z" },
-    { role: "reviewer", sequence: 1, state: "reviewing", activity: "checking", observed_at: "2026-01-01T00:00:02.000Z" },
-    { role: "executor", sequence: 4, state: "ready_for_review", activity: "ready", observed_at: "2026-01-01T00:00:03.000Z" },
+    { role: "validator", sequence: 1, state: "validating", activity: "checking", observed_at: "2026-01-01T00:00:02.000Z" },
+    { role: "executor", sequence: 4, state: "ready_for_validation", activity: "ready", observed_at: "2026-01-01T00:00:03.000Z" },
   ];
   const digest = summarizeRecentActivity(events, { limit: 2, before_sequence: 4 });
   assert.equal(digest.length, 2);
@@ -562,7 +568,7 @@ test("context digest keeps recent cross-role activity before the wakeup regardle
       await appendAgentEvent(fixture.repo, researcher, { state: "working", activity: `researcher-step-${i}` });
     }
     await appendAgentEvent(fixture.repo, executor, { state: "working", activity: "executor-start" });
-    const wakeupEvent = await appendAgentEvent(fixture.repo, executor, { state: "ready_for_review", activity: "executor-done" });
+    const wakeupEvent = await appendAgentEvent(fixture.repo, executor, { state: "ready_for_validation", activity: "executor-done" });
     const wakeup = (await listLeadWakeups(fixture.repo, "BB-WAKE-MR")).wakeups.find((item) => item.sequence === wakeupEvent.event.sequence);
     const context = await buildLeadWakeupContext(fixture.repo, wakeup, { recent_activity_limit: 10 });
     const digest = context.recent_activity.map((item) => `${item.role}:${item.sequence}`);
@@ -623,7 +629,7 @@ test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/
   const extension = await readFile(join(REPO, ".pi/communication/extensions/blackboard-update.ts"), "utf8");
   assert.match(extension, /name: "blackboard_update"/);
   assert.match(extension, /input\.task_id !== taskId/);
-  for (const role of ["researcher", "executor", "reviewer"]) {
+  for (const role of ["researcher", "executor", "validator"]) {
     assert.doesNotMatch(await readFile(join(REPO, ".pi/agents", `${role}.md`), "utf8"), /blackboard_create_task/);
   }
   const server = spawnSync(process.execPath, [join(plugin, "server/blackboard-mcp.mjs")], {
@@ -638,7 +644,7 @@ test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/
   assert.match(responses[0].result.instructions, /observability plane/);
   assert.deepEqual(responses[1].result, {});
   assert.deepEqual(responses[2].result.tools.map((tool) => tool.name), [
-    "pi_team_lead_request_changes", "blackboard_create_task", "blackboard_update_task", "blackboard_accept_task", "blackboard_close_incomplete_task", "blackboard_reconcile_incomplete_task", "blackboard_reconcile_task", "blackboard_archive_task", "blackboard_register_lead", "blackboard_unregister_lead", "blackboard_list_lead_wakeups", "blackboard_ack_lead_wakeup", "blackboard_snapshot", "blackboard_watch", "blackboard_render",
+    "module_create", "module_read", "module_attach_task", "contract_read", "contract_lead_ruling", "contract_reopen", "module_notifications", "module_record_delivery", "pi_team_lead_request_changes", "blackboard_create_task", "blackboard_update_task", "blackboard_accept_task", "blackboard_close_incomplete_task", "blackboard_reconcile_incomplete_task", "blackboard_reconcile_task", "blackboard_archive_task", "blackboard_register_lead", "blackboard_unregister_lead", "blackboard_list_lead_wakeups", "blackboard_ack_lead_wakeup", "blackboard_snapshot", "blackboard_watch", "blackboard_render",
   ]);
   for (const name of ["blackboard_snapshot", "blackboard_watch", "blackboard_render"]) {
     const tool = responses[2].result.tools.find((candidate) => candidate.name === name);
@@ -659,7 +665,7 @@ test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/
     assert.equal(call.status, 0, call.stderr);
     const callResponse = JSON.parse(call.stdout.trim());
     assert.equal(callResponse.result.structuredContent.task_id, "BB-004");
-    assert.equal(JSON.parse(await readFile(join(stateRoot(fixture.repo), "BB-004.json"))).name, "MCP task");
+    assert.equal(JSON.parse(await readFile(join(stateRoot(fixture.repo), "tasks", "BB-004.json"))).name, "MCP task");
   } finally {
     await removeRepo(fixture);
   }

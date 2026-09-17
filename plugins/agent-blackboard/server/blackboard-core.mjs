@@ -3,7 +3,7 @@
 import { readFile } from "node:fs/promises";
 import {
   ackWakeup, appendAgentEvent, appendAudit, createTask, ensureStore, listWakeups,
-  migrateRuntime, readTask, registerSession, resolveGitCommonDir, snapshot, stateRoot,
+  claimWakeup, migrateRuntime, readTask, registerSession, resolveGitCommonDir, snapshot, stateRoot,
   transitionTask, watch, writeCheckpoint, __paths,
 } from "../../../.pi/runtime/runtime-store.mjs";
 import { ROLE_STATES, TASK_STATUSES, LEAD_WAKE_STATES } from "../../../.pi/runtime/runtime-schema.mjs";
@@ -47,16 +47,23 @@ export async function unregisterLead(projectRoot, taskId, input = {}) {
   return transitionTask(projectRoot, taskId, task.status, { lead_binding: null });
 }
 export async function listLeadWakeups(projectRoot, taskId) {
-  const task = await readTask(projectRoot, taskId); const all = await listWakeups(projectRoot, taskId, { pending: false }); const wakeups = all.filter((item) => item.status !== "acked");
+  const task = await readTask(projectRoot, taskId); const all = await listWakeups(projectRoot, taskId, { pending: false });
+  const root = await ensureStore(projectRoot); const audit = (await readFile(__paths.auditPath(root, taskId), "utf8").catch(() => "")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  const wakeups = all.filter((item) => item.status !== "acked").map((item) => {
+    const rows = audit.filter((row) => row.wakeup_id === item.id);
+    const claims = rows.filter((row) => row.kind === "wakeup_claim");
+    const delivery = rows.filter((row) => row.kind === "wakeup_delivery").at(-1);
+    return { ...item, attempts: Math.max(claims.length, rows.filter((row) => row.kind === "wakeup_delivery").length), status: delivery ? (delivery.delivered ? "delivered" : "failed") : "pending", last_error: delivery?.error, last_attempt_at: delivery?.recorded_at || claims.at(-1)?.recorded_at };
+  });
   return { task_id: taskId, name: task.name, description: task.description, binding: task.lead_binding || null, wakeups, pending: wakeups.length };
 }
-export async function acknowledgeLeadWakeup(projectRoot, taskId, wakeupId, input = {}) { return ackWakeup(projectRoot, taskId, wakeupId, { role: input.role || "lead", agent_id: input.delivery_id || "lead" }); }
+export async function acknowledgeLeadWakeup(projectRoot, taskId, wakeupId, input = {}) { const root = await ensureStore(projectRoot); const audit = (await readFile(__paths.auditPath(root, taskId), "utf8").catch(() => "")).split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line)); const delivery = audit.filter((row) => row.kind === "wakeup_delivery" && row.wakeup_id === wakeupId && row.delivered).at(-1); if (!delivery) throw new Error("Lead wakeup has not been delivered"); if (input.delivery_id && input.delivery_id !== delivery.delivery_id) throw new Error("delivery does not match Lead wakeup"); return ackWakeup(projectRoot, taskId, wakeupId, { role: input.role || "lead", agent_id: input.delivery_id || "lead" }); }
 export async function claimLeadWakeup(projectRoot, taskId, wakeupId, options = {}) {
   const queue = await listLeadWakeups(projectRoot, taskId); const wakeup = queue.wakeups.find((item) => item.id === wakeupId); if (!wakeup) return { claimed: false, reason: "not-pending" };
   const maxAttempts = options.maxAttempts ?? 3; if ((wakeup.attempts || 0) >= maxAttempts) return { claimed: false, reason: "attempt-limit", wakeup };
-  await appendAudit(projectRoot, taskId, { kind: "wakeup_claim", wakeup_id: wakeupId, attempt: (wakeup.attempts || 0) + 1 }); return { claimed: true, wakeup: { ...wakeup, attempts: (wakeup.attempts || 0) + 1, status: "in_flight" } };
+  const claim = await claimWakeup(projectRoot, taskId, wakeupId, maxAttempts); if (!claim.claimed) return { claimed: false, reason: claim.reason, wakeup }; return { claimed: true, wakeup: { ...wakeup, attempts: claim.attempt, status: "in_flight" } };
 }
-export async function recordLeadWakeupDelivery(projectRoot, taskId, wakeupId, input) { return appendAudit(projectRoot, taskId, { kind: "wakeup_delivery", wakeup_id: wakeupId, delivered: Boolean(input.delivered), error: input.error, delivery_id: input.delivery_id }); }
+export async function recordLeadWakeupDelivery(projectRoot, taskId, wakeupId, input) { await appendAudit(projectRoot, taskId, { kind: "wakeup_delivery", wakeup_id: wakeupId, delivered: Boolean(input.delivered), error: input.error, delivery_id: input.delivery_id }); const queue = await listLeadWakeups(projectRoot, taskId); const wakeup = queue.wakeups.find((item) => item.id === wakeupId); if (!wakeup) throw new Error("unknown Lead wakeup"); return { wakeup }; }
 export async function listAgentEvents(projectRoot, taskId, options = {}) {
   const root = await ensureStore(projectRoot); const events = [];
   for (const role of Object.keys(ROLE_STATES)) { const text = await readFile(__paths.eventPath(root, taskId, role), "utf8").catch(() => ""); for (const line of text.split(/\r?\n/).filter(Boolean)) events.push(JSON.parse(line)); }

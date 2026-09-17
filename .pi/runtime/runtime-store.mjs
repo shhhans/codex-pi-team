@@ -144,6 +144,20 @@ export async function ackWakeup(projectRoot, taskId, wakeupId, identity = {}) {
   const root = await ensureStore(projectRoot); await loadTask(root, taskId); ensureLine(wakeupId, "wakeup_id", 400, true);
   return withLock(lockPath(root, `audit-${taskId}`), () => appendAuditUnlocked(root, taskId, { kind: "wakeup_ack", wakeup_id: wakeupId, role: identity.role, agent_id: identity.agent_id }));
 }
+export async function claimWakeup(projectRoot, taskId, wakeupId, maxAttempts = 3) {
+  const root = await ensureStore(projectRoot); await loadTask(root, taskId); ensureLine(wakeupId, "wakeup_id", 400, true);
+  return withLock(lockPath(root, `audit-${taskId}`), async () => {
+    const records = await audits(root, taskId); const relevant = records.filter((record) => record.wakeup_id === wakeupId);
+    if (relevant.some((record) => record.kind === "wakeup_ack")) return { claimed: false, reason: "acked" };
+    if (relevant.some((record) => record.kind === "wakeup_delivery" && record.delivered)) return { claimed: false, reason: "delivered" };
+    const claims = relevant.filter((record) => record.kind === "wakeup_claim"); const deliveries = relevant.filter((record) => record.kind === "wakeup_delivery");
+    if (claims.length > deliveries.length) return { claimed: false, reason: "in_flight" };
+    const attempts = Math.max(claims.length, deliveries.length);
+    if (attempts >= maxAttempts) return { claimed: false, reason: "attempt-limit" };
+    const record = await appendAuditUnlocked(root, taskId, { kind: "wakeup_claim", wakeup_id: wakeupId, attempt: attempts + 1 });
+    return { claimed: true, attempt: attempts + 1, record };
+  });
+}
 
 export async function writeCheckpoint(projectRoot, taskId, role, checkpoint) {
   const root = await ensureStore(projectRoot); ensureTaskId(taskId); ensureRole(role); const id = ensureLine(checkpoint?.checkpoint_id || `${Date.now()}-${randomUUID()}`, "checkpoint_id", 240, true);
@@ -158,7 +172,7 @@ export async function snapshot(projectRoot = process.cwd(), includeArchived = fa
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue; const task = await readJson(join(root, "tasks", entry.name)); if (!includeArchived && task.status === "archived") continue; if (!TASK_STATUSES.includes(task.status)) continue;
     tasks.push({ ...task, agents: Object.entries(byTask.get(task.task_id) || {}).map(([role, event]) => ({ role, ...event })) });
   }
-  tasks.sort((a, b) => a.task_id.localeCompare(b.task_id)); const seen = decodeCursor(cursor); const changes = items.filter(({ key, event }) => event.sequence > Number(seen[key] || 0)).filter(({ event }) => LEAD_WAKE_STATES.includes(event.state) && tasks.some((task) => task.task_id === event.task_id)).map(({ event }) => event);
+  tasks.sort((a, b) => a.task_id.localeCompare(b.task_id)); const seen = decodeCursor(cursor); const changes = items.filter(({ key, event }) => event.sequence > Number(seen[key] || 0)).filter(({ event }) => LEAD_WAKE_STATES.includes(event.state) && tasks.some((task) => task.task_id === event.task_id && task.status === "active")).map(({ event }) => event);
   const files = { ...seen }; for (const { key, event } of items) files[key] = Math.max(Number(files[key] || 0), event.sequence);
   return { version: 1, state_root: root, tasks, changes, cursor: encodeCursor(files) };
 }
