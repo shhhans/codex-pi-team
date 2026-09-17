@@ -1,0 +1,14 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { contractAck, contractComment, contractRead, contractSubmit, createModule, leadRule, listNotifications } from "../.pi/runtime/module-store.mjs";
+
+async function fixture() { const repo = await mkdtemp(join(tmpdir(), "module-contract-")); execFileSync("git", ["init", "-q", repo]); execFileSync("git", ["-C", repo, "config", "user.email", "test@example.invalid"]); execFileSync("git", ["-C", repo, "config", "user.name", "Test"]); return repo; }
+const body = (id) => ({ module: { id, name: "Example" }, data_flow: { request: { from: "client", to: "service" } }, public_interfaces: { execute: { input: { type: "string" }, output: { type: "string" } } } });
+
+test("Validator cannot mutate body, stale ACK is refused, and two ACKs freeze", async () => { const repo = await fixture(); try { await createModule(repo, { module_id: "MOD-1", name: "Example", contract: body("MOD-1") }); await assert.rejects(() => contractSubmit(repo, "MOD-1", { role: "validator" }, { fields: { "module.name": "bad" }, explanation: "bad" }), /only Executor/); const first = (await contractRead(repo, "MOD-1")).body; await contractSubmit(repo, "MOD-1", { role: "executor" }, { fields: { "public_interfaces.execute.behavior": "echo" }, explanation: "define behavior" }); await assert.rejects(() => contractAck(repo, "MOD-1", { role: "validator" }, first), /stale/); const current = (await contractRead(repo, "MOD-1")).body; await contractAck(repo, "MOD-1", { role: "executor" }, current); const result = await contractAck(repo, "MOD-1", { role: "validator" }, current); assert.equal(result.contract.frozen, true); } finally { await rm(repo, { recursive: true, force: true }); } });
+
+test("comments notify the peer and limit pauses negotiation for Lead", async () => { const repo = await fixture(); try { await createModule(repo, { module_id: "MOD-2", name: "Example", contract: body("MOD-2") }); await contractComment(repo, "MOD-2", { role: "validator" }, { field: "public_interfaces.execute", comment: "state error semantics" }); assert.equal((await listNotifications(repo, "MOD-2")).at(-1).recipient, "executor"); for (let i = 0; i < 29; i += 1) await contractComment(repo, "MOD-2", { role: "executor" }, { field: "module", comment: `reply ${i}` }); await assert.rejects(() => contractComment(repo, "MOD-2", { role: "validator" }, { field: "module", comment: "one more" }), /limit reached/); await leadRule(repo, "MOD-2", "define errors as typed result"); assert.equal((await contractRead(repo, "MOD-2")).lead_ruling_required, false); } finally { await rm(repo, { recursive: true, force: true }); } });

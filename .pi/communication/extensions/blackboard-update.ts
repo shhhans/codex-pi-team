@@ -80,10 +80,10 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("tool_call", async (event) => {
+    // State updates are observability only. Remind at the configured interval,
+    // but never block a role from using its tools.
     const result = gate.evaluate(event);
-    if (result.block) {
-      return { block: true, reason: result.reason };
-    }
+    if (result.remind) return { message: result.reason };
     return undefined;
   });
 }

@@ -1,7 +1,25 @@
 # Pi Team Entrypoint
 
 This repository runs a three-role Pi team from isolated Git worktrees. Codex is
-the Lead; Pi supplies the Researcher, Executor, and Reviewer sessions.
+the Lead; Pi supplies the Researcher, Executor, and Validator sessions.
+
+## Module collaboration (v1)
+
+The active path stores long-lived module contracts, pair session records,
+debate trace, notifications, summaries, and compaction evidence under the
+shared Runtime Store (`<git-common-dir>/pi-team-runtime/v1`). A module permits
+one active task and one Executor/Validator pair. Its contract has one current
+JSON body with stable `data_flow` and `public_interfaces` keys; Executor alone
+can edit it, both roles comment, and both must ACK the complete current body.
+The second ACK freezes it. A body change clears ACKs; after 30 submit/comment
+actions negotiation pauses for a Lead ruling. Notifications are persisted in
+the same locked update as the associated contract event and can be retried by
+one dispatcher without counting as a negotiation action.
+
+Validator's source isolation is a prompt requirement, not a sandbox claim.
+Lead acceptance remains independent of tests and Blackboard state. Each role
+must save its own summary before its compact is recorded; failed compact leaves
+the session and task worktree intact for retry.
 
 ## Repository workflow
 

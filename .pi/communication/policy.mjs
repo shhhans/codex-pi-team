@@ -1,13 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 
-export const ROLES = ["lead", "researcher", "executor", "reviewer"];
+export const ROLES = ["lead", "researcher", "executor", "validator"];
 export const BOUNDED_PEERS = new Map([
   ["researcher", new Set(["executor"])],
-  ["executor", new Set(["researcher", "reviewer"])],
-  ["reviewer", new Set(["executor"])],
+  ["executor", new Set(["researcher", "validator"])],
+  ["validator", new Set(["executor"])],
   ["lead", new Set()],
 ]);
-export const ACTIVE_ROLES = new Set(["researcher", "executor", "reviewer"]);
+export const ACTIVE_ROLES = new Set(["researcher", "executor", "validator"]);
 export const LEGACY_ROLES = new Set(["architect", "critic", "engineer"]);
 export const KINDS = new Set(["request", "reply", "error", "progress"]);
 export const SUPERVISOR_REASONS = new Set(["need_decision", "progress_update", "interview_request"]);
@@ -18,10 +18,10 @@ export const SUPERVISOR_REASONS = new Set(["need_decision", "progress_update", "
 // and reclamation is preserved.
 export const RESEARCH_MESSAGE_TYPES = new Set(["RESEARCH_REQUEST", "RESEARCH_RESULT", "RESEARCH_BLOCKED"]);
 export const LIFECYCLE_MESSAGE_TYPES = new Set([
-  "READY_FOR_REVIEW",
+  "READY_FOR_VALIDATION",
   "FIX_READY",
-  "REVIEW_PASS",
-  "REVIEW_FAIL",
+  "VALIDATION_PASS",
+  "VALIDATION_FAIL",
   "READY_FOR_ACCEPTANCE",
   "LEAD_REQUEST_CHANGES",
 ]);
@@ -41,18 +41,18 @@ export const RESEARCH_BLOCK_REASON_CODES = new Set([
 const ROLE_EVENT_TYPES = new Map([
   ["lead", ["LEAD_REQUEST_CHANGES"]],
   ["researcher", ["RESEARCH_RESULT", "RESEARCH_BLOCKED"]],
-  ["executor", ["RESEARCH_REQUEST", "READY_FOR_REVIEW", "FIX_READY", "READY_FOR_ACCEPTANCE"]],
-  ["reviewer", ["REVIEW_PASS", "REVIEW_FAIL"]],
+  ["executor", ["RESEARCH_REQUEST", "READY_FOR_VALIDATION", "FIX_READY", "READY_FOR_ACCEPTANCE"]],
+  ["validator", ["VALIDATION_PASS", "VALIDATION_FAIL"]],
 ]);
 
 const EVENT_FIELD_CONTRACTS = new Map([
   ["RESEARCH_REQUEST", "type, task_id, delegation_id, request_id (UUID), decision_supported, objective, allowed_paths (string[]), artifact_path, required_capabilities (string[]), frozen_contract_version; optional deadline_hint, context_refs"],
   ["RESEARCH_RESULT", "type, task_id, delegation_id, request_id (the request UUID), artifact_path, headline, findings ({claim, sources, confidence}[]), confidence, decision_impact; optional gaps"],
   ["RESEARCH_BLOCKED", "type, task_id, delegation_id, request_id (the request UUID), reason_code, detail; next_decision_needed is required for architectural, out_of_scope, or under_specified"],
-  ["READY_FOR_REVIEW", "type, task_id, delegation_id, worktree, implementation_notes_path or artifact_path"],
+  ["READY_FOR_VALIDATION", "type, task_id, delegation_id, worktree, implementation_notes_path or artifact_path"],
   ["FIX_READY", "type, task_id, delegation_id, worktree, implementation_notes_path or artifact_path"],
-  ["REVIEW_PASS", "type, task_id, delegation_id, evidence_paths (non-empty string[]); optional artifact_path"],
-  ["REVIEW_FAIL", "type, task_id, delegation_id, failure_paths (non-empty string[]); optional evidence_paths, artifact_path"],
+  ["VALIDATION_PASS", "type, task_id, delegation_id, evidence_paths (non-empty string[]); optional artifact_path"],
+  ["VALIDATION_FAIL", "type, task_id, delegation_id, failure_paths (non-empty string[]); optional evidence_paths, artifact_path"],
   ["READY_FOR_ACCEPTANCE", "type, task_id, delegation_id, worktree, implementation_notes_path or artifact_path"],
   ["LEAD_REQUEST_CHANGES", "type, task_id, delegation_id, rejected_criteria (non-empty string[]), rejected_evidence, required_correction, next_artifact, next_state=FIX_READY"],
 ]);

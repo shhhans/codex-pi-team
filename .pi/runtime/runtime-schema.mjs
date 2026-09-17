@@ -1,17 +1,19 @@
 import { isAbsolute, resolve } from "node:path";
 
-export const ROLES = Object.freeze(["researcher", "executor", "reviewer"]);
+// `reviewer` belongs to historic task records only. New runtime state uses
+// Validator; source isolation is prompt policy, not a claimed sandbox.
+export const ROLES = Object.freeze(["researcher", "executor", "validator"]);
 export const ROLE_STATES = Object.freeze({
   researcher: Object.freeze(["working", "waiting", "blocked", "completed"]),
   executor: Object.freeze(["working", "waiting", "blocked", "ready_for_review"]),
-  reviewer: Object.freeze(["working", "waiting", "blocked", "reviewing", "changes_requested", "ready_for_acceptance"]),
+  validator: Object.freeze(["working", "waiting", "blocked", "validating", "changes_requested", "ready_for_acceptance"]),
 });
 export const TASK_STATUSES = Object.freeze(["active", "accepted", "incomplete", "archived"]);
 export const LEAD_WAKE_STATES = Object.freeze(["blocked", "changes_requested", "ready_for_review", "ready_for_acceptance", "completed"]);
 export const ROLE_CHECKPOINTS = Object.freeze({
   researcher: Object.freeze({ complete: ["completed"], blocked: ["blocked"], waiting: ["waiting"] }),
   executor: Object.freeze({ ready: ["ready_for_review"], blocked: ["blocked"], waiting: ["waiting"] }),
-  reviewer: Object.freeze({ ready: ["ready_for_acceptance"], changes_requested: ["changes_requested"], blocked: ["blocked"], waiting: ["waiting"] }),
+  validator: Object.freeze({ ready: ["ready_for_acceptance"], changes_requested: ["changes_requested"], blocked: ["blocked"], waiting: ["waiting"] }),
 });
 
 export function fail(message) { throw new Error(message); }

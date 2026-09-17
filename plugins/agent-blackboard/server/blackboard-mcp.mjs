@@ -16,10 +16,27 @@ import {
   unregisterLead,
   updateTask,
   watch,
+  attachTask,
+  contractRead,
+  createModule,
+  leadRule,
+  listModules,
+  listNotifications,
+  readModule,
+  recordNotificationDelivery,
+  reopenContract,
 } from "./blackboard-core.mjs";
 import { sendLeadRequestChanges } from "../../../.pi/communication/lead-intercom.mjs";
 
 const tools = [
+  { name: "module_create", description: "Lead-only: create a persistent module and its initial structured contract.", inputSchema: { type: "object", required: ["project_root", "module_id", "name", "contract"], properties: { project_root: { type: "string" }, module_id: { type: "string" }, name: { type: "string" }, contract: { type: "object" } }, additionalProperties: false } },
+  { name: "module_read", description: "Read a module, its current contract, and frozen/ACK state.", annotations: { readOnlyHint: true }, inputSchema: { type: "object", required: ["project_root", "module_id"], properties: { project_root: { type: "string" }, module_id: { type: "string" } }, additionalProperties: false } },
+  { name: "module_attach_task", description: "Attach the one active task permitted for a module.", inputSchema: { type: "object", required: ["project_root", "module_id", "task_id"], properties: { project_root: { type: "string" }, module_id: { type: "string" }, task_id: { type: "string" } }, additionalProperties: false } },
+  { name: "contract_read", description: "Read the current structured contract or a stable field path.", annotations: { readOnlyHint: true }, inputSchema: { type: "object", required: ["project_root", "module_id"], properties: { project_root: { type: "string" }, module_id: { type: "string" }, field: { type: "string" } }, additionalProperties: false } },
+  { name: "contract_lead_ruling", description: "Record a Lead ruling after the negotiation cap or ambiguity; ACKs are cleared.", inputSchema: { type: "object", required: ["project_root", "module_id", "ruling"], properties: { project_root: { type: "string" }, module_id: { type: "string" }, ruling: { type: "string" } }, additionalProperties: false } },
+  { name: "contract_reopen", description: "Lead-only: explicitly reopen a frozen contract for a requirement change.", inputSchema: { type: "object", required: ["project_root", "module_id", "reason"], properties: { project_root: { type: "string" }, module_id: { type: "string" }, reason: { type: "string" } }, additionalProperties: false } },
+  { name: "module_notifications", description: "Read reliable role-notification records and delivery state.", annotations: { readOnlyHint: true }, inputSchema: { type: "object", required: ["project_root", "module_id"], properties: { project_root: { type: "string" }, module_id: { type: "string" } }, additionalProperties: false } },
+  { name: "module_record_delivery", description: "Dispatcher-only: record an idempotent role-notification delivery result.", inputSchema: { type: "object", required: ["project_root", "module_id", "notification_id", "delivered"], properties: { project_root: { type: "string" }, module_id: { type: "string" }, notification_id: { type: "string" }, delivered: { type: "boolean" }, receipt: { type: "string" }, error: { type: "string" } }, additionalProperties: false } },
   {
     name: "pi_team_lead_request_changes",
     description: "Lead-only: send a validated LEAD_REQUEST_CHANGES event to the unique current same-task Executor and return delivery plus Executor confirmation status.",
@@ -111,6 +128,14 @@ function result(value) {
 
 async function callTool(name, args = {}) {
   const projectRoot = args.project_root;
+  if (name === "module_create") return createModule(projectRoot, args);
+  if (name === "module_read") return readModule(projectRoot, args.module_id);
+  if (name === "module_attach_task") return attachTask(projectRoot, args.module_id, args.task_id);
+  if (name === "contract_read") return contractRead(projectRoot, args.module_id, args.field);
+  if (name === "contract_lead_ruling") return leadRule(projectRoot, args.module_id, args.ruling);
+  if (name === "contract_reopen") return reopenContract(projectRoot, args.module_id, args.reason);
+  if (name === "module_notifications") return listNotifications(projectRoot, args.module_id);
+  if (name === "module_record_delivery") return recordNotificationDelivery(projectRoot, args.module_id, args.notification_id, args);
   if (name === "pi_team_lead_request_changes") return sendLeadRequestChanges({ ...args, projectRoot, auditDir: join(projectRoot, ".pi", "communication", "audit"), timeoutMs: args.timeout_ms });
   if (name === "blackboard_create_task") return createTask(projectRoot, args);
   if (name === "blackboard_update_task") return updateTask(projectRoot, args.task_id, args);
@@ -123,7 +148,7 @@ async function callTool(name, args = {}) {
   if (name === "blackboard_unregister_lead") return unregisterLead(projectRoot, args.task_id, args);
   if (name === "blackboard_list_lead_wakeups") return listLeadWakeups(projectRoot, args.task_id);
   if (name === "blackboard_ack_lead_wakeup") return acknowledgeLeadWakeup(projectRoot, args.task_id, args.wakeup_id, args);
-  if (name === "blackboard_snapshot") return snapshot(projectRoot, Boolean(args.include_archived), args.cursor);
+  if (name === "blackboard_snapshot") return { ...(await snapshot(projectRoot, Boolean(args.include_archived), args.cursor)), modules: await listModules(projectRoot) };
   if (name === "blackboard_watch") return watch(projectRoot, args.cursor, args.timeout_ms ?? 55000, Boolean(args.include_archived));
   if (name === "blackboard_render") return renderSnapshotHtml(await snapshot(projectRoot, Boolean(args.include_archived)));
   throw new Error(`unknown tool: ${name}`);

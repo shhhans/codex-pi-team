@@ -12,7 +12,7 @@ import { join, isAbsolute } from "node:path";
 export const TEAM_RUNTIME_CONFIG_VERSION = 1;
 export const TEAM_RUNTIME_CONFIG_FILENAME = ".pi/team-runtime.json";
 
-export const ACTIVE_ROLE_NAMES = new Set(["researcher", "executor", "reviewer"]);
+export const ACTIVE_ROLE_NAMES = new Set(["researcher", "executor", "validator"]);
 
 export const COMPRESSION_DEFAULTS = Object.freeze({
   threshold_percent: 0.5,

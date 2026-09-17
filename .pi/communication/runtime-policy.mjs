@@ -22,7 +22,7 @@ import { PersistentReplyStore } from "./persistent-store.mjs";
 import { PersistentRunLifecycle } from "./lifecycle.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ACTIVE_ROLE_NAMES = new Set(["researcher", "executor", "reviewer"]);
+const ACTIVE_ROLE_NAMES = new Set(["researcher", "executor", "validator"]);
 const ROLE_NAMES = new Set(["lead", ...ACTIVE_ROLE_NAMES]);
 const SAFE_INTERCOM_ACTIONS = new Set(["list", "list-cwd", "status", "pending"]);
 const SUPERVISOR_REASONS = new Set(["need_decision", "progress_update", "interview_request"]);

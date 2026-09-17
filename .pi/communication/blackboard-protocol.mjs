@@ -64,9 +64,9 @@ export const ROLE_CHECKPOINTS = Object.freeze({
     handoff: ["ready_for_review"],
     waiting: ["waiting"],
   }),
-  reviewer: Object.freeze({
-    start: ["reviewing"],
-    progress: ["reviewing"],
+  validator: Object.freeze({
+    start: ["validating"],
+    progress: ["validating"],
     blocked: ["blocked"],
     handoff: ["ready_for_acceptance", "changes_requested"],
     waiting: ["waiting"],
@@ -197,10 +197,7 @@ export function validateAgentUpdate(role, previousEvent, rawInput) {
 // cannot deadlock the session; each bypass is recorded so tests can
 // verify the escape hatch fired (or, more importantly, that it never
 // fired under normal use).
-export const DEFAULT_LIFECYCLE_GATE = Object.freeze({
-  maxToolCallsBetweenUpdates: 20,
-  maxBypasses: 2,
-});
+export const DEFAULT_LIFECYCLE_GATE = Object.freeze({ maxToolCallsBetweenUpdates: 20 });
 
 const SUBSTANTIVE_TOOLS = new Set([
   "read",
@@ -229,33 +226,24 @@ export function createLifecycleGate(options = {}) {
   const config = { ...DEFAULT_LIFECYCLE_GATE, ...options };
   let published = false;
   let sinceUpdate = 0;
-  let bypasses = 0;
   const history = [];
   return {
     config,
     get published() { return published; },
     get sinceUpdate() { return sinceUpdate; },
-    get bypasses() { return bypasses; },
+    get bypasses() { return 0; },
     get history() { return history.slice(); },
     markPublished() {
       published = true;
       sinceUpdate = 0;
-      bypasses = 0;
     },
     evaluate(event) {
-      if (!isSubstantiveToolCall(event)) return { block: false };
+      if (!isSubstantiveToolCall(event)) return { block: false, remind: false };
       sinceUpdate += 1;
-      if (published && sinceUpdate < config.maxToolCallsBetweenUpdates) return { block: false };
-      if (bypasses >= config.maxBypasses) {
-        history.push({ at: "open", sinceUpdate, bypasses });
-        return { block: false, opened: true };
-      }
-      const reason = published
-        ? `lifecycle-gate: ${sinceUpdate} substantive tool calls since the last Blackboard update; publish a blackboard_update describing observed progress before continuing (bypass ${bypasses + 1}/${config.maxBypasses})`
-        : `lifecycle-gate: publish a blackboard_update describing the slice start, observed facts, and next action before the first substantive tool call (bypass ${bypasses + 1}/${config.maxBypasses})`;
-      bypasses += 1;
-      history.push({ at: "block", sinceUpdate, bypasses, published });
-      return { block: true, reason, opened: false };
+      if (sinceUpdate % config.maxToolCallsBetweenUpdates !== 0) return { block: false, remind: false };
+      const reason = `blackboard-reminder: ${sinceUpdate} substantive tool calls since the last Blackboard update; publish observed progress when appropriate`;
+      history.push({ at: "remind", sinceUpdate, published });
+      return { block: false, remind: true, reason };
     },
   };
 }

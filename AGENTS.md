@@ -24,7 +24,8 @@ acceptance record.
 ## Repository map and validation
 
 - `.pi/agents/` contains the three active role definitions: Researcher,
-  Executor, and Reviewer.
+  Executor, and Validator. Historical Reviewer material is retained only in
+  `.pi/legacy/`.
 - `.pi/skills/` contains one private, role-scoped skill for each active role.
 - `plugins/agent-blackboard/` contains the Lead-only Blackboard plugin and its
   Lead skill.
@@ -44,9 +45,9 @@ acceptance record.
   returns to an event-driven waiting state.
 - Executor implements one Lead-delegated slice in its isolated worktree and
   maintains implementation notes.
-- Reviewer independently reviews the same Executor worktree, may add review
-  tests or failure artifacts, and never edits production code or normative
-  protocol decisions.
+- Validator independently writes and runs black-box tests from the frozen
+  public contract. Source isolation is enforced by role prompt, not a claimed
+  permission hook or sandbox; Validator never edits production code.
 - Direct peer routes are same-task Researcher ↔ Executor and the Lead-paired
   Executor ↔ Reviewer. Researcher and Reviewer do not communicate directly.
 - Lead owns task identity, scope, delegation, architecture/product decisions,

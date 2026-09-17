@@ -14,7 +14,7 @@ const TEAM_TRANSPORT_TYPE = "pi-team-structured-envelope/v1";
 function roleForSession(session: PeerSession | undefined, taskId: string | undefined) {
   const identity = [session?.id, session?.name].find(value => typeof value === "string")?.toLowerCase();
   const escapedTask = taskId?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").toLowerCase();
-  const match = identity?.match(new RegExp(`^pi-team--${escapedTask}--(lead|researcher|executor|reviewer)--`));
+  const match = identity?.match(new RegExp(`^pi-team--${escapedTask}--(lead|researcher|executor|validator)--`));
   return match?.[1];
 }
 

@@ -7,8 +7,10 @@ import {
   transitionTask, watch, writeCheckpoint, __paths,
 } from "../../../.pi/runtime/runtime-store.mjs";
 import { ROLE_STATES, TASK_STATUSES, LEAD_WAKE_STATES } from "../../../.pi/runtime/runtime-schema.mjs";
+import { attachTask, contractRead, createModule, leadRule, listModules, listNotifications, readModule, recordNotificationDelivery, reopenContract } from "../../../.pi/runtime/module-store.mjs";
 
 export { ROLE_STATES, TASK_STATUSES, LEAD_WAKE_STATES, resolveGitCommonDir, stateRoot, createTask, appendAgentEvent, snapshot, watch, readTask, registerSession, appendAudit, writeCheckpoint, migrateRuntime };
+export { attachTask, contractRead, createModule, leadRule, listModules, listNotifications, readModule, recordNotificationDelivery, reopenContract };
 
 export async function publishTask(projectRoot, input) {
   try { return { action: "updated", task: await updateTask(projectRoot, input.task_id, input) }; }

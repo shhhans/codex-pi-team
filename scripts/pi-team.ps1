@@ -176,7 +176,7 @@ function Ensure-FinalizationShape($Finalization,[string]$ContractTarget) {
   return $Finalization
 }
 function Assert-KnownRole([string]$Role) {
-  if (@('researcher','executor','reviewer') -notcontains $Role) { Fail "unknown Pi Team role: $Role" }
+  if (@('researcher','executor','validator') -notcontains $Role) { Fail "unknown Pi Team role: $Role" }
 }
 function Assert-RelativeArtifactPath([string]$Path,[string]$Field) {
   if ([string]::IsNullOrWhiteSpace($Path) -or [IO.Path]::IsPathRooted($Path) -or $Path -match '(^|[\\/])\.\.([\\/]|$)') { Fail "$Field must be a non-empty worktree-relative path" }
@@ -297,13 +297,13 @@ function Get-BlackboardTask([string]$TaskId) {
   if ($tasks.Count -ne 1) { Fail "Blackboard task not found or ambiguous: $TaskId" }
   return $tasks[0]
 }
-function Assert-ReviewerReadyForAcceptance([string]$TaskId) {
+function Assert-ValidatorReadyForAcceptance([string]$TaskId) {
   $task = Get-BlackboardTask $TaskId
-  $reviewer = @($task.agents | Where-Object { $_.role -eq 'reviewer' })
-  if ($reviewer.Count -ne 1 -or $reviewer[0].state -ne 'ready_for_acceptance') { Fail 'Reviewer is not ready_for_acceptance' }
+  $validator = @($task.agents | Where-Object { $_.role -eq 'validator' })
+  if ($validator.Count -ne 1 -or $validator[0].state -ne 'ready_for_acceptance') { Fail 'Validator is not ready_for_acceptance' }
 }
 function Get-RoleRuntimeConfig([string]$Role) {
-  if ($Role -notin @('researcher','executor','reviewer')) { Fail "unknown Pi Team role: $Role" }
+  if ($Role -notin @('researcher','executor','validator')) { Fail "unknown Pi Team role: $Role" }
   $path = Join-Path $ProjectRoot ".pi/agents/$Role.md"
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { Fail "role definition is missing: $path" }
   $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $path
@@ -342,7 +342,7 @@ function Assert-RoleProviderReady($Config) {
 }
 function Doctor {
   foreach ($x in @('git','node.exe','pi.cmd','wt.exe','powershell.exe')) { if (-not (Get-Command $x -ErrorAction SilentlyContinue)) { Write-Output "MISSING $x" } else { Write-Output "OK $x" } }
-  foreach ($role in @('researcher','executor','reviewer')) {
+  foreach ($role in @('researcher','executor','validator')) {
     try {
       $config = Get-RoleRuntimeConfig $role
       Write-Output "ROLE $role provider=$($config.provider) model=$($config.model)"
@@ -354,7 +354,7 @@ function Doctor {
   $setupIssues = @(Get-SetupIssues)
   if ($setupIssues.Count -eq 0) { Write-Output 'OK shared Pi dependencies' }
   else { foreach ($issue in $setupIssues) { Write-Output "MISSING $issue" }; Write-Output 'FIX run pi-team.cmd setup' }
-  foreach ($r in @('researcher','executor','reviewer')) {
+  foreach ($r in @('researcher','executor','validator')) {
     $rolePath = Join-Path $ProjectRoot ".pi/agents/$r.md"
     if (-not (Test-Path $rolePath)) { Write-Output "MISSING role $r"; continue }
     $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $rolePath
@@ -368,7 +368,7 @@ function Doctor {
     if (-not $task.task_id -or -not $task.sessions) { continue }
     $execution = if ($task.execution_status) { $task.execution_status } else { $task.status }
     $outcome = if ($task.outcome) { $task.outcome } else { 'legacy-unknown' }
-    foreach($role in @('executor','reviewer','researcher')) { if (-not($task.sessions.PSObject.Properties.Name -contains $role)) { continue }; $runtime=Read-Runtime $task $role; $health=if(Test-RuntimeLive $runtime){'active'}elseif($execution -eq 'active'){'stale'}else{'stopped'}; Write-Output "TASK $($task.task_id) role=$role health=$health execution=$execution outcome=$outcome last_event=$((Join-Path (StateRoot) \"$($task.task_id)-$role.jsonl\"))" }
+    foreach($role in @('executor','validator','researcher')) { if (-not($task.sessions.PSObject.Properties.Name -contains $role)) { continue }; $runtime=Read-Runtime $task $role; $health=if(Test-RuntimeLive $runtime){'active'}elseif($execution -eq 'active'){'stale'}else{'stopped'}; Write-Output "TASK $($task.task_id) role=$role health=$health execution=$execution outcome=$outcome last_event=$((Join-Path (StateRoot) \"$($task.task_id)-$role.jsonl\"))" }
   }
 }
 function Inventory([string]$OutputPath) {
@@ -382,7 +382,7 @@ function Inventory([string]$OutputPath) {
     $contract = $null; $branch = ''
     if ($task.contract_path -and (Test-Path -LiteralPath $task.contract_path)) { try { $contract = Parse-Contract $task.contract_path; $branch = [string]$contract.branch } catch {} }
     $roles = @()
-    foreach ($role in @('executor','reviewer','researcher')) {
+    foreach ($role in @('executor','validator','researcher')) {
       if (-not $task.sessions -or -not ($task.sessions.PSObject.Properties.Name -contains $role)) { continue }
       $runtime = Read-Runtime $task $role
       $roles += [ordered]@{ role=$role; health=if(Test-RuntimeLive $runtime){'active'}elseif(($task.execution_status -or $task.status) -eq 'active'){'stale'}else{'stopped'}; runtime_pid=if($runtime){$runtime.runtime_pid}else{$null} }
@@ -468,7 +468,7 @@ function Stop-RoleTree($Session) {
     & taskkill.exe /PID ([int]$record.pid) /T /F | Out-Null
   }
 }
-function Assert-NoLiveRoleProcesses($State) { foreach($role in @('executor','reviewer','researcher')) { if (-not($State.sessions.PSObject.Properties.Name -contains $role)) { continue }; $runtime=Read-Runtime $State $role; if (Test-RuntimeLive $runtime) { Fail "task already has live role process; refusing duplicate resume: ${role}:$($runtime.runtime_pid)" } } }
+function Assert-NoLiveRoleProcesses($State) { foreach($role in @('executor','validator','researcher')) { if (-not($State.sessions.PSObject.Properties.Name -contains $role)) { continue }; $runtime=Read-Runtime $State $role; if (Test-RuntimeLive $runtime) { Fail "task already has live role process; refusing duplicate resume: ${role}:$($runtime.runtime_pid)" } } }
 function Start-RoleProcess([string]$Executable,[string[]]$ArgumentList,[string]$WorkingDirectory,[string]$TaskId,[string]$Role,[string]$AgentId,[string]$Worktree,[string]$ScopeId,[string]$LaunchId,[string]$AllowedDelegations) {
   $stateRoot = StateRoot
   $identity = [ordered]@{
@@ -541,12 +541,12 @@ function RoleArguments([string]$Role,[string]$InitialPromptFile,[string]$Session
   $tools = @{
     researcher = 'read,grep,find,ls,write,web_search,fetch_content,get_search_content,source_check,pi_team_intercom,blackboard_update'
     executor = 'read,grep,find,ls,bash,edit,write,pi_team_intercom,blackboard_update'
-    reviewer = 'read,grep,find,ls,bash,edit,write,pi_team_intercom,blackboard_update'
+    validator = 'read,grep,find,ls,bash,edit,write,pi_team_intercom,blackboard_update,contract_read,contract_comment,contract_ack'
   }
   $skills = @{
     researcher = 'answer-research-question'
     executor = 'execute-delegated-task'
-    reviewer = 'review-delegated-task'
+    validator = 'review-delegated-task'
   }
   if (-not $tools.ContainsKey($Role)) { Fail "unknown Pi Team role: $Role" }
   $roleFile = Join-Path $ProjectRoot ".pi/agents/$Role.md"
@@ -557,7 +557,9 @@ function RoleArguments([string]$Role,[string]$InitialPromptFile,[string]$Session
   $skill = Join-Path $ProjectRoot ".pi/skills/$($skills[$Role])/SKILL.md"
   if ([string]::IsNullOrWhiteSpace($Provider) -or [string]::IsNullOrWhiteSpace($Model)) { Fail "missing frozen provider/model for role $Role" }
   # --no-extensions disables role-card auto-loading, so compression is passed explicitly.
+  $contractExtension = Join-Path $ProjectRoot '.pi/communication/extensions/contract-tools.ts'
   $args = @('--approve','--provider',$Provider,'--model',$Model,'--name',$Role,'--no-extensions','--no-skills','--tools',$tools[$Role],'--skill',$skill,'--append-system-prompt',$roleFile,'--extension',$intercom,'--extension',$roleExtension,'--extension',$compressionExtension,'--extension',$blackboardExtension)
+  if ($Role -in @('executor','validator')) { $args += @('--extension',$contractExtension) }
   if ($Role -eq 'researcher') { $args += @('--extension',(Join-Path (Get-PiAgentDir) 'npm/node_modules/pi-web-access/index.ts')) }
   if ($SessionId) { $args += @('--session-id',$SessionId) }
   # Pi expands an @file argument after Windows has completed command-line
@@ -677,7 +679,7 @@ function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question
       $lines += 'Recommended role reads: .pi/skills/execute-delegated-task/SKILL.md, scripts/pi-team.ps1, tests/run-tests.ps1, implementation_notes/'
       $lines += 'Implementation boundary: make the smallest coherent change in this worktree and request bounded research when needed.'
     }
-    'reviewer' {
+    'validator' {
       $lines += 'Recommended role reads: .pi/skills/review-delegated-task/SKILL.md, implementation_notes/, tests/run-tests.ps1'
       $lines += 'Review boundary: inspect the diff and evidence; use read-only Git operations and edit only review tests or real failure artifacts.'
     }
@@ -689,13 +691,13 @@ function Start-Task([string]$Path) {
   Assert-Setup; $c = Parse-Contract $Path
   Assert-IssuePreflightReady $c
   $roleConfigs = @{}
-  foreach ($role in @('researcher','executor','reviewer')) { $roleConfigs[$role] = Get-RoleRuntimeConfig $role }
-  foreach ($role in @('executor','reviewer')) { Assert-RoleProviderReady $roleConfigs[$role] }
+  foreach ($role in @('researcher','executor','validator')) { $roleConfigs[$role] = Get-RoleRuntimeConfig $role }
+  foreach ($role in @('executor','validator')) { Assert-RoleProviderReady $roleConfigs[$role] }
   Assert-BlackboardTask $c | Out-Null; $existing = Join-Path (StateRoot) "$($c.task_id).json"; if (Test-Path $existing) { Fail 'task already started' }
   Invoke-Native git.exe @('-C',$ProjectRoot,'worktree','add',$c.worktree,$c.branch)
   $contractSnapshot = Snapshot-Contract $Path $c.task_id
-  $frozenRoleConfigs = [pscustomobject]@{ researcher=[pscustomobject]@{provider=$roleConfigs['researcher'].provider;model=$roleConfigs['researcher'].model}; executor=[pscustomobject]@{provider=$roleConfigs['executor'].provider;model=$roleConfigs['executor'].model}; reviewer=[pscustomobject]@{provider=$roleConfigs['reviewer'].provider;model=$roleConfigs['reviewer'].model} }
-  $runtimeDelegations = [pscustomobject]@{executor="EXECUTOR-$($c.task_id)";reviewer="REVIEWER-$($c.task_id)"}
+  $frozenRoleConfigs = [pscustomobject]@{ researcher=[pscustomobject]@{provider=$roleConfigs['researcher'].provider;model=$roleConfigs['researcher'].model}; executor=[pscustomobject]@{provider=$roleConfigs['executor'].provider;model=$roleConfigs['executor'].model}; validator=[pscustomobject]@{provider=$roleConfigs['validator'].provider;model=$roleConfigs['validator'].model} }
+  $runtimeDelegations = [pscustomobject]@{executor="EXECUTOR-$($c.task_id)";validator="VALIDATOR-$($c.task_id)"}
   $settings = Read-UserSettings
   $frozenProvider = ''; $frozenModel = ''
   if ($null -ne $settings) {
@@ -706,16 +708,16 @@ function Start-Task([string]$Path) {
   if (-not [string]::IsNullOrWhiteSpace($frozenProvider) -and -not [string]::IsNullOrWhiteSpace($frozenModel)) {
     $frozenPair = [pscustomobject]@{provider=$frozenProvider;model=$frozenModel}
   }
-  $state = [pscustomobject]@{version=3;task_id=$c.task_id;name=$c.name;description=(New-ContractDescription $c);execution_status='active';outcome='pending';worktree=$c.worktree;contract_path=$contractSnapshot;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');role_configs=$frozenRoleConfigs;runtime_delegations=$runtimeDelegations;research_sequence=0;frozen_provider_model=$frozenPair;finalization=(New-FinalizationState $c.base_ref);sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor';provider=$frozenRoleConfigs.executor.provider;model=$frozenRoleConfigs.executor.model};reviewer=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='reviewer';provider=$frozenRoleConfigs.reviewer.provider;model=$frozenRoleConfigs.reviewer.model}}}
-  Write-State $state; foreach ($r in @('executor','reviewer')) { Event $state $r 'working' 'task started' '' '' }
+  $state = [pscustomobject]@{version=4;task_id=$c.task_id;name=$c.name;description=(New-ContractDescription $c);execution_status='active';outcome='pending';worktree=$c.worktree;contract_path=$contractSnapshot;scope_id=(New-Id);started_at=[DateTime]::UtcNow.ToString('o');role_configs=$frozenRoleConfigs;runtime_delegations=$runtimeDelegations;research_sequence=0;frozen_provider_model=$frozenPair;finalization=(New-FinalizationState $c.base_ref);sessions=[pscustomobject]@{executor=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='executor';provider=$frozenRoleConfigs.executor.provider;model=$frozenRoleConfigs.executor.model};validator=[pscustomobject]@{agent_id=(New-Id);session_id=(New-Id);role='validator';provider=$frozenRoleConfigs.validator.provider;model=$frozenRoleConfigs.validator.model}}}
+  Write-State $state; foreach ($r in @('executor','validator')) { Event $state $r 'working' 'task started' '' '' }
   $executorAssignment = New-RoleAssignment $c 'executor'
-  $reviewerAssignment = New-RoleAssignment $c 'reviewer'
-  $allowedDelegations = @($runtimeDelegations.executor,$runtimeDelegations.reviewer) -join ','
-  try { Launch-Role $state 'executor' "$executorAssignment You are Executor. Perform only the assigned slice and report progress through the configured tools." $state.sessions.executor.session_id $state.sessions.executor.provider $state.sessions.executor.model $false $allowedDelegations; Launch-Role $state 'reviewer' "$reviewerAssignment You are Reviewer. Inspect the delegated work as it becomes available and report progress through the configured tools." $state.sessions.reviewer.session_id $state.sessions.reviewer.provider $state.sessions.reviewer.model $false $allowedDelegations }
-  catch { Stop-RoleTree $state.sessions.executor; Stop-RoleTree $state.sessions.reviewer; $state | Add-Member -NotePropertyName launch_error -NotePropertyValue $_.Exception.Message -Force; $state | Add-Member -NotePropertyName launch_failed_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; Write-State $state; throw }
+  $validatorAssignment = New-RoleAssignment $c 'validator'
+  $allowedDelegations = @($runtimeDelegations.executor,$runtimeDelegations.validator) -join ','
+  try { Launch-Role $state 'executor' "$executorAssignment You are Executor. Perform only the assigned slice and report progress through the configured tools." $state.sessions.executor.session_id $state.sessions.executor.provider $state.sessions.executor.model $false $allowedDelegations; Launch-Role $state 'validator' "$validatorAssignment You are Validator. Independently validate the public contract without reading target source." $state.sessions.validator.session_id $state.sessions.validator.provider $state.sessions.validator.model $false $allowedDelegations }
+  catch { Stop-RoleTree $state.sessions.executor; Stop-RoleTree $state.sessions.validator; $state | Add-Member -NotePropertyName launch_error -NotePropertyValue $_.Exception.Message -Force; $state | Add-Member -NotePropertyName launch_failed_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; Write-State $state; throw }
   Write-Output "STARTED $($c.task_id) scope=$($state.scope_id)"
 }
-function Status([string]$TaskId) { if ($TaskId) { $s=Read-State $TaskId; $s | ConvertTo-Json -Depth 10; foreach ($r in @('executor','reviewer','researcher')) { $p=Join-Path (StateRoot) "$TaskId-$r.jsonl"; if (Test-Path $p) { Get-Content $p | Select-Object -Last 1 } } } else { Get-ChildItem (StateRoot) -Filter '*.json' | Select-Object -ExpandProperty Name } }
+function Status([string]$TaskId) { if ($TaskId) { $s=Read-State $TaskId; $s | ConvertTo-Json -Depth 10; foreach ($r in @('executor','validator','researcher')) { $p=Join-Path (StateRoot) "$TaskId-$r.jsonl"; if (Test-Path $p) { Get-Content $p | Select-Object -Last 1 } } } else { Get-ChildItem (StateRoot) -Filter '*.json' | Select-Object -ExpandProperty Name } }
 function Sync-Task([string]$Path) { $c=Parse-Contract $Path; $s=Read-State $c.task_id; foreach ($n in @('branch','worktree')) { if ($c.$n -ne $s.$n) { Fail "immutable field changed: $n" } }; $s.name=$c.name; $s.description=(New-ContractDescription $c); Write-State $s; Write-Output "SYNCED $($c.task_id)" }
 function Research([string]$TaskId,[string]$QuestionFile) {
   Assert-Setup; $s=Read-State $TaskId
@@ -751,7 +753,7 @@ function Resume-Task([string]$TaskId) {
   # reuses the frozen provider/model).
   $resourceLimitCodes = @('tool_call_segment_limit','compact_retry_limit','output_token_limit_exceeded')
   $hasConstrainedState = $false
-  foreach ($role in @('executor','reviewer')) {
+  foreach ($role in @('executor','validator')) {
     if (-not ($s.PSObject.Properties.Name -contains 'last_stop_reason')) { continue }
     $reason = $s.last_stop_reason
     if ($null -ne $reason -and ($resourceLimitCodes -contains ([string]$reason.code))) { $hasConstrainedState = $true; break }
@@ -759,10 +761,10 @@ function Resume-Task([string]$TaskId) {
     if ($s.PSObject.Properties.Name -contains 'resumed_from_checkpoint') { $hasConstrainedState = $true; break }
   }
   if ($hasConstrainedState) {
-    Fail "task was stopped by a resource limit (or a previous resume-checkpoint); plain resume would silently reuse a constrained session. Use 'pi-team.cmd resume-checkpoint <task-id> <checkpoint-path> <executor|reviewer>' to mint a new session ID and reuse the frozen provider/model."
+    Fail "task was stopped by a resource limit (or a previous resume-checkpoint); plain resume would silently reuse a constrained session. Use 'pi-team.cmd resume-checkpoint <task-id> <checkpoint-path> <executor|validator>' to mint a new session ID and reuse the frozen provider/model."
   }
   $contract = Parse-Contract $s.contract_path
-  foreach($r in @('executor','reviewer')) {
+  foreach($r in @('executor','validator')) {
     $context = New-RoleContext $contract $r 'resume'
     if (-not($s.sessions.$r.PSObject.Properties.Name -contains 'provider') -or -not($s.sessions.$r.PSObject.Properties.Name -contains 'model')) { Fail "task state lacks frozen provider/model for role $r; refusing silent model change" }
     $allowedDelegations = @($s.runtime_delegations.PSObject.Properties | ForEach-Object { [string]$_.Value }) -join ','
@@ -787,7 +789,7 @@ function Resume-From-Checkpoint([string]$TaskId,[string]$CheckpointPath,[string]
   $doc = Read-Checkpoint $CheckpointPath
   if ($doc.task_id -ne $TaskId) { Fail "checkpoint task_id mismatch: expected $TaskId, got $($doc.task_id)" }
   if ($doc.resume_allowed -ne $true) { Fail 'checkpoint does not allow resume' }
-  if ($Role -notin @('executor','reviewer')) { Fail "resume-checkpoint role must be executor or reviewer; got $Role" }
+  if ($Role -notin @('executor','validator')) { Fail "resume-checkpoint role must be executor or validator; got $Role" }
   $frozen = $s.frozen_provider_model
   $docFrozen = $doc.frozen_provider_model
   if ($docFrozen.provider -ne $frozen.provider -or $docFrozen.model -ne $frozen.model) { Fail "checkpoint frozen provider/model does not match task state: checkpoint=$($docFrozen.provider)/$($docFrozen.model), state=$($frozen.provider)/$($frozen.model)" }
@@ -815,12 +817,12 @@ function Assert-MissingCriteria($Contract,$Evidence) {
 }
 function Accept([string]$TaskId,[string]$EvidencePath) {
   $s=Read-State $TaskId; if ($s.execution_status -ne 'active' -or $s.outcome -ne 'pending') { Fail 'task is not awaiting acceptance' }
-  $e=Read-OutcomeFile $EvidencePath 'accepted'; $reviewerWarning=$null
-  try { Assert-ReviewerReadyForAcceptance $TaskId } catch { $reviewerWarning = "reviewer_gate_not_converged:$($_.Exception.Message)" }
+  $e=Read-OutcomeFile $EvidencePath 'accepted'; $validatorWarning=$null
+  try { Assert-ValidatorReadyForAcceptance $TaskId } catch { $validatorWarning = "validator_gate_not_converged:$($_.Exception.Message)" }
   if ([string]::IsNullOrWhiteSpace([string]$e.rationale)) { Fail 'accepted outcome requires rationale' }
   if ($e.PSObject.Properties.Name -contains 'inspect_path' -and -not [string]::IsNullOrWhiteSpace([string]$e.inspect_path)) { Assert-RelativeArtifactPath ([string]$e.inspect_path) 'inspect_path' }
   Invoke-BlackboardLifecycle 'accept' $TaskId
-  $s.outcome='accepted'; $s | Add-Member -NotePropertyName accepted_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; $s | Add-Member -NotePropertyName acceptance_path -NotePropertyValue ((Resolve-Path $EvidencePath).Path) -Force; if($reviewerWarning){Add-StateProperty $s 'acceptance_warnings' @($reviewerWarning)}; Write-State $s; Write-Output "ACCEPTED $TaskId"
+  $s.outcome='accepted'; $s | Add-Member -NotePropertyName accepted_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force; $s | Add-Member -NotePropertyName acceptance_path -NotePropertyValue ((Resolve-Path $EvidencePath).Path) -Force; if($validatorWarning){Add-StateProperty $s 'acceptance_warnings' @($validatorWarning)}; Write-State $s; Write-Output "ACCEPTED $TaskId"
 }
 function Close-Incomplete([string]$TaskId,[string]$ClosurePath) {
   $s=Read-State $TaskId; if ($s.outcome -ne 'pending') { Fail 'task is not awaiting closure' }; $e=Read-OutcomeFile $ClosurePath 'incomplete'
@@ -973,7 +975,7 @@ function Inspect([string]$TaskId,[string]$Option1,[string]$Option2,[string]$Opti
     }
     $contaminated=@(); foreach($path in @('AGENTS.md','README.md','architect.md','goal.md','project_state.md','plugins/agent-blackboard/skills/pi-team-lead/SKILL.md')) { $full=Join-Path $s.worktree $path; if(Test-Path -LiteralPath $full -PathType Leaf){ $text=Get-Content -Raw -Encoding UTF8 -LiteralPath $full; if($text -match [regex]::Escape($TaskId) -or $text -match [regex]::Escape((Split-Path $s.worktree -Leaf))){$contaminated += $path} } }; if($contaminated.Count){$failures += 'reusable content contains task-specific identifiers'}; $checks.reusable_content=New-InspectCheck $(if($contaminated.Count){'failed'}else{'passed'}) "contaminated=$($contaminated.Count)" $contaminated
     if($skipTests){$warnings += 'tests_skipped'; $checks.tests=New-InspectCheck 'skipped' 'tests skipped by Lead option'} else { $test=Invoke-FinalizeTests $s.worktree; if(-not $test.passed -and -not $test.skipped){$failures += 'standard tests failed'}; $checks.tests=New-InspectCheck $(if($test.skipped){'skipped'}elseif($test.passed){'passed'}else{'failed'}) $(if($test.skipped){$test.output}elseif($test.passed){'standard tests passed'}else{'standard tests failed'}) ([pscustomobject]@{passed=$test.passed;skipped=$test.skipped;output=$test.output}) }
-    $processes=@(); foreach($role in @('executor','reviewer','researcher')) { if($s.sessions.PSObject.Properties.Name -contains $role){ $runtime=Read-Runtime $s $role; $live=Test-RuntimeLive $runtime; $processes += [pscustomobject]@{role=$role;live=$live;pid=$runtime.runtime_pid}; if($live){$warnings += "live_task_process:$role"} } }; $checks.processes=New-InspectCheck $(if(@($processes|Where-Object live).Count){'warning'}else{'passed'}) 'task-owned process inventory' $processes
+    $processes=@(); foreach($role in @('executor','validator','researcher')) { if($s.sessions.PSObject.Properties.Name -contains $role){ $runtime=Read-Runtime $s $role; $live=Test-RuntimeLive $runtime; $processes += [pscustomobject]@{role=$role;live=$live;pid=$runtime.runtime_pid}; if($live){$warnings += "live_task_process:$role"} } }; $checks.processes=New-InspectCheck $(if(@($processes|Where-Object live).Count){'warning'}else{'passed'}) 'task-owned process inventory' $processes
     $bb=Read-BlackboardObservation $TaskId; $warnings += @($bb.warnings); $checks.blackboard=New-InspectCheck $bb.status "state=$($bb.state)" $bb
     $issue=Get-ContractGitHubIssue $contract; if($null -ne $issue){$gh=Get-Command gh.exe -ErrorAction SilentlyContinue; if($gh){$raw=@(& $gh.Source 'issue' 'view' "$issue" '--json' 'state,title,url' 2>&1); if($LASTEXITCODE -eq 0){$checks.github=New-InspectCheck 'passed' "issue #$issue read" (($raw -join "`n")|ConvertFrom-Json)}else{$warnings += 'github_issue_unavailable';$checks.github=New-InspectCheck 'warning' "issue #$issue unavailable"}}else{$warnings += 'github_cli_unavailable';$checks.github=New-InspectCheck 'warning' 'gh CLI unavailable'}}
   }
@@ -1001,7 +1003,7 @@ function Finalize-Task([string]$TaskId,[string]$Option,[string]$TargetBranchArg)
     $current=Git @('-C',$ProjectRoot,'branch','--show-current'); if($current -ne $target){Fail "finalize must run from target branch $target (current=$current)"}
     if(Git @('-C',$ProjectRoot,'status','--porcelain','--untracked-files=all')){Fail 'target worktree is dirty; refusing integration'}
     $bb=Read-BlackboardObservation $TaskId; $finalization.blackboard.status=$bb.status; $finalization.blackboard.state=$bb.state; $finalization.blackboard.archived=$false; if($bb.warnings.Count){$finalization.warnings=@($finalization.warnings+$bb.warnings|Sort-Object -Unique)}
-    $finalization.phase='resource_reclaim'; Stop-RoleTree $s.sessions.executor; Stop-RoleTree $s.sessions.reviewer; if($s.sessions.PSObject.Properties.Name -contains 'researcher'){Stop-RoleTree $s.sessions.researcher}; $finalization.terminals_reclaimed=$true; $finalization.cleanup.terminals_reclaimed=$true; Add-StateProperty $s 'finalization' $finalization; Write-State $s
+    $finalization.phase='resource_reclaim'; Stop-RoleTree $s.sessions.executor; Stop-RoleTree $s.sessions.validator; if($s.sessions.PSObject.Properties.Name -contains 'researcher'){Stop-RoleTree $s.sessions.researcher}; $finalization.terminals_reclaimed=$true; $finalization.cleanup.terminals_reclaimed=$true; Add-StateProperty $s 'finalization' $finalization; Write-State $s
     $needsWorktree=-not [bool]$finalization.worktree_removed -and -not [bool]$finalization.merged_to_target
     if($needsWorktree -and -not(Test-Path -LiteralPath $s.worktree -PathType Container)){Fail "task worktree is missing: $($s.worktree)"}
     $changes=if($needsWorktree){@(Get-WorktreeChanges $s.worktree)}else{@()}; $branch=[string]$contract.branch
