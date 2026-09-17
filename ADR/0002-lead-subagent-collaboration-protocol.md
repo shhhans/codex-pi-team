@@ -2,17 +2,17 @@
 
 Status: Accepted
 Date: 2026-08-24
-Supersedes: the lifecycle and handoff rules in ADR 0001
+Supersedes: the lifecycle and handoff rules in ADR 0001; the Reviewer workflow
 Lead task: BOOTSTRAP-SELF-007
 
 ## Context
 
 ADR 0001 established the active Lead, Researcher, Executor, and Reviewer
-roles, but it treated an Executor stop as the handoff to Reviewer. That
-lifecycle is incompatible with the required review/fix loop: the paired
-Executor and Reviewer must retain task context until Lead accepts the work.
-The active files also contained a stale Architect/Critic topology and did
-not identify one normative collaboration protocol.
+roles. Modular Collaboration v1 replaces the active Reviewer workflow with a
+Validator: the Validator writes independent black-box tests from a frozen
+contract and must not inspect the target implementation. Historical Reviewer
+material remains under `.pi/legacy/`. The active pair must retain task context
+until Lead accepts the work.
 
 ## Decision
 
@@ -26,7 +26,7 @@ Lead (Codex) is the only task authority and the only role that communicates
 with the User. Lead owns:
 
 - task ID, task name, objective, acceptance decision, and task lifecycle;
-- role selection, Researcher assignment, Executor/Reviewer pairing, and the
+- role selection, Researcher assignment, Executor/Validator pairing, and the
   isolated worktree;
 - acceptance, rejection, follow-up direction, and resource reclamation;
 - `goal.md`, `project_state.md`, and alignment of `architect.md`.
@@ -76,34 +76,34 @@ coordination.
 - Researcher answers one specific question and maintains `research/`.
 - Executor implements one Lead-delegated task in the assigned worktree and
   maintains `implementation_notes/` plus the task's implementation files.
-- Reviewer is paired one-to-one with an Executor, reviews the same worktree,
-  writes or edits tests, and maintains `failures/`. Reviewer never edits
-  production or normative documentation.
+- Validator is paired one-to-one with an Executor, writes independent black-box
+  tests from the frozen contract, and maintains `failures/`. Validator never
+  reads the target implementation or edits production or normative documentation.
 
-Executor does not edit tests to conceal failures. Reviewer may use read-only
-Git operations (`status`, `diff`, `log`, `show`, `blame`, and equivalent)
-because they are necessary for review. Commit, stash, reset, checkout,
-rebase, destructive cleanup, and other worktree-changing Git operations
-require explicit Lead authorization.
+Executor does not edit tests to conceal failures. Validator may read public
+interfaces, the frozen contract, test specifications, and its own tests, but
+does not inspect source through Git, search, or another indirect route.
 
 ### Persistent pair lifecycle
 
-Lead allocates the Executor and Reviewer as a persistent pair for the task.
-Both sessions remain alive through implementation, review, fixes, and
-re-review. Completing a turn means reporting the current result and becoming
-idle/event-driven; it does not mean stopping the process or surrendering the
-task. Normal coordination must not use stop/resume.
+Lead allocates the Executor and Validator as a persistent pair for the task.
+Both sessions remain alive through contract negotiation, implementation,
+validation, fixes, and re-validation. Completing a turn means reporting the
+current result and becoming idle/event-driven; it does not mean stopping the
+process or surrendering the task. Normal coordination must not use stop/resume.
 
 The lifecycle is:
 
-1. Lead assigns the task and pair.
-2. Reviewer registers the task and becomes idle while Executor implements.
-3. Executor validates, updates `implementation_notes/<task-id>.md`, sends
-   `READY_FOR_REVIEW`, reports the completed slice to Lead, and becomes idle.
-4. Reviewer reviews and sends either `REVIEW_PASS` or `REVIEW_FAIL`. It
-   reports the completed review slice to Lead and becomes idle.
-5. On failure, Executor fixes production/documentation, sends `FIX_READY`,
-   and the same Reviewer re-reviews. The pair repeats without stop/resume.
+1. Lead assigns the task and pair. Executor submits the structured contract;
+   Validator comments and both ACK the same complete body. The contract then freezes.
+2. Validator writes independent tests from that contract and becomes idle while
+   Executor implements.
+3. Executor updates `implementation_notes/<task-id>.md`, sends
+   `READY_FOR_VALIDATION`, reports the completed slice to Lead, and becomes idle.
+4. Validator runs its tests and sends either `VALIDATION_PASS` or
+   `VALIDATION_FAIL`, with evidence or failure paths and contract basis.
+5. On failure, Executor fixes production code, sends `FIX_READY`, and the same
+   Validator re-tests without inspecting source. The pair repeats without stop/resume.
 6. After a pass, Executor reports `READY_FOR_ACCEPTANCE`. Lead runs
    `pi-team.cmd inspect <task-id>`, independently verifies the objective and
    acceptance results, and either requests another slice or accepts.
@@ -131,12 +131,13 @@ unbounded wait.
 ### Communication
 
 Allowed direct peer routes are `Researcher <-> Executor` for the same task
-and the paired `Executor <-> Reviewer`. Researcher and Reviewer do not
-communicate directly. Peer messages are asynchronous `send` events, not
+and the paired `Executor <-> Validator`. Researcher and Validator do not
+communicate directly. Contract negotiation is recorded through contract tools,
+not peer messages. Peer messages are asynchronous `send` events, not
 blocking `ask` calls. The receiver handles each injected message as a new
 turn and returns to idle after reporting its result.
 
-Routine implementation/review details travel directly within the pair.
+Routine implementation/validation details travel directly within the pair.
 Blocked scope, architecture/product questions, contract contradictions,
 material risk, and changed assumptions go to Lead. Direct peer policy is an
 Agent rule enforced and audited by Lead; it is not claimed as a transport
@@ -156,7 +157,7 @@ ACL.
 
 ## Acceptance and evidence
 
-Lead accepts only after inspecting the diff, validation evidence, Reviewer
+Lead accepts only after inspecting the diff, validation evidence, Validator
 verdict, unresolved risks, and the task's done criteria. A tool call, audit
 record, or socket-delivery acknowledgement alone does not prove that an
 Agent used a message or that the collaboration loop works causally.

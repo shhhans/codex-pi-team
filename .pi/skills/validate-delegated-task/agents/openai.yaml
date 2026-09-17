@@ -1,0 +1,3 @@
+interface:
+  display_name: "Validate Delegated Task"
+  short_description: "Help with independent black-box validation"

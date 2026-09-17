@@ -8,16 +8,16 @@ import { spawnSync } from "node:child_process";
 import { appendAgentEvent } from "../plugins/agent-blackboard/server/blackboard-core.mjs";
 import { appendRoleEvent } from "../.pi/communication/role-events.mjs";
 const REPO = process.cwd();
-const SKILL_NAMES = ["answer-research-question", "execute-delegated-task", "review-delegated-task"];
+const SKILL_NAMES = ["answer-research-question", "execute-delegated-task", "validate-delegated-task"];
 const RESEARCHER_TOOLS = ["read", "grep", "find", "ls", "write", "web_search", "fetch_content", "get_search_content", "source_check", "pi_team_intercom", "blackboard_update"];
 const EXECUTOR_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "pi_team_intercom", "blackboard_update"];
-const REVIEWER_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "pi_team_intercom", "blackboard_update"];
+const VALIDATOR_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write", "pi_team_intercom", "blackboard_update", "contract_read", "contract_comment", "contract_ack"];
 const DEEP_RESEARCH_TOOLS = ["research_run", "deep_research_task", "deep_research_review", "research_synthesis_input", "research_report_artifact"];
-const ACTIVE_ROLES = ["researcher", "executor", "reviewer"];
+const ACTIVE_ROLES = ["researcher", "executor", "validator"];
 const ROLE_RUNTIME = {
   researcher: { provider: "minimax-cn", model: "MiniMax-M3" },
   executor: { provider: "minimax-cn", model: "MiniMax-M3" },
-  reviewer: { provider: "volcengine-ark", model: "deepseek-v4-flash" },
+  validator: { provider: "volcengine-ark", model: "deepseek-v4-flash" },
 };
 const LEGACY_ROLES = ["architect", "critic", "engineer"];
 const SHARED_INTERCOM = "~/.pi/agent/npm/node_modules/pi-intercom/index.ts";
@@ -183,8 +183,8 @@ test("researcher alone loads shared pi-web-access and has no Deep Research tools
   }
 });
 
-test("executor and reviewer cannot load or request web-access tools (negative control)", async () => {
-  for (const role of ["executor", "reviewer"]) {
+test("executor and validator cannot load or request web-access tools (negative control)", async () => {
+  for (const role of ["executor", "validator"]) {
     const text = await readFile(join(REPO, ".pi/agents", `${role}.md`), "utf8");
     const fm = parseFrontmatter(text);
     const tools = parseScalarList(fm.tools);
@@ -212,21 +212,19 @@ test("executor has required implementation tools and the delegated-task skill", 
   assert.match(text, /implementation_notes\/<task-id>\.md/);
 });
 
-test("reviewer has bash/edit/write, the review-delegated-task skill, and never edits production code", async () => {
-  const text = await readFile(join(REPO, ".pi/agents/reviewer.md"), "utf8");
+test("validator has black-box test tools, the validation skill, and never edits production code", async () => {
+  const text = await readFile(join(REPO, ".pi/agents/validator.md"), "utf8");
   const fm = parseFrontmatter(text);
   const tools = parseScalarList(fm.tools);
-  for (const required of REVIEWER_TOOLS) {
-    assert.ok(tools.includes(required), `Reviewer must include tool ${required}`);
+  for (const required of VALIDATOR_TOOLS) {
+    assert.ok(tools.includes(required), `Validator must include tool ${required}`);
   }
-  assert.match(text, /review-delegated-task/);
-  assert.equal(fm.skills, "review-delegated-task");
+  assert.match(text, /validate-delegated-task/);
+  assert.equal(fm.skills, "validate-delegated-task");
   assert.equal(fm.skillPath, "../skills");
-  assert.match(text, /never edit production code/i);
-  assert.match(text, /failures\/<task-id>-<finding-id>\.md/);
-  // Production-code prohibition must be explicit in the body, not just hinted.
-  assert.match(text, /production code/);
-  assert.match(text, /\bnevers?\b|prohibit|prohibited/i);
+  assert.match(text, /independent black-box validation/i);
+  assert.match(text, /Do not read the target implementation/i);
+  assert.match(text, /Never edit production code/i);
 });
 
 test("active role memory files are absent and the executor runtime directory is removed", async () => {
@@ -279,12 +277,10 @@ test("ADR 0002 is the sole normative Lead-Subagent protocol and active surfaces 
   assert.match(adr, /sole normative Lead.Subagent collaboration protocol/i);
   assert.match(adr, /task ID, task name, objective, acceptance decision, and task lifecycle/i);
   assert.match(adr, /Architecture and product decisions belong to Lead and User/i);
-  assert.match(adr, /READY_FOR_REVIEW/);
-  assert.match(adr, /REVIEW_PASS/);
-  assert.match(adr, /REVIEW_FAIL/);
+  assert.match(adr, /Validator/);
   assert.match(adr, /FIX_READY/);
   assert.match(adr, /(?:Only after Lead acceptance|After Lead acceptance)/i);
-  assert.match(adr, /read-only\s+Git operations/i);
+  assert.match(adr, /does not inspect source through Git/i);
   assert.match(adr, /do not invoke WSL unless Lead explicitly authorizes it/i);
 
   const summaryPaths = [
@@ -301,40 +297,39 @@ test("ADR 0002 is the sole normative Lead-Subagent protocol and active surfaces 
   }
 });
 
-test("Executor and Reviewer use a persistent idle review-fix lifecycle without stop handoffs", async () => {
+test("Executor and Validator document the contract-first validation lifecycle", async () => {
   const paths = [
     ".pi/agents/executor.md",
-    ".pi/agents/reviewer.md",
+    ".pi/agents/validator.md",
     ".pi/skills/execute-delegated-task/SKILL.md",
-    ".pi/skills/review-delegated-task/SKILL.md",
+    ".pi/skills/validate-delegated-task/SKILL.md",
   ];
   for (const path of paths) {
     const text = await readFile(join(REPO, path), "utf8");
     assert.match(text, /idle|event-driven/i, `${path} must end slices idle/event-driven`);
-    assert.match(text, /Lead accept|Lead acceptance/i, `${path} must retain the pair until Lead acceptance`);
+    assert.match(text, /Lead accept|Lead acceptance|Only Lead accepts/i, `${path} must retain the pair until Lead acceptance`);
     assert.doesNotMatch(text, /stop signal|Executor has stopped|after Executor stops|Reviewer enters after/i,
       `${path} must not encode the obsolete stop handoff`);
   }
 
   const executor = await readFile(join(REPO, ".pi/agents/executor.md"), "utf8");
-  assert.match(executor, /READY_FOR_REVIEW/);
+  assert.match(executor, /READY_FOR_VALIDATION/);
   assert.match(executor, /FIX_READY/);
-  const reviewer = await readFile(join(REPO, ".pi/agents/reviewer.md"), "utf8");
-  assert.match(reviewer, /REVIEW_PASS/);
-  assert.match(reviewer, /REVIEW_FAIL/);
-  assert.match(reviewer, /Read-only Git operations/i);
-  assert.match(reviewer, /stash, reset, checkout, rebase/i);
+  const validator = await readFile(join(REPO, ".pi/agents/validator.md"), "utf8");
+  assert.match(validator, /VALIDATION_PASS/);
+  assert.match(validator, /VALIDATION_FAIL/);
+  assert.match(validator, /Do not read the target implementation/i);
 
   for (const path of [
     ".pi/agents/executor.md",
-    ".pi/agents/reviewer.md",
+    ".pi/agents/validator.md",
     ".pi/agents/researcher.md",
     ".pi/skills/execute-delegated-task/SKILL.md",
-    ".pi/skills/review-delegated-task/SKILL.md",
+    ".pi/skills/validate-delegated-task/SKILL.md",
     ".pi/skills/answer-research-question/SKILL.md",
   ]) {
     const text = await readFile(join(REPO, path), "utf8");
-    assert.match(text, /sole (event-)?schema contract|sole JSON event contract|exact JSON (fields|contract) from `pi_team_intercom`/i,
+    assert.match(text, /sole (?:JSON )?event-?schema contract|sole JSON event contract|exact JSON (fields|contract) from `pi_team_intercom`/i,
       `${path} must defer event field details to the registered intercom tool`);
     assert.doesNotMatch(text, /body_encoding|agent-team\/v1 envelope|base64url body/i,
       `${path} must not duplicate transport-envelope instructions`);
