@@ -546,7 +546,7 @@ function RoleArguments([string]$Role,[string]$InitialPromptFile,[string]$Session
   $skills = @{
     researcher = 'answer-research-question'
     executor = 'execute-delegated-task'
-    validator = 'review-delegated-task'
+    validator = 'validate-delegated-task'
   }
   if (-not $tools.ContainsKey($Role)) { Fail "unknown Pi Team role: $Role" }
   $roleFile = Join-Path $ProjectRoot ".pi/agents/$Role.md"
@@ -680,7 +680,7 @@ function New-RoleContext($Contract,[string]$Role,[string]$Mode,[string]$Question
       $lines += 'Implementation boundary: make the smallest coherent change in this worktree and request bounded research when needed.'
     }
     'validator' {
-      $lines += 'Recommended role reads: .pi/skills/review-delegated-task/SKILL.md, implementation_notes/, tests/run-tests.ps1'
+      $lines += 'Recommended role reads: .pi/skills/validate-delegated-task/SKILL.md, failures/, tests/run-tests.ps1'
       $lines += 'Review boundary: inspect the diff and evidence; use read-only Git operations and edit only review tests or real failure artifacts.'
     }
   }

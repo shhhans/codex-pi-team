@@ -308,7 +308,7 @@ test("Validator inbound Validator<-Researcher is denied before context; Validato
   const previousTaskId = process.env.PI_TEAM_TASK_ID;
   process.env.PI_TEAM_TASK_ID = "INBOUND-001";
   try {
-  // (1) Researcher -> reviewer must be denied before context.
+  // (1) Researcher -> Validator must be denied before context.
   const deniedInbound = {
     messages: [
       {
@@ -324,10 +324,10 @@ test("Validator inbound Validator<-Researcher is denied before context; Validato
   };
   const deniedCtx = { messages: deniedInbound.messages };
   const deniedResult = await validatorPolicy.onContext(deniedInbound, deniedCtx);
-  assert.ok(deniedResult, "context hook must return a result for denied researcher -> reviewer inbound");
+  assert.ok(deniedResult, "context hook must return a result for denied researcher -> validator inbound");
   const deniedTypes = (deniedResult.messages ?? []).map((m) => m.customType);
-  assert.equal(deniedTypes.includes("intercom_message"), false, "researcher -> reviewer inbound must be filtered before context");
-  // (2) Executor -> reviewer is projected into a JSON event with no wire body.
+  assert.equal(deniedTypes.includes("intercom_message"), false, "researcher -> validator inbound must be filtered before context");
+  // (2) Executor -> Validator is projected into a JSON event with no wire body.
   const acceptedInbound = {
     messages: [
       {
@@ -361,7 +361,7 @@ test("denied inbound Validator<-Researcher must not create a pending reply-store
 
   // Build a structurally valid envelope that the policy will accept past
   // `parseEnvelope`, but with a sender (researcher) that PolicyReceiver.authorizePeer
-  // must refuse for the reviewer role.
+  // must refuse for the Validator role.
   const deniedId = "33333333-3333-4333-8333-333333333333";
   const deniedEnvelope = [
     "agent-team/v1",
@@ -387,18 +387,18 @@ test("denied inbound Validator<-Researcher must not create a pending reply-store
     ],
   };
   const deniedResult = await validatorPolicy.onContext(deniedInbound, { messages: deniedInbound.messages });
-  assert.ok(deniedResult, "denied researcher -> reviewer inbound must produce a context result");
+  assert.ok(deniedResult, "denied researcher -> validator inbound must produce a context result");
   const deniedTypes = (deniedResult.messages ?? []).map((m) => m.customType);
-  assert.equal(deniedTypes.includes("intercom_message"), false, "researcher -> reviewer inbound must be filtered from model context");
+  assert.equal(deniedTypes.includes("intercom_message"), false, "researcher -> validator inbound must be filtered from model context");
 
   // No reply-store file may be created for an unauthorized sender. A pending
   // reservation written before authorization is a side-effect leak that can
   // later be replayed against a legitimate executor send carrying the same id.
   const deniedPath = join(replyStoreDir, "validator", `${deniedId}.json`);
   const deniedExists = await stat(deniedPath).then(() => true, () => false);
-  assert.equal(deniedExists, false, `denied researcher -> reviewer inbound must not create a pending reservation at ${deniedPath}`);
+  assert.equal(deniedExists, false, `denied researcher -> validator inbound must not create a pending reservation at ${deniedPath}`);
 
-  // The accepted executor -> reviewer path on a fresh reviewer instance must
+  // The accepted executor -> validator path on a fresh Validator instance must
   // produce a context that retains the inbound message (no filtering).
   const { auditDir: acceptedAudit, replyStoreDir: acceptedReply } = freshRuntimePaths(t);
   const acceptedPolicy = createRoleRuntimePolicy("validator", { auditDir: acceptedAudit, replyStoreDir: acceptedReply });
@@ -418,14 +418,14 @@ test("denied inbound Validator<-Researcher must not create a pending reply-store
     ],
   };
   const acceptedResult = await acceptedPolicy.onContext(acceptedInbound, { messages: acceptedInbound.messages });
-  assert.equal(acceptedResult.messages[0].customType, "pi_team_event", "executor -> reviewer inbound must be exposed only as a structured event");
+  assert.equal(acceptedResult.messages[0].customType, "pi_team_event", "executor -> validator inbound must be exposed only as a structured event");
   // No reply-store file is required for an accepted inbound; the reservation
   // contract is enforced by read() at the next inbound. Either way, accepting
   // must not have written a file in this single-message scenario because
   // `replyStore.write()` is the only place that persists a record on accept.
   const acceptedPath = join(acceptedReply, "validator", `${acceptedId}.json`);
   const acceptedExists = await stat(acceptedPath).then(() => true, () => false);
-  assert.equal(acceptedExists, false, `accepted executor -> reviewer inbound must not persist a reply-store file from onContext alone; ${acceptedPath}`);
+  assert.equal(acceptedExists, false, `accepted executor -> validator inbound must not persist a reply-store file from onContext alone; ${acceptedPath}`);
   } finally {
     if (previousTaskId === undefined) delete process.env.PI_TEAM_TASK_ID; else process.env.PI_TEAM_TASK_ID = previousTaskId;
   }
