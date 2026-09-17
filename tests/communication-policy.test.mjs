@@ -32,7 +32,7 @@ import { classifyClientResult } from "../.pi/communication/send.mjs";
 import { sendLeadRequestChanges } from "../.pi/communication/lead-intercom.mjs";
 
 const REPO = process.cwd();
-const ACTIVE_ROLE_NAMES = ["researcher", "executor", "reviewer"];
+const ACTIVE_ROLE_NAMES = ["researcher", "executor", "validator"];
 const EXPECTED_SUPERVISOR_REASONS = new Set(["need_decision", "progress_update", "interview_request"]);
 const SAFE_INTERCOM_ACTIONS = new Set(["list", "list-cwd", "status", "pending"]);
 
@@ -40,16 +40,16 @@ test("Pi Team intercom tool description is the authoritative role-facing event c
   const executor = structuredIntercomToolDescription("executor", "TOOL-001");
   assert.match(executor, /task_id must equal "TOOL-001"/);
   assert.match(executor, /RESEARCH_REQUEST/);
-  assert.match(executor, /READY_FOR_REVIEW/);
+  assert.match(executor, /READY_FOR_VALIDATION/);
   assert.match(executor, /quote every key and string value/i);
   assert.match(executor, /raw agent-team\/v1 envelope/i);
   assert.doesNotMatch(executor, /"lead"/);
 
-  const reviewer = structuredIntercomToolDescription("reviewer", "TOOL-001");
-  assert.match(reviewer, /REVIEW_PASS/);
-  assert.match(reviewer, /REVIEW_FAIL/);
-  assert.match(reviewer, /"executor"/);
-  assert.doesNotMatch(reviewer, /READY_FOR_REVIEW/);
+  const validator = structuredIntercomToolDescription("validator", "TOOL-001");
+  assert.match(validator, /VALIDATION_PASS/);
+  assert.match(validator, /VALIDATION_FAIL/);
+  assert.match(validator, /"executor"/);
+  assert.doesNotMatch(validator, /READY_FOR_VALIDATION/);
 
   const lead = structuredIntercomToolDescription("lead", "TOOL-001");
   assert.match(lead, /LEAD_REQUEST_CHANGES/);
@@ -58,9 +58,9 @@ test("Pi Team intercom tool description is the authoritative role-facing event c
 
 test("LEAD_REQUEST_CHANGES is Lead-only and targets Executor only", () => {
   assert.equal(authorizeStructuredEvent("lead", "executor", "LEAD_REQUEST_CHANGES"), true);
-  assert.equal(authorizeStructuredEvent("lead", "reviewer", "LEAD_REQUEST_CHANGES"), false);
-  assert.equal(authorizeStructuredEvent("executor", "reviewer", "LEAD_REQUEST_CHANGES"), false);
-  assert.equal(authorizeStructuredEvent("reviewer", "executor", "LEAD_REQUEST_CHANGES"), false);
+  assert.equal(authorizeStructuredEvent("lead", "validator", "LEAD_REQUEST_CHANGES"), false);
+  assert.equal(authorizeStructuredEvent("executor", "validator", "LEAD_REQUEST_CHANGES"), false);
+  assert.equal(authorizeStructuredEvent("validator", "executor", "LEAD_REQUEST_CHANGES"), false);
 });
 
 function parseFrontmatter(text) {
@@ -136,14 +136,14 @@ function makeContactSupervisorEvent(reason) {
 function makeIntercomEvent(action, recipient, message) {
   if (action === "send" && typeof message === "string" && message.startsWith("agent-team/v1")) {
     let parsed;
-    try { parsed = parseEnvelope(message); } catch { return { toolName: "pi_team_intercom", input: { action, to: recipient.match(/--(researcher|executor|reviewer|lead)(?:--|$)/)?.[1] ?? recipient, message } }; }
+    try { parsed = parseEnvelope(message); } catch { return { toolName: "pi_team_intercom", input: { action, to: recipient.match(/--(researcher|executor|validator|lead)(?:--|$)/)?.[1] ?? recipient, message } }; }
     const taskId = process.env.PI_TEAM_TASK_ID ?? recipient.match(/^pi-team--(.+?)--/)?.[1] ?? "TEST";
     let event;
     try { event = JSON.parse(parsed.body); } catch {
-      event = { type: "READY_FOR_REVIEW", task_id: taskId, worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" };
+      event = { type: "READY_FOR_VALIDATION", task_id: taskId, worktree: "test-worktree", implementation_notes_path: "implementation_notes/test.md" };
     }
     message = JSON.stringify(event);
-    recipient = recipient.match(/--(researcher|executor|reviewer|lead)(?:--|$)/)?.[1] ?? recipient;
+    recipient = recipient.match(/--(researcher|executor|validator|lead)(?:--|$)/)?.[1] ?? recipient;
   }
   return {
     toolName: "pi_team_intercom",
@@ -165,8 +165,8 @@ function makeInboundStructuredEnvelope(id, event) {
 }
 
 test("policy.mjs exposes only the three active runtime roles and legacy role names are rejected", () => {
-  assert.deepEqual([...ROLES].sort(), ["executor", "lead", "researcher", "reviewer"]);
-  assert.deepEqual([...ACTIVE_ROLES].sort(), ["executor", "researcher", "reviewer"]);
+  assert.deepEqual([...ROLES].sort(), ["executor", "lead", "researcher", "validator"]);
+  assert.deepEqual([...ACTIVE_ROLES].sort(), ["executor", "researcher", "validator"]);
   assert.deepEqual([...LEGACY_ROLES].sort(), ["architect", "critic", "engineer"]);
   // The bounded peer topology must only reference active role names.
   for (const [sender, recipients] of BOUNDED_PEERS.entries()) {
@@ -183,7 +183,7 @@ test("stable Pi Team intercom identities are task-scoped", () => {
   assert.equal(resolveTeamPeerRole("executor", "PERF-003"), undefined);
 });
 
-test("researcher, executor, and reviewer are the only active role names; legacy roles are not accepted", async (t) => {
+test("researcher, executor, and validator are the only active role names; legacy roles are not accepted", async (t) => {
   for (const role of ACTIVE_ROLE_NAMES) {
     const { auditDir, replyStoreDir } = freshRuntimePaths(t);
     const policy = createRoleRuntimePolicy(role, { auditDir, replyStoreDir });
@@ -206,16 +206,14 @@ test("researcher, executor, and reviewer are the only active role names; legacy 
   );
 });
 
-test("async peer send bidirectionally allowed only executor<->researcher and executor<->reviewer", () => {
+test("async peer send bidirectionally allowed only executor<->researcher and executor<->validator", () => {
   // Bidirectional allow: executor <-> researcher
   assert.equal(authorizePeer("executor", "researcher"), true, "executor must be allowed to send to researcher");
   assert.equal(authorizePeer("researcher", "executor"), true, "researcher must be allowed to send to executor");
-  // Bidirectional allow: executor <-> reviewer
-  assert.equal(authorizePeer("executor", "reviewer"), true, "executor must be allowed to send to reviewer");
-  assert.equal(authorizePeer("reviewer", "executor"), true, "reviewer must be allowed to send to executor");
-  // researcher <-> reviewer denied
-  assert.equal(authorizePeer("researcher", "reviewer"), false, "researcher must not be allowed to send to reviewer");
-  assert.equal(authorizePeer("reviewer", "researcher"), false, "reviewer must not be allowed to send to researcher");
+  assert.equal(authorizePeer("executor", "validator"), true);
+  assert.equal(authorizePeer("validator", "executor"), true);
+  assert.equal(authorizePeer("researcher", "validator"), false);
+  assert.equal(authorizePeer("validator", "researcher"), false);
   // Architect/critic/engineer invalid
   for (const legacy of [...LEGACY_ROLES]) {
     for (const active of ACTIVE_ROLE_NAMES) {
@@ -235,13 +233,13 @@ test("researcher outbound peer shape matches the bounded set", () => {
   assert.deepEqual([...recipients].sort(), ["executor"]);
 });
 
-test("executor outbound peer shape is exactly researcher + reviewer", () => {
+test("executor outbound peer shape is exactly researcher + validator", () => {
   const recipients = BOUNDED_PEERS.get("executor");
-  assert.deepEqual([...recipients].sort(), ["researcher", "reviewer"]);
+  assert.deepEqual([...recipients].sort(), ["researcher", "validator"]);
 });
 
-test("reviewer outbound peer shape is exactly executor", () => {
-  const recipients = BOUNDED_PEERS.get("reviewer");
+test("validator outbound peer shape is exactly executor", () => {
+  const recipients = BOUNDED_PEERS.get("validator");
   assert.deepEqual([...recipients].sort(), ["executor"]);
 });
 
@@ -254,9 +252,9 @@ test("contact_supervisor reasons allowed for all three active roles exactly need
   assert.equal(authorizeSupervisorEscalation("executor", "need_decision"), true);
   assert.equal(authorizeSupervisorEscalation("executor", "progress_update"), true);
   assert.equal(authorizeSupervisorEscalation("executor", "interview_request"), true);
-  assert.equal(authorizeSupervisorEscalation("reviewer", "need_decision"), true);
-  assert.equal(authorizeSupervisorEscalation("reviewer", "progress_update"), true);
-  assert.equal(authorizeSupervisorEscalation("reviewer", "interview_request"), true);
+  assert.equal(authorizeSupervisorEscalation("validator", "need_decision"), true);
+  assert.equal(authorizeSupervisorEscalation("validator", "progress_update"), true);
+  assert.equal(authorizeSupervisorEscalation("validator", "interview_request"), true);
   // Anything else is denied for every active role.
   for (const role of ACTIVE_ROLE_NAMES) {
     assert.equal(authorizeSupervisorEscalation(role, "completion_handoff"), false, `${role} must not escalate with completion_handoff`);
