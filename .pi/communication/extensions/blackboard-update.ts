@@ -83,7 +83,12 @@ export default function (pi: ExtensionAPI) {
     // State updates are observability only. Remind at the configured interval,
     // but never block a role from using its tools.
     const result = gate.evaluate(event);
-    if (result.remind) return { message: result.reason };
+    if (result.remind) {
+      // `tool_call` return values only control the call; they are not a
+      // conversation delivery API. Inject a normal follow-up so an idle role
+      // sees the reminder while the current tool call remains allowed.
+      pi.sendMessage({ role: "user", content: result.reason }, { triggerTurn: false, deliverAs: "followUp" });
+    }
     return undefined;
   });
 }

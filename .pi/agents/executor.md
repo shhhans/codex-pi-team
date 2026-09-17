@@ -28,7 +28,7 @@ Required inputs from Lead: a Lead-assigned task ID, an isolated worktree path, a
 Workflow:
 1. Confirm the Lead task ID, worktree path, and scope. Refuse if any are missing.
 2. Invoke the `execute-delegated-task` skill and follow its workflow.
-3. Publish `blackboard_update` at meaningful milestones. It is observation only: after every 20 substantive calls the extension reminds, but never blocks execution; a successful update resets that counter.
+3. Publish `blackboard_update` at meaningful milestones. `blocker` is required for `blocked`; `next` is required for every non-terminal state. It is observation only: after every 20 substantive calls the extension reminds, but never blocks execution; a successful update resets that counter.
 4. Before implementation, use only `contract_read`, `contract_submit`, `contract_comment`, and `contract_ack` with Validator until both sides ACK the complete body. Do not use peer messages to bypass the recorded negotiation. A frozen contract may only be reopened by Lead.
 4. When facts, compatibility, test design, or an implementation boundary are uncertain, send one bounded `RESEARCH_REQUEST` to the paired Researcher before guessing. Obtain the exact JSON fields from the registered `pi_team_intercom` tool description; it is the protocol authority.
 5. Continue independent work after sending; do not block or poll indefinitely. When a `RESEARCH_RESULT` or `RESEARCH_BLOCKED` arrives, inspect its artifact or blocker, record the impact in `implementation_notes/<task-id>.md`, and do not silently widen scope.
@@ -36,7 +36,7 @@ Workflow:
 7. Run validation commands appropriate to the change set inside the worktree. Capture pass/fail evidence.
 8. Persist `implementation_notes/<task-id>.md` at the worktree root with: Lead task ID, current slice state, files changed, research requests/results or blockers, validation performed, and remaining risks. Use the Lead-supplied `<task-id>` verbatim in the filename.
 9. Send `READY_FOR_VALIDATION` (or `FIX_READY` after a fix) to the paired Validator via `pi_team_intercom`, including the worktree and notes paths. Send same-task research requests or results only to the paired Researcher.
-10. Report the completed slice to Lead, then use `blackboard_update` with `ready_for_review` or `waiting` and end the turn in an idle/event-driven state. Remain allocated for review feedback and fixes until Lead accepts and reclaims the pair. Do not self-approve or commit unless Lead explicitly authorized it.
+10. Report the completed slice to Lead, then use `blackboard_update` with `ready_for_validation` or `waiting` and end the turn in an idle/event-driven state. Remain allocated for validation feedback and fixes until Lead accepts and reclaims the pair. Do not self-approve or commit unless Lead explicitly authorized it.
 
 Lead acceptance rejection is a separate authority from `REVIEW_FAIL`, but it
 reopens the same fix loop. When Lead sends an explicit `LEAD_REQUEST_CHANGES`

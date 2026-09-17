@@ -191,17 +191,17 @@ export function parseStructuredEvent(text, taskId) {
 
 function validateLifecycleEvent(event) {
   const allowed = new Map([
-    ["READY_FOR_REVIEW", new Set(["type", "task_id", "delegation_id", "worktree", "implementation_notes_path", "artifact_path"])],
+    ["READY_FOR_VALIDATION", new Set(["type", "task_id", "delegation_id", "worktree", "implementation_notes_path", "artifact_path"])],
     ["FIX_READY", new Set(["type", "task_id", "delegation_id", "worktree", "implementation_notes_path", "artifact_path"])],
-    ["REVIEW_PASS", new Set(["type", "task_id", "delegation_id", "evidence_paths", "artifact_path"])],
-    ["REVIEW_FAIL", new Set(["type", "task_id", "delegation_id", "failure_paths", "evidence_paths", "artifact_path"])],
+    ["VALIDATION_PASS", new Set(["type", "task_id", "delegation_id", "evidence_paths", "artifact_path"])],
+    ["VALIDATION_FAIL", new Set(["type", "task_id", "delegation_id", "failure_paths", "evidence_paths", "artifact_path"])],
     ["READY_FOR_ACCEPTANCE", new Set(["type", "task_id", "delegation_id", "worktree", "implementation_notes_path", "artifact_path"])],
     ["LEAD_REQUEST_CHANGES", new Set(["type", "task_id", "delegation_id", "rejected_criteria", "rejected_evidence", "required_correction", "next_artifact", "next_state"])],
   ]);
   const known = allowed.get(event.type);
   if (!known || Object.keys(event).some(key => !known.has(key))) throw new Error("structured-message-unknown-field");
-  if (event.type === "REVIEW_PASS" || event.type === "REVIEW_FAIL") {
-    const paths = event.type === "REVIEW_PASS" ? event.evidence_paths : event.failure_paths;
+  if (event.type === "VALIDATION_PASS" || event.type === "VALIDATION_FAIL") {
+    const paths = event.type === "VALIDATION_PASS" ? event.evidence_paths : event.failure_paths;
     if (!Array.isArray(paths) || paths.length === 0 || paths.some(path => typeof path !== "string" || !path)) throw new Error("structured-message-invalid-evidence-paths");
     if (event.evidence_paths !== undefined && (!Array.isArray(event.evidence_paths) || event.evidence_paths.some(path => typeof path !== "string" || !path))) throw new Error("structured-message-invalid-evidence-paths");
     return;

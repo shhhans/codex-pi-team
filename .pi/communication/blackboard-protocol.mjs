@@ -61,7 +61,7 @@ export const ROLE_CHECKPOINTS = Object.freeze({
     start: ["working"],
     progress: ["working"],
     blocked: ["blocked"],
-    handoff: ["ready_for_review"],
+    handoff: ["ready_for_validation"],
     waiting: ["waiting"],
   }),
   validator: Object.freeze({
@@ -86,7 +86,7 @@ const BLOCKER_REQUIRED_STATES = new Set(["blocked", "changes_requested"]);
 const NEXT_EXEMPT_STATES = new Set([
   "completed",
   "ready_for_acceptance",
-  "ready_for_review",
+  "ready_for_validation",
   "changes_requested",
 ]);
 

@@ -5,14 +5,14 @@ import { isAbsolute, resolve } from "node:path";
 export const ROLES = Object.freeze(["researcher", "executor", "validator"]);
 export const ROLE_STATES = Object.freeze({
   researcher: Object.freeze(["working", "waiting", "blocked", "completed"]),
-  executor: Object.freeze(["working", "waiting", "blocked", "ready_for_review"]),
+  executor: Object.freeze(["working", "waiting", "blocked", "ready_for_validation"]),
   validator: Object.freeze(["working", "waiting", "blocked", "validating", "changes_requested", "ready_for_acceptance"]),
 });
 export const TASK_STATUSES = Object.freeze(["active", "accepted", "incomplete", "archived"]);
-export const LEAD_WAKE_STATES = Object.freeze(["blocked", "changes_requested", "ready_for_review", "ready_for_acceptance", "completed"]);
+export const LEAD_WAKE_STATES = Object.freeze(["blocked", "changes_requested", "ready_for_validation", "ready_for_acceptance", "completed"]);
 export const ROLE_CHECKPOINTS = Object.freeze({
   researcher: Object.freeze({ complete: ["completed"], blocked: ["blocked"], waiting: ["waiting"] }),
-  executor: Object.freeze({ ready: ["ready_for_review"], blocked: ["blocked"], waiting: ["waiting"] }),
+  executor: Object.freeze({ ready: ["ready_for_validation"], blocked: ["blocked"], waiting: ["waiting"] }),
   validator: Object.freeze({ ready: ["ready_for_acceptance"], changes_requested: ["changes_requested"], blocked: ["blocked"], waiting: ["waiting"] }),
 });
 
@@ -88,7 +88,7 @@ export function validateAgentEvent(identity, input, sequence) {
   const next = ensureLine(input.next, "next", 500);
   if (state === "blocked" || state === "changes_requested") {
     if (!blocker) fail(`${state} requires blocker`);
-  } else if (state !== "completed" && !next) {
+  } else if (!["completed", "ready_for_validation", "ready_for_acceptance", "changes_requested"].includes(state) && !next) {
     fail(`${state} requires next`);
   }
   if (!Number.isInteger(sequence) || sequence < 1) fail("sequence must be a positive integer");

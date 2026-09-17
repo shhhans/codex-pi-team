@@ -58,13 +58,13 @@ test("lifecycle checkpoints classify every role state into one phase", () => {
       }
     }
   }
-  assert.deepEqual(ROLE_CHECKPOINTS.executor.handoff, ["ready_for_review"]);
-  assert.deepEqual(ROLE_CHECKPOINTS.reviewer.handoff.sort(), ["changes_requested", "ready_for_acceptance"].sort());
+  assert.deepEqual(ROLE_CHECKPOINTS.executor.handoff, ["ready_for_validation"]);
+  assert.deepEqual(ROLE_CHECKPOINTS.validator.handoff.sort(), ["changes_requested", "ready_for_acceptance"].sort());
   assert.deepEqual(ROLE_CHECKPOINTS.researcher.handoff, ["completed"]);
 });
 
 test("validateAgentUpdate refuses placeholder activity and short facts", () => {
-  for (const [role, workingState] of [["researcher", "working"], ["executor", "working"], ["reviewer", "reviewing"]]) {
+  for (const [role, workingState] of [["researcher", "working"], ["executor", "working"], ["validator", "validating"]]) {
     for (const placeholder of ["ok", "done", "still working", "no update", "..."]) {
       assert.throws(
         () => validateAgentUpdate(role, null, { state: workingState, activity: placeholder, next: "continue implementation" }),
@@ -89,7 +89,7 @@ test("validateAgentUpdate requires blocker for blocked and changes_requested", (
     /requires a non-empty blocker/,
   );
   assert.throws(
-    () => validateAgentUpdate("reviewer", null, { state: "changes_requested", activity: "missing test for X" }),
+    () => validateAgentUpdate("validator", null, { state: "changes_requested", activity: "missing test for X" }),
     /requires a non-empty blocker/,
   );
   const accepted = validateAgentUpdate("executor", null, { state: "blocked", activity: "downstream API failing", blocker: "Service returns 500 for /events", next: "raise service ticket" });
@@ -100,7 +100,7 @@ test("validateAgentUpdate requires next for every non-terminal state except the 
   const needsNext = [
     ["executor", "working", "starting slice"],
     ["executor", "waiting", "awaiting review feedback"],
-    ["reviewer", "reviewing", "scanning diff for scope"],
+    ["validator", "validating", "running contract tests"],
     ["researcher", "working", "reading ADR 0005"],
   ];
   for (const [role, state, activity] of needsNext) {
@@ -112,9 +112,9 @@ test("validateAgentUpdate requires next for every non-terminal state except the 
   }
   const exempt = [
     ["researcher", "completed"],
-    ["reviewer", "ready_for_acceptance"],
-    ["executor", "ready_for_review"],
-    ["reviewer", "changes_requested"],
+    ["validator", "ready_for_acceptance"],
+    ["executor", "ready_for_validation"],
+    ["validator", "changes_requested"],
   ];
   for (const [role, state] of exempt) {
     const input = { state, activity: "triage finished and accepted" };
@@ -152,12 +152,13 @@ test("validateAgentUpdate refuses blockers on non-blocking states", () => {
   );
 });
 
-test("createLifecycleGate blocks the first substantive tool call and resets on publish", () => {
+test("createLifecycleGate does not block and reminds only at the configured interval", () => {
   const gate = createLifecycleGate();
   const first = gate.evaluate({ toolName: "read" });
-  assert.equal(first.block, true);
-  assert.match(first.reason, /first substantive tool call/);
-  assert.equal(gate.bypasses, 1);
+  assert.equal(first.block, false);
+  assert.equal(first.remind, false);
+  for (let i = 0; i < 18; i += 1) assert.equal(gate.evaluate({ toolName: "read" }).remind, false);
+  assert.equal(gate.evaluate({ toolName: "read" }).remind, true);
   gate.markPublished();
   assert.equal(gate.published, true);
   assert.equal(gate.sinceUpdate, 0);
@@ -173,38 +174,20 @@ test("createLifecycleGate ignores the blackboard_update tool itself", () => {
   assert.equal(gate.published, false);
 });
 
-test("createLifecycleGate fires after maxToolCallsBetweenUpdates and fails open after maxBypasses", () => {
-  const gate = createLifecycleGate({ maxToolCallsBetweenUpdates: 3, maxBypasses: 2 });
+test("createLifecycleGate reminds at every interval and a publish resets the count", () => {
+  const gate = createLifecycleGate({ maxToolCallsBetweenUpdates: 3 });
   gate.markPublished();
-  let firstBlock = null;
-  for (let i = 0; i < 3; i += 1) {
-    const r = gate.evaluate({ toolName: "read" });
-    if (r.block) { firstBlock = r; break; }
-  }
-  assert.ok(firstBlock, "the gate must block after the configured number of tool calls");
-  assert.equal(gate.bypasses, 1);
+  for (let i = 0; i < 2; i += 1) assert.equal(gate.evaluate({ toolName: "read" }).remind, false);
+  assert.equal(gate.evaluate({ toolName: "read" }).remind, true);
   for (let i = 0; i < 3; i += 1) gate.evaluate({ toolName: "read" });
-  assert.equal(gate.bypasses, 2);
-  const open = gate.evaluate({ toolName: "read" });
-  assert.equal(open.block, false);
-  assert.equal(open.opened, true);
+  assert.equal(gate.history.filter((entry) => entry.at === "remind").length, 2);
+  gate.markPublished();
+  assert.equal(gate.sinceUpdate, 0);
+  assert.equal(gate.evaluate({ toolName: "read" }).remind, false);
   const history = gate.history;
-  assert.ok(history.some((entry) => entry.at === "open"));
+  assert.ok(history.some((entry) => entry.at === "remind"));
 });
 
-test("createLifecycleGate resets consecutive bypasses after a successful publish", () => {
-  const gate = createLifecycleGate({ maxToolCallsBetweenUpdates: 1, maxBypasses: 2 });
-  assert.equal(gate.evaluate({ toolName: "read" }).block, true);
-  assert.equal(gate.evaluate({ toolName: "read" }).block, true);
-  assert.equal(gate.bypasses, 2);
-  gate.markPublished();
-  assert.equal(gate.bypasses, 0);
-  assert.equal(gate.evaluate({ toolName: "read" }).block, true);
-  assert.equal(gate.bypasses, 1);
-  assert.equal(gate.evaluate({ toolName: "read" }).block, true);
-  assert.equal(gate.bypasses, 2);
-  assert.equal(gate.evaluate({ toolName: "read" }).opened, true);
-});
 
 test("end-to-end: Lead observes blocked and completion states through the Agent event log", async () => {
   const fixture = await makeRepo();
@@ -212,18 +195,18 @@ test("end-to-end: Lead observes blocked and completion states through the Agent 
     await createTask(fixture.repo, { task_id: "BB-PROC-1", name: "Protocol task", description: "Verify Lead can observe blocked and completion states." });
     await registerLead(fixture.repo, "BB-PROC-1", { thread_id: "lead-proc", host_id: "local" });
     const executor = { task_id: "BB-PROC-1", role: "executor", agent_id: "executor-proc", worktree: fixture.worktree };
-    const reviewer = { task_id: "BB-PROC-1", role: "reviewer", agent_id: "reviewer-proc", worktree: fixture.worktree };
+    const validator = { task_id: "BB-PROC-1", role: "validator", agent_id: "validator-proc", worktree: fixture.worktree };
     const researcher = { task_id: "BB-PROC-1", role: "researcher", agent_id: "researcher-proc", worktree: fixture.worktree };
     await appendAgentEvent(fixture.repo, executor, { state: "working", activity: "started slice on protocol module", next: "add semantic validation" });
     await appendAgentEvent(fixture.repo, executor, { state: "blocked", activity: "downstream API failing", blocker: "Service returns 500 for /events", next: "raise service ticket" });
-    await appendAgentEvent(fixture.repo, reviewer, { state: "reviewing", activity: "scanning diff for scope", next: "publish review verdict" });
-    await appendAgentEvent(fixture.repo, reviewer, { state: "ready_for_acceptance", activity: "protocol module passes new tests" });
+    await appendAgentEvent(fixture.repo, validator, { state: "validating", activity: "running public contract tests", next: "publish validation verdict" });
+    await appendAgentEvent(fixture.repo, validator, { state: "ready_for_acceptance", activity: "protocol module passes new tests" });
     await appendAgentEvent(fixture.repo, researcher, { state: "working", activity: "verifying prior art for protocol", next: "ship result to executor" });
     await appendAgentEvent(fixture.repo, researcher, { state: "completed", activity: "researcher handed back bounded evidence" });
     const wakeups = await listLeadWakeups(fixture.repo, "BB-PROC-1");
     const states = wakeups.wakeups.map((w) => w.state);
     assert.ok(states.includes("blocked"), "Lead must observe the executor blocked wakeup");
-    assert.ok(states.includes("ready_for_acceptance"), "Lead must observe the reviewer ready_for_acceptance wakeup");
+    assert.ok(states.includes("ready_for_acceptance"), "Lead must observe the Validator ready_for_acceptance wakeup");
     assert.ok(states.includes("completed"), "Lead must observe the researcher completed wakeup");
   } finally {
     await removeRepo(fixture);
@@ -246,19 +229,19 @@ test("Blackboard protocol does not grant task control, acceptance, or peer trans
 });
 
 test("role prompts document the lifecycle checkpoints and field semantics", async () => {
-  for (const role of ["researcher", "executor", "reviewer"]) {
+  for (const role of ["researcher", "executor", "validator"]) {
     const text = await readFile(join(REPO, ".pi/agents", `${role}.md`), "utf8");
     assert.match(text, /blackboard_update/, `${role} prompt must mention blackboard_update`);
     assert.match(text, /`blocker` is required/, `${role} prompt must require blocker for blocked`);
     assert.match(text, /`next` is required/, `${role} prompt must require next for non-terminal states`);
-    assert.match(text, /20 substantive tool calls/, `${role} prompt must describe the bounded gate threshold`);
+    assert.match(text, /20 substantive/, `${role} prompt must describe the bounded reminder threshold`);
   }
 });
 
 test("role skills document the Blackboard protocol", async () => {
   const skills = [
     ["execute-delegated-task", "publish task status and request a Lead wakeup"],
-    ["review-delegated-task", "enforces a Reviewer-side Blackboard protocol"],
+    ["review-delegated-task", "Blackboard protocol"],
     ["answer-research-question", "enforces a Researcher-side Blackboard protocol"],
   ];
   for (const [name, marker] of skills) {
@@ -298,12 +281,12 @@ test("readPreviousEvent returns the role's own previous event even when another 
   try {
     await createTask(fixture.repo, { task_id: "BB-PROC-3", name: "Cross-role previous task", description: "Read previous same-role event across an interleaved other-role event." });
     const executor = { task_id: "BB-PROC-3", role: "executor", agent_id: "executor-xr", worktree: fixture.worktree };
-    const reviewer = { task_id: "BB-PROC-3", role: "reviewer", agent_id: "reviewer-xr", worktree: fixture.worktree };
+    const validator = { task_id: "BB-PROC-3", role: "validator", agent_id: "validator-xr", worktree: fixture.worktree };
     await appendAgentEvent(fixture.repo, executor, { state: "working", activity: "executor started slice on protocol", next: "add semantic validation" });
     // A different role publishes after the executor's event; this is the
     // normal multi-role flow (e.g. Reviewer publishes reviewing/changes_requested
     // while the Executor waits for FIX_READY).
-    await appendAgentEvent(fixture.repo, reviewer, { state: "reviewing", activity: "reviewer scanning diff for scope", next: "publish review verdict" });
+    await appendAgentEvent(fixture.repo, validator, { state: "validating", activity: "validator running contract tests", next: "publish validation verdict" });
     const root = stateRoot(fixture.repo);
     const previous = await readPreviousEvent(root, "BB-PROC-3", "executor");
     assert.ok(previous, "readPreviousEvent must still find the executor's own previous event");
@@ -322,8 +305,8 @@ test("protocol testing helpers expose the heartbeat and field requirement sets",
   assert.ok(protocolTesting.BLOCKER_REQUIRED_STATES.has("changes_requested"));
   assert.ok(protocolTesting.NEXT_EXEMPT_STATES.has("completed"));
   assert.ok(protocolTesting.NEXT_EXEMPT_STATES.has("ready_for_acceptance"));
-  assert.equal(protocolTesting.describeCheckpoint("executor", "ready_for_review"), "handoff");
+  assert.equal(protocolTesting.describeCheckpoint("executor", "ready_for_validation"), "handoff");
   assert.equal(protocolTesting.describeCheckpoint("executor", "ready_for_acceptance"), null);
   assert.equal(protocolTesting.DEFAULT_LIFECYCLE_GATE.maxToolCallsBetweenUpdates, 20);
-  assert.equal(protocolTesting.DEFAULT_LIFECYCLE_GATE.maxBypasses, 2);
+  assert.equal(protocolTesting.DEFAULT_LIFECYCLE_GATE.maxToolCallsBetweenUpdates, 20);
 });
