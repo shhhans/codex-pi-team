@@ -2,7 +2,7 @@
 
 This directory implements the runtime policy for `minimal-loop-v1`.
 Codex is the user-facing Lead. The only active Pi roles are Researcher,
-Executor, and Reviewer.
+Executor, and Validator.
 
 Lifecycle, authority, and acceptance are normative only in
 `ADR/0002-lead-subagent-collaboration-protocol.md`.
@@ -12,10 +12,10 @@ Lifecycle, authority, and acceptance are normative only in
 Direct peer messages are asynchronous and restricted to:
 
 - Researcher <-> Executor
-- Executor <-> Reviewer
+- Executor <-> Validator
 
-Researcher and Reviewer cannot communicate directly. Lead does not use
-the ordinary peer-send route. Lead assigns each Executor/Reviewer pair; the
+Researcher and Validator cannot communicate directly. Lead does not use
+the ordinary peer-send route. Lead assigns each Executor/Validator pair; the
 role-level ACL does not prove that two allowed sessions belong to the
 same task.
 
@@ -29,11 +29,13 @@ the event only after normal inbound policy validation and returns an
 accepted/refused confirmation. Lead feedback is therefore a control event,
 not an arbitrary text message and not a Blackboard write.
 
-The paired Executor and Reviewer remain alive through implementation,
-review/fix, and re-review. `READY_FOR_REVIEW`, `REVIEW_PASS`,
-`REVIEW_FAIL`, and `FIX_READY` are asynchronous events. After processing
-an event, the role reports its completed slice to Lead and becomes idle;
-normal handoff does not stop or resume the sessions.
+The paired Executor and Validator remain alive through contract negotiation,
+implementation, validation, fixes, and re-validation. Executor submits the
+contract body; Validator can only comment and ACK. Both ACKs freeze the body.
+`READY_FOR_VALIDATION`, `VALIDATION_PASS`, `VALIDATION_FAIL`, and `FIX_READY`
+are asynchronous events. After processing an event, the role reports its
+completed slice to Lead and becomes idle; normal handoff does not stop or
+resume the sessions.
 
 ## Bounded Executor -> Researcher delegation (Issue #3)
 
@@ -72,7 +74,7 @@ contract.
 Each active role loads `blackboard-update.ts`; `report_to_lead` is not
 registered. `blackboard_update` records explicit Agent activity in the
 Lead-owned common-dir Blackboard. `blocked`, `changes_requested`,
-`ready_for_review`, `ready_for_acceptance`, and `completed` enqueue a Lead
+`ready_for_validation`, `ready_for_acceptance`, and `completed` enqueue a Lead
 wakeup when the task has a Lead binding. It does not authorize work, prove
 completion, or replace peer communication.
 
@@ -135,7 +137,7 @@ Run `powershell -ExecutionPolicy Bypass -File tests/run-tests.ps1` on
 Windows, or run both Node test files directly. These tests establish the
 policy contract, denial side effects, and extension wiring. They do not
 establish causal transport capability merely because an extension was
-loaded or an audit event exists. A live Executor/Reviewer exchange must
+loaded or an audit event exists. A live Executor/Validator exchange must
 be reported separately as an operational smoke test.
 
 The legacy v2.1 roles and Deep Research implementation are archived
