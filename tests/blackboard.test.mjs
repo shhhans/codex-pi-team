@@ -615,7 +615,7 @@ test("repo-local plugin exposes Lead-only tools, skills, MCP server, and inline/
   assert.match(piTeamLeadSkill, /pi-team\.cmd start/);
   assert.match(piTeamLeadSkill, /blackboard_watch/);
   assert.match(piTeamLeadSkill, /Do not use\s+WSL, Git Bash, `runs\.run`/);
-  assert.match(piTeamLeadSkill, /stay\s+alive through implementation, review, fixes, and re-review/);
+  assert.match(piTeamLeadSkill, /stay\s+alive through contract negotiation, implementation, validation, fixes, and\s+re-validation/);
   for (const skill of ["blackboard-lead", "pi-team-lead"]) {
     const metadata = await readFile(join(plugin, "skills", skill, "agents/openai.yaml"), "utf8");
     assert.match(metadata, /value: "agent-blackboard"/, `${skill} must declare its MCP dependency`);
