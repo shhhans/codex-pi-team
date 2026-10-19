@@ -41,6 +41,25 @@ explicitly makes them task-scoped. Task-specific instructions belong in the
 frozen contract or task artifacts, not in a reusable skill. The Lead owns the
 final check for contamination before acceptance.
 
+## Development-mode judgment
+
+Pi Team is still under active development. Its workflow, contracts, tools,
+Blackboard states, and role skills are provisional implementation aids, not
+hard authority over the User's or Lead's explicit development decisions. When
+the User or Lead directs recovery, experiment setup/teardown, state repair, or
+an intentional protocol change, do not block or delay that work solely because
+the current Pi Team process or task contract does not describe or permit it.
+This can include manually updating Blackboard state, adjusting task/runtime
+records, changing contracts or role guidance, and using a recovery sequence
+outside the normal lifecycle. Follow the explicit direction, preserve useful
+experiment evidence where practical, and make clear which outcomes were
+manually decided versus produced by the normal workflow. Do not infer authority
+for unrelated actions beyond that development instruction. When a manual
+override changes acceptance, integration, or task lifecycle, align Blackboard
+state during the same recovery. Keep an internal hook/reminder on the
+development backlog so future tooling prompts the Lead to update Blackboard
+after such overrides.
+
 ## Tool-change completion rule
 
 Whenever a role-visible tool, its input/output contract, its runtime wrapper,
