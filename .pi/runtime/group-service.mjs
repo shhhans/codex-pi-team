@@ -72,7 +72,7 @@ export async function launchGroup(store, groupId, options = {}) {
       // wt may forward into an existing process, so transmit identity inside its child bootstrap.
       const payload = Buffer.from(JSON.stringify({ env: Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith('PI_TEAM_'))), cwd: g.worktree, exe: process.env.PI_CMD || 'pi.cmd', args })).toString('base64');
       const script = `$d=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}'))|ConvertFrom-Json;foreach($p in $d.env.PSObject.Properties){[Environment]::SetEnvironmentVariable($p.Name,[string]$p.Value,'Process')};Set-Location -LiteralPath $d.cwd;& $d.exe @($d.args)`;
-      child = spawn(process.env.WT_CMD || 'wt.exe', ['-d', g.worktree, 'powershell.exe', '-NoLogo', '-NoProfile', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env, cwd: g.worktree, windowsHide: true, stdio: 'ignore' });
+      child = spawn(process.env.WT_CMD || 'wt.exe', ['-d', g.worktree, 'powershell.exe', '-NoLogo', '-NoProfile', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env, cwd: g.worktree, windowsHide: false, stdio: 'ignore' });
     }
     let error; child.once('error', e => { error = e; }); child.unref();
     const deadline = Date.now() + (options.timeout || 30000);
