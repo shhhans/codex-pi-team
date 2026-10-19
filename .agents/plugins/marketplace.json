@@ -1,20 +1,5 @@
 {
   "name": "pi-team-local",
-  "interface": {
-    "displayName": "Pi Team Local"
-  },
-  "plugins": [
-    {
-      "name": "agent-blackboard",
-      "source": {
-        "source": "local",
-        "path": "./plugins/agent-blackboard"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Productivity"
-    }
-  ]
+  "interface": { "displayName": "Pi Team Local" },
+  "plugins": [{ "name": "pi-team", "source": { "source": "local", "path": "./plugins/pi-team" }, "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" }, "category": "Productivity" }]
 }

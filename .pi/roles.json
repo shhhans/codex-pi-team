@@ -1,0 +1,5 @@
+{
+  "coordinator": { "provider": "minimax-cn", "model": "MiniMax-M3", "skill": "coordinate-group", "tools": ["read", "grep", "find", "ls", "write", "edit", "web_search", "fetch_content", "get_search_content", "source_check", "team_read", "team_send", "team_submit"] },
+  "executor": { "provider": "minimax-cn", "model": "MiniMax-M3", "skill": "execute-group-task", "tools": ["read", "grep", "find", "ls", "bash", "edit", "write", "team_read", "team_send", "team_submit"] },
+  "validator": { "provider": "volcengine-ark", "model": "deepseek-v4-flash", "skill": "review-group-task", "tools": ["read", "grep", "find", "ls", "bash", "edit", "write", "team_read", "team_send", "team_submit"] }
+}
