@@ -46,7 +46,7 @@ function resolveCurrentPeerSession(sessions, taskId, role) {
   const matches = sessions.filter(session => {
     if (!session || typeof session.id !== "string") return false;
     // pi-intercom exposes the canonical task/role/launch identity as `id`.
-    // `name` is only a display alias (for example `pi-team--TASK--reviewer`)
+    // `name` is only a display alias (for example `pi-team--TASK--validator`)
     // and omits the launch-id, so it cannot be the sole authorization key.
     const identities = [session.id, session.name]
       .filter((value) => typeof value === "string")
@@ -241,7 +241,7 @@ export function createRoleRuntimePolicy(role, { auditDir, peerSessions = [], lis
   // surface).
   //
   // Inputs:
-  //   sender: the runtime role ("executor", "researcher", "reviewer")
+  //   sender: the runtime role ("executor", "researcher", "validator")
   //   target: the raw target string the agent passed (e.g. "pi-team--ISSUE-011--researcher--abc")
   //   sameTaskTarget: parsed { taskId, role, launchId } if the target is a
   //     valid `pi-team--<task-id>--<role>[--<launch-id>]` shape; undefined

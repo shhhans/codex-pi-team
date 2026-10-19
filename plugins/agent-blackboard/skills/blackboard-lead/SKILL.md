@@ -52,9 +52,9 @@ as the only Blackboard read. Pass the cursor returned by the previous
 heartbeat in `cursor`, inspect only `changes`, and retain the newly returned
 cursor for the next heartbeat. The first call without a cursor establishes the
 baseline from the latest state of active tasks. `changes` contains only active
-task updates in `blocked`, `changes_requested`, `ready_for_review`,
+task updates in `blocked`, `changes_requested`, `ready_for_validation`,
 `ready_for_acceptance`, or `completed`; ordinary `working`, `waiting`, and
-`reviewing` updates are not heartbeat changes. With no changes, end that
+`validating` updates are not heartbeat changes. With no changes, end that
 heartbeat turn. With changes, independently read the contract, diff, and
 artifacts before continuing the normal Lead workflow. Blackboard does not save
 the cursor, so retry a failed heartbeat with the prior cursor; duplicate

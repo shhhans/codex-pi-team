@@ -11,7 +11,7 @@ ADR 0001 established the active Lead, Researcher, Executor, and Reviewer
 roles. Modular Collaboration v1 replaces the active Reviewer workflow with a
 Validator: the Validator writes independent black-box tests from a frozen
 contract and must not inspect the target implementation. Historical Reviewer
-material remains under `.pi/legacy/`. The active pair must retain task context
+role files and memory remain under `.pi/legacy/`. The active pair must retain task context
 until Lead accepts the work.
 
 ## Decision

@@ -74,7 +74,7 @@ export const ROLE_CHECKPOINTS = Object.freeze({
 });
 
 // States whose semantic payload MUST contain a non-empty `blocker`. A
-// reviewer that says `changes_requested` without naming what changed, or
+// validator that says `changes_requested` without naming what changed, or
 // an executor that says `blocked` without naming the obstacle, is the
 // exact stale-information pattern reported in Issue #6.
 const BLOCKER_REQUIRED_STATES = new Set(["blocked", "changes_requested"]);

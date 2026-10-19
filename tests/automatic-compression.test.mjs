@@ -1,4 +1,4 @@
-// COMPRESSION-001 — Reviewer behavioral tests for done criterion C-004.
+// COMPRESSION-001 — Validator behavioral tests for done criterion C-004.
 //
 // C-004 requires tests that PROVE, against the live extension, that:
 //   1. threshold compression triggers only once,

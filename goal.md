@@ -21,17 +21,15 @@ The routine development path runs as a minimal three-agent loop:
   the assigned isolated worktree. It uses the smallest coherent
   change, runs the project's validation commands, and persists
   `implementation_notes/<task-id>.md`. It reports each completed slice
-  and becomes idle while remaining allocated through review/fix. It does
+  and becomes idle while remaining allocated through validation/fix. It does
   not refactor unrelated code, edit tests to hide failures, or
   commit without Lead authorization.
 
-- **Reviewer** is allocated one-to-one with Executor and waits idle for
-  `READY_FOR_REVIEW` or `FIX_READY`. It reproduces validation, verifies
-  scope, and (for real
-  failures only) writes a failure artifact at
-  `failures/<task-id>-<finding-id>.md`. It edits tests only to add
-  regression coverage or to capture a real failure. It never edits
-  production code.
+- **Validator** is allocated one-to-one with Executor and waits idle for
+  `READY_FOR_VALIDATION` or `FIX_READY`. It helps freeze the module contract,
+  writes and runs independent black-box tests from that contract, and records
+  real failures at `failures/<task-id>-<finding-id>.md`. It does not inspect
+  the target implementation or edit production code.
 
 - **Lead (Codex)** is the user-facing session that owns canonical
   state; owns each task's ID, name, description, scope, done criteria,
@@ -50,8 +48,8 @@ runtime policy enforcement. Application artifacts use human-readable
 Lead task IDs and no content hashes. Transport correlation UUIDs remain
 an internal intercom mechanism and are not application artifact IDs.
 There is no Deep Research MCP, no cross-worktree scope, no
-production-code edits by Reviewer, no normal stop/resume handoff, and no
-commits without Lead authorization. Executor and Reviewer remain alive
+production-code edits by Validator, no normal stop/resume handoff, and no
+commits without Lead authorization. Executor and Validator remain alive
 until Lead accepts the task and reclaims the pair.
 
 Runtime packages are installed once with `pi-team setup`; project worktrees do

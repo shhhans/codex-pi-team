@@ -101,10 +101,10 @@ the user-level `models.json` at `~/.pi/agent/models.json`:
 ```json
 {
   "providers": {
-    "reviewer-provider": {
+    "validator-provider": {
       "baseUrl": "https://api.example.com/v1",
       "api": "openai-completions",
-      "models": [{ "id": "reviewer-model", "name": "Reviewer model" }]
+      "models": [{ "id": "validator-model", "name": "Validator model" }]
     }
   }
 }
@@ -115,7 +115,7 @@ Then store only the matching provider credential in `~/.pi/agent/auth.json`
 
 ```json
 {
-  "reviewer-provider": { "type": "api_key", "key": "$REVIEWER_PROVIDER_API_KEY" }
+  "validator-provider": { "type": "api_key", "key": "$VALIDATOR_PROVIDER_API_KEY" }
 }
 ```
 
@@ -127,7 +127,7 @@ model: MiniMax-M3
 ```
 
 The launcher reads those fields and passes explicit `--provider` and `--model`
-arguments to every Executor, Reviewer, and Researcher process. The selected
+arguments to every Executor, Validator, and Researcher process. The selected
 provider/model is frozen in task state so `resume` does not silently switch to
 the project default. Use `pi.cmd auth check --provider <provider> --model
 <model> --json --no-refresh` to verify credentials without printing them.
@@ -152,11 +152,11 @@ watching, Lead thread registration, structured wakeup listing/acknowledgement,
 and a task-lane UI that requests PiP and falls back inline. For periodic Codex
 heartbeat checks, call `blackboard_snapshot` with the previous returned cursor:
 it always returns the current active lanes plus only new critical changes
-(`blocked`, `changes_requested`, `ready_for_review`, `ready_for_acceptance`, or
+(`blocked`, `changes_requested`, `ready_for_validation`, `ready_for_acceptance`, or
 `completed`). The cursor is caller-owned and is not checkpointed by the
 Blackboard, so retrying with the prior cursor is safe and may repeat changes.
 After `start`, the Lead registers its current Codex `thread_id` and `host_id`.
-Only material states (`blocked`, `changes_requested`, `ready_for_review`,
+Only material states (`blocked`, `changes_requested`, `ready_for_validation`,
 `ready_for_acceptance`, and `completed`) create wakeups. The host adapter maps
 those records to `send_message_to_thread`; it must acknowledge delivery, while
 the Lead still performs the normal snapshot, diff, artifact, and contract
@@ -230,9 +230,9 @@ live watching and the task-lane UI are unavailable.
 ## Runtime identity and state
 
 The launcher injects the complete runtime identity for every Executor,
-Reviewer, and Researcher process: `PI_TEAM_TASK_ID`, `PI_TEAM_ROLE`,
+Validator, and Researcher process: `PI_TEAM_TASK_ID`, `PI_TEAM_ROLE`,
 `PI_TEAM_AGENT_ID`, `PI_TEAM_WORKTREE`, `PI_TEAM_STATE_ROOT`, and
-`PI_TEAM_SCOPE_ID`. `start` uses the persisted Executor/Reviewer identities,
+`PI_TEAM_SCOPE_ID`. `start` uses the persisted Executor/Validator identities,
 `resume` reuses those identities and session IDs, and `research` creates a
 temporary Researcher identity for the same task scope.
 
@@ -246,7 +246,7 @@ directory before starting a process.
 
 All three role definitions disable ambient extensions and load their required
 extensions explicitly. Only Researcher loads `pi-web-access`; Executor and
-Reviewer neither load its provider nor allowlist its tools.
+Validator neither load its provider nor allowlist its tools.
 
 See `ADR/0002-lead-subagent-collaboration-protocol.md` for collaboration rules
 and `ADR/0003-stable-pi-team-entrypoint.md` for the lifecycle contract.
@@ -268,7 +268,7 @@ The defaults are:
 | `compression.output_token_limit` | `65536` | `[1024, 1048576]` |
 
 Role overrides are validated against the same ranges and may only be set on
-the three active roles (`researcher`, `executor`, `reviewer`). Sensitive
+the three active roles (`researcher`, `executor`, `validator`). Sensitive
 fields (`api_key`, `token`, `auth`, `password`, `secret`) and host-absolute
 paths are rejected at load time. The `output_token_limit` keeps the
 existing 64K output budget effective.
@@ -303,7 +303,7 @@ Resource-limit stops never auto-create a new session. Lead must explicitly
 resume from the checkpoint:
 
 ```powershell
-.\pi-team.cmd resume-checkpoint <task-id> <checkpoint-path> <executor|reviewer>
+.\pi-team.cmd resume-checkpoint <task-id> <checkpoint-path> <executor|validator>
 ```
 
 The command mints a fresh session ID, reuses the frozen provider/model

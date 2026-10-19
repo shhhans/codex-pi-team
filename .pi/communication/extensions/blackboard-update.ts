@@ -41,7 +41,7 @@ export default function (pi: ExtensionAPI) {
     registerRoleRuntime(stateRoot, { task_id: taskId, role, agent_id: agentId, launch_id: launchId, intercom_id: intercomId, worktree: process.env.PI_TEAM_WORKTREE }).catch(() => undefined);
   }
   const description = `Publish the current Agent activity to the Lead-owned task Blackboard. Lifecycle checkpoints for ${role ?? "this role"}: ${describeCheckpoints(role)}. ` +
-    "blocked, changes_requested, ready_for_review, ready_for_acceptance, and completed enqueue a Lead wakeup when the task has a Lead binding. " +
+    "blocked, changes_requested, ready_for_validation, ready_for_acceptance, and completed enqueue a Lead wakeup when the task has a Lead binding. " +
     "activity must describe an observed fact, blocker is required for blocked/changes_requested, next is required for every other non-terminal state, and identical repeats of the previous event are refused.";
   pi.registerTool({
     name: "blackboard_update",

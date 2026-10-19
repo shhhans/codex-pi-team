@@ -5,7 +5,7 @@ development path after
 `ADR/0002-lead-subagent-collaboration-protocol.md`, the sole normative
 collaboration protocol. It is **not** the agent role file
 (`.pi/agents/architect.md`); the active agent surface is
-`.pi/agents/{researcher.md, executor.md, reviewer.md}`.
+`.pi/agents/{researcher.md, executor.md, validator.md}`.
 
 ## Roles and responsibilities (active path)
 
@@ -16,7 +16,7 @@ Three active roles plus the Lead form the minimal loop:
 | Lead (Codex) | user-facing session | n/a | `ADR/`, `architect.md`, `goal.md`, `project_state.md` |
 | Researcher | `.pi/agents/researcher.md` | `answer-research-question` | `research/<task-id>-<slug>.md` |
 | Executor | `.pi/agents/executor.md` | `execute-delegated-task` | `implementation_notes/<task-id>.md` |
-| Reviewer | `.pi/agents/reviewer.md` | `review-delegated-task` | `failures/<task-id>-<finding-id>.md` |
+| Validator | `.pi/agents/validator.md` | `validate-delegated-task` | `failures/<task-id>-<finding-id>.md` |
 
 ## Researcher provider and tool surface
 
@@ -40,29 +40,31 @@ to Lead via `contact_supervisor` with `reason: "need_decision"`.
 
 The Executor operates inside an isolated worktree assigned by Lead,
 maintains `implementation_notes/<task-id>.md`, and remains allocated
-through the complete review/fix cycle. At a slice boundary it reports
-`READY_FOR_REVIEW`, `FIX_READY`, or `READY_FOR_ACCEPTANCE` and becomes
+through the complete validation/fix cycle. At a slice boundary it reports
+`READY_FOR_VALIDATION`, `FIX_READY`, or `READY_FOR_ACCEPTANCE` and becomes
 idle; it does not stop. Executor does **not** refactor unrelated code,
 edit tests to hide failures, or commit without Lead authorization.
 
-## Reviewer scope
+## Validator scope
 
-The Reviewer is allocated with its paired Executor, registers the task,
-and waits idle until `READY_FOR_REVIEW` or `FIX_READY`. Reviewer edits
-tests and writes failure artifacts only; it **never** edits production
-code or normative documentation. Read-only Git operations are available
-for review.
+The Validator is allocated with its paired Executor and waits idle until
+`READY_FOR_VALIDATION` or `FIX_READY`. Before implementation, it comments on
+the Executor's proposed module contract and ACKs the complete body. After the
+contract freezes, Validator independently writes and runs black-box tests
+from public behavior without reading the target implementation or its Git
+diff. It records real failures and never edits production code or normative
+documentation.
 
 ## Communication
 
 - Each active role loads its matching runtime-policy extension under
-  `.pi/communication/extensions/{researcher,executor,reviewer}.ts`.
+  `.pi/communication/extensions/{researcher,executor,validator}.ts`.
 - Direct peer exchange is asynchronous and limited to
-  `Researcher <-> Executor <-> Reviewer`. Researcher and Reviewer
+  `Researcher <-> Executor <-> Validator`. Researcher and Validator
   cannot address each other directly.
-- Executor and Reviewer pairing is assigned by Lead. The role-level
+- Executor and Validator pairing is assigned by Lead. The role-level
   ACL proves only the allowed role pair, not same-task identity.
-- The pair persists through review/fix cycles. Each completed slice is
+- The pair persists through validation/fix cycles. Each completed slice is
   reported to Lead before the role returns to an event-driven idle state;
   only Lead acceptance triggers reclamation.
 - Routine peer results can travel directly. Material risk, a changed
@@ -72,7 +74,8 @@ for review.
 - Runtime-policy tests prove policy behavior and extension wiring.
   They do not, by themselves, prove causal use of the transport.
 - Agents do not create Scout roles, repeat unbounded discovery, or split
-  unassigned subtasks. Lead supplies and controls the task contract.
+  unassigned subtasks. Lead owns the objective and scope; Executor and
+  Validator negotiate the module contract within those boundaries.
 
 ## Agent Blackboard
 

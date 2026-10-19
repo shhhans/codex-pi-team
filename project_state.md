@@ -1,4 +1,4 @@
-# Project State (as of v3 task-contract transition)
+# Project State (as of Validator collaboration migration, 2026-10-17)
 
 The stable entrypoint implementation is present at `pi-team.cmd` with its
 PowerShell lifecycle under `scripts/pi-team.ps1`. The runtime uses the Git
@@ -65,7 +65,7 @@ role memory** (no `memory:` frontmatter, no active `.pi/agent-memory/{role}/MEMO
 | --- | --- | --- | --- |
 | `researcher` | `answer-research-question` | `~/.pi/agent/npm/node_modules/pi-web-access/index.ts` (via `subagentOnlyExtensions`) | none (prompt + private skill only) |
 | `executor` | `execute-delegated-task` | n/a | none (prompt + private skill only) |
-| `reviewer` | `review-delegated-task` | n/a | none (prompt + private skill only) |
+| `validator` | `validate-delegated-task` | n/a | none (prompt + private skill only) |
 
 All three roles also load their matching communication-policy extension and
 the Lead-observability `blackboard-update.ts` extension. `blackboard_update`
@@ -135,7 +135,7 @@ MCP tools are **not** wired to the active Researcher.
 - `implementation_notes/` — Executor notes per task. Required
   filename pattern `<task-id>.md`; records the current slice state,
   validation evidence, changed files, and remaining risks.
-- `failures/` — Reviewer failure artifacts. Default name pattern
+- `failures/` — Validator failure artifacts. Default name pattern
   `<task-id>-<finding-id>.md`; reserved for real failures only.
 
 ## Legacy preservation
@@ -166,12 +166,12 @@ MCP tools are **not** wired to the active Researcher.
 
 ## Communication state
 
-- Active topology: `Researcher <-> Executor <-> Reviewer`.
-- Researcher and Reviewer are directly denied in both directions.
-- Lead assigns the concrete Executor/Reviewer pairing; current policy
+- Active topology: `Researcher <-> Executor <-> Validator`.
+- Researcher and Validator are directly denied in both directions.
+- Lead assigns the concrete Executor/Validator pairing; current policy
   enforces role topology, not a task-scoped pair identifier.
-- Executor and Reviewer are persistent for the task. They remain alive
-  through review/fix and finish each turn by reporting the completed
+- Executor and Validator are persistent for the task. They remain alive
+  through validation/fix and finish each turn by reporting the completed
   slice and becoming idle/event-driven. Only Lead acceptance permits
   reclamation.
 - Denied inbound messages are filtered before model context and cause
@@ -186,14 +186,13 @@ MCP tools are **not** wired to the active Researcher.
 
 ## Validation
 
-- `tests/run-tests.ps1` runs all three deterministic test files.
-- `node --test tests/team-contract.test.mjs tests/communication-policy.test.mjs tests/blackboard.test.mjs`
-  is the cross-shell entry point.
-- Current result: 37/37 deterministic tests pass; canonical plugin and skill
-  validation, Node syntax checks, `git diff --check`, and a zero-model-call real
-  Pi RPC role-load preflight pass.
-- Skill frontmatter is validated by `quick_validate.py` for all
-  three skills.
+- `tests/run-tests.ps1` runs the active module, Blackboard, policy, and
+  compression suites; `node tests/run-tests.mjs` is the cross-shell entrypoint.
+- Validator collaboration was cherry-picked on 2026-10-17. The active suite
+  passed 111/111 tests on 2026-10-19 via `node tests/run-tests.mjs`.
+- Seven targeted role, skill, and protocol checks in
+  `tests/team-contract.test.mjs` also passed. That legacy suite was not run
+  in full; these checks do not establish live model collaboration.
 
 ## Operational limitation
 
@@ -204,8 +203,8 @@ Lead authorization.
 
 The earlier live intercom smoke established session discovery and an
 Executor-to-Reviewer `socket_delivered` acknowledgement, but not causal
-message use. The required operational shape is now persistent interactive
-Executor/Reviewer sessions: slice completion reports to Lead, an injected
+message use. The current required operational shape is persistent interactive
+Executor/Validator sessions: slice completion reports to Lead, an injected
 peer event starts the next turn, and the receiver returns to idle without
 stop/resume. This remains to be proven end to end.
 
@@ -229,7 +228,7 @@ stop/resume. This remains to be proven end to end.
 
 ## Remaining bootstrap work
 
-- Prove one complete persistent Executor/Reviewer review/fix exchange with
+- Prove one complete persistent Executor/Validator contract, validation, and fix exchange with
   causal message use and Lead acceptance before claiming the live loop.
 
 ## Issue #2 delivery on develop

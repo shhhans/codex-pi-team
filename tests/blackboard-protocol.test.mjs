@@ -140,7 +140,7 @@ test("validateAgentUpdate refuses non-checkpoint states per role", () => {
     /not a Blackboard lifecycle checkpoint/,
   );
   assert.throws(
-    () => validateAgentUpdate("researcher", null, { state: "ready_for_review", activity: "wrong state for researcher" }),
+    () => validateAgentUpdate("researcher", null, { state: "ready_for_validation", activity: "wrong state for researcher" }),
     /not a Blackboard lifecycle checkpoint/,
   );
 });
@@ -241,7 +241,7 @@ test("role prompts document the lifecycle checkpoints and field semantics", asyn
 test("role skills document the Blackboard protocol", async () => {
   const skills = [
     ["execute-delegated-task", "publish task status and request a Lead wakeup"],
-    ["review-delegated-task", "Blackboard protocol"],
+    ["validate-delegated-task", "Publish meaningful `blackboard_update` states"],
     ["answer-research-question", "enforces a Researcher-side Blackboard protocol"],
   ];
   for (const [name, marker] of skills) {
@@ -249,6 +249,10 @@ test("role skills document the Blackboard protocol", async () => {
     assert.match(text, /blocker/, `${name} skill must require blocker for blocked/changes_requested`);
     assert.match(text, new RegExp(marker), `${name} skill must mention the protocol marker`);
   }
+  const validator = await readFile(join(REPO, ".pi/skills/validate-delegated-task/SKILL.md"), "utf8");
+  assert.match(validator, /`blocker` is required for\s+`blocked` and `changes_requested`/);
+  assert.match(validator, /`next` is required for non-terminal\s+states/);
+  assert.match(validator, /20-call reminder is non-blocking/);
 });
 
 test("ADR 0008 codifies the lifecycle checkpoints, field semantics, and bounded gate", async () => {
@@ -284,7 +288,7 @@ test("readPreviousEvent returns the role's own previous event even when another 
     const validator = { task_id: "BB-PROC-3", role: "validator", agent_id: "validator-xr", worktree: fixture.worktree };
     await appendAgentEvent(fixture.repo, executor, { state: "working", activity: "executor started slice on protocol", next: "add semantic validation" });
     // A different role publishes after the executor's event; this is the
-    // normal multi-role flow (e.g. Reviewer publishes reviewing/changes_requested
+    // normal multi-role flow (e.g. Validator publishes validating/changes_requested
     // while the Executor waits for FIX_READY).
     await appendAgentEvent(fixture.repo, validator, { state: "validating", activity: "validator running contract tests", next: "publish validation verdict" });
     const root = stateRoot(fixture.repo);

@@ -24,17 +24,17 @@ acceptance record.
 ## Repository map and validation
 
 - `.pi/agents/` contains the three active role definitions: Researcher,
-  Executor, and Validator. Historical Reviewer material is retained only in
-  `.pi/legacy/`.
+  Executor, and Validator. Retired Reviewer agent prompts and memory remain
+  under `.pi/legacy/`.
 - `.pi/skills/` contains one private, role-scoped skill for each active role.
 - `plugins/agent-blackboard/` contains the Lead-only Blackboard plugin and its
   Lead skill.
 - `research/` contains bounded Researcher artifacts.
 - `implementation_notes/` contains Executor slice notes.
-- `failures/` contains Reviewer failure artifacts for real failures only.
+- `failures/` contains Validator failure artifacts for real failures only.
 - The deterministic validation entrypoint is `tests/run-tests.ps1`.
 - The cross-shell Node entrypoint is
-  `node --test tests/team-contract.test.mjs tests/communication-policy.test.mjs tests/blackboard.test.mjs`.
+  `node tests/run-tests.mjs`.
 - Before changing a behavior, inspect the smallest relevant source and test
   path named above. Do not scan the entire workspace when the map identifies a
   narrower entrypoint.
@@ -49,10 +49,13 @@ acceptance record.
   public contract. Source isolation is enforced by role prompt, not a claimed
   permission hook or sandbox; Validator never edits production code.
 - Direct peer routes are same-task Researcher ↔ Executor and the Lead-paired
-  Executor ↔ Reviewer. Researcher and Reviewer do not communicate directly.
+  Executor ↔ Validator. Researcher and Validator do not communicate directly.
 - Lead owns task identity, scope, delegation, architecture/product decisions,
   acceptance, reclamation, and cleanup. Agents report blockers or unrelated
   defects to Lead and do not widen their assignment.
+- Executor proposes the module contract within the Lead-owned objective and
+  scope; Validator comments on it, and both roles ACK the same body before it
+  freezes and implementation begins.
 - A role's tools, skill, and communication extensions are explicitly selected
   at launch. Do not assume ambient tools, skills, extensions, or persistent
   memory are available.

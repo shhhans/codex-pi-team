@@ -927,7 +927,7 @@ function Read-BlackboardObservation([string]$TaskId) {
   try {
     $task=Get-BlackboardTask $TaskId
     $warnings=@(); $agents=@($task.agents)
-    foreach ($agent in $agents) { if ([string]$agent.state -in @('working','reviewing','ready_for_review','ready_for_acceptance','blocked')) { $warnings += "blackboard_agent_state:$($agent.role)=$($agent.state)" } }
+    foreach ($agent in $agents) { if ([string]$agent.state -in @('working','validating','ready_for_validation','ready_for_acceptance','blocked')) { $warnings += "blackboard_agent_state:$($agent.role)=$($agent.state)" } }
     if ([string]$task.status -ne 'active') { $warnings += "blackboard_task_status=$($task.status)" }
     return [pscustomobject]@{status=if($warnings.Count -gt 0){'warning'}else{'observed'};state=[string]$task.status;agents=$agents;warnings=$warnings;error=$null}
   } catch {
