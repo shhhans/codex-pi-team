@@ -3,6 +3,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, realpathSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, join, relative, isAbsolute, sep } from 'node:path';
+import { documentPaths, commitDocuments } from './document-alignment.mjs';
+import { processStartStamp } from './process-observation.mjs';
 
 export const ROLES = ['coordinator', 'executor', 'validator'];
 export function git(root, ...args) { return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim(); }
@@ -42,7 +44,18 @@ export class GroupStore {
       CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, group_id TEXT NOT NULL, recipient TEXT NOT NULL, data TEXT NOT NULL, read_at TEXT);
       CREATE TABLE IF NOT EXISTS sessions (group_id TEXT NOT NULL, role TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(group_id,role));
       CREATE TABLE IF NOT EXISTS operations (name TEXT PRIMARY KEY, pid INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS project_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       PRAGMA user_version=2;`);
+    this.tx(() => {
+      const current = this.db.prepare("SELECT value FROM project_metadata WHERE key='lead_root'").get();
+      if (current) {
+        if (git(current.value, 'rev-parse', '--path-format=absolute', '--git-common-dir') !== this.common) throw Error('canonical Lead worktree no longer belongs to this repository');
+        this.projectRoot = current.value;
+      } else {
+        this.projectRoot = realpathSync(git(this.projectRoot, 'rev-parse', '--show-toplevel'));
+        this.db.prepare('INSERT INTO project_metadata VALUES (?,?)').run('lead_root', this.projectRoot);
+      }
+    });
     this.tx(() => { if (!this.db.prepare("PRAGMA table_info(messages)").all().some(c => c.name === "presented_at")) this.db.exec("ALTER TABLE messages ADD COLUMN presented_at TEXT"); });
   }
   close() { this.db.close(); }
@@ -79,11 +92,12 @@ export class GroupStore {
   sessions(group) { return this.db.prepare('SELECT data FROM sessions WHERE group_id=?').all(group).map(unpack); }
   register(group, role, input) {
     if (!ROLES.includes(role)) throw Error('invalid role'); this.group(group);
+    const process_start_stamp = processStartStamp(input.pid);
     return this.tx(() => {
       const old = this.session(group, role);
       if (old && old.launch_id !== input.launch_id && alive(old.pid)) throw Error('role already has a live session');
       this.db.prepare('UPDATE messages SET presented_at=NULL WHERE group_id=? AND recipient=? AND read_at IS NULL').run(group, role);
-      const value = { ...input, group_id: group, role, busy: false, claim: null, ready_at: new Date().toISOString() };
+      const value = { ...input, process_start_stamp, group_id: group, role, busy: false, claim: null, ready_at: new Date().toISOString() };
       this.db.prepare('INSERT OR REPLACE INTO sessions VALUES (?,?,?)').run(group, role, json(value));
       for (const work of this.db.prepare("SELECT * FROM work WHERE group_id=? AND owner=? AND status='open'").all(group, role)) this.notice(group, role, { type: 'work_recovered', task_id: work.task_id, work_id: work.id, kind: work.kind });
       return value;
@@ -101,8 +115,9 @@ export class GroupStore {
   startTask(group, input) {
     return this.tx(() => {
       const g = this.group(group); if (g.archived || g.active_task) throw Error('group is archived or already has a task'); this.assertIdle(group);
-      const t = { task_id: id(input.task_id), group_id: group, generation: g.generation + 1, objective: required(input.objective, 'objective'), acceptance: input.acceptance, base_ref: required(input.base_ref, 'base_ref'), base_commit: git(g.worktree, 'rev-parse', 'HEAD'), branch: required(input.branch, 'branch'), outcome: 'pending', round: 0, delivery: null, review: null, finalization: null };
+      const t = { task_id: id(input.task_id), group_id: group, generation: g.generation + 1, objective: required(input.objective, 'objective'), acceptance: input.acceptance, documentation_paths: documentPaths(input.documentation_paths), documentation_checklist: input.documentation_checklist || ['Check module documentation against the delivered implementation; explain any no-change result.'], base_ref: required(input.base_ref, 'base_ref'), base_commit: git(g.worktree, 'rev-parse', 'HEAD'), branch: required(input.branch, 'branch'), outcome: 'pending', round: 0, delivery: null, review: null, finalization: null };
       if (!Array.isArray(t.acceptance) || !t.acceptance.length || t.acceptance.some(x => typeof x !== 'string' || !x.trim())) throw Error('acceptance must contain observable results');
+      if (!Array.isArray(t.documentation_checklist) || !t.documentation_checklist.length || t.documentation_checklist.some(x => typeof x !== 'string' || !x.trim())) throw Error('documentation_checklist must contain observable checks');
       if (git(g.worktree, 'branch', '--show-current') !== t.branch || git(g.worktree, 'status', '--porcelain')) throw Error('task requires its clean, explicitly selected branch');
       git(g.worktree, 'merge-base', '--is-ancestor', g.transition?.base_commit || t.base_commit, 'HEAD');
       this.db.prepare('INSERT INTO tasks VALUES (?,?,?)').run(t.task_id, group, json(t));
@@ -117,12 +132,12 @@ export class GroupStore {
     return { g, t: this.task(g.active_task) };
   }
   read(group, role) {
-    const g = this.group(group); return { group: g, task: g.active_task ? this.task(g.active_task) : null, work: this.db.prepare("SELECT * FROM work WHERE group_id=? AND owner=? AND status='open' ORDER BY id").all(group, role), messages: this.inbox(group, role).filter(m => m.data.type === 'message' || !m.data.task_id || m.data.task_id === g.active_task).slice(-20), sessions: this.sessions(group) };
+    const g = this.group(group); return { group: g, task: g.active_task ? this.task(g.active_task) : null, work: this.db.prepare("SELECT * FROM work WHERE group_id=? AND owner=? AND status='open' ORDER BY id").all(group, role), messages: this.inbox(group, role).filter(m => m.id > (g.message_epoch_start || 0) && (m.data.type === 'message' || !m.data.task_id || m.data.task_id === g.active_task)).slice(-20), sessions: this.sessions(group) };
   }
   inbox(group, recipient, cursor = 0) { return this.db.prepare('SELECT * FROM messages WHERE group_id=? AND recipient=? AND id>? ORDER BY id').all(group, recipient, cursor).map(r => ({ ...r, data: JSON.parse(r.data) })); }
   pending(group, role) {
     const g = this.group(group);
-    return this.inbox(group, role).filter(m => !m.read_at && !m.presented_at &&
+    return this.inbox(group, role).filter(m => m.id > (g.message_epoch_start || 0) && !m.read_at && !m.presented_at &&
       (!m.data.task_id || m.data.task_id === g.active_task) &&
       (!m.data.work_id || this.db.prepare('SELECT status FROM work WHERE id=?').get(m.data.work_id)?.status === 'open'));
   }
@@ -199,9 +214,10 @@ export class GroupStore {
       const { g, t } = this.identity(actor);
       if (actor.launch_id && this.pending(g.group_id, actor.role).length) throw new TeamError('INBOX_PENDING', 'New messages must be presented before submission', 'read_messages_and_reconsider');
       if (t.outcome !== 'pending') throw Error('task is closed');
-      const rules = { task: ['coordinator', 'task.md'], plan: ['executor', 'plan.md'], plan_review: ['validator', 'plan-review.md'], implementation: ['executor', 'implementation.md'], code_review: ['validator', ''], delivery: ['coordinator', 'delivery.md'], resolution: ['coordinator', `decision-${input.round}.md`] };
+      const docsRevision = t.docs_revision || 1;
+      const rules = { task: ['coordinator', 'task.md'], plan: ['executor', 'plan.md'], plan_review: ['validator', 'plan-review.md'], implementation: ['executor', 'implementation.md'], code_review: ['validator', ''], documentation: ['validator', `documentation-${input.round}-${docsRevision}.md`], documentation_review: ['coordinator', `documentation-review-${input.round}-${docsRevision}.md`], delivery: ['coordinator', 'delivery.md'], resolution: ['coordinator', `decision-${input.round}.md`] };
       const rule = rules[input.kind]; if (!rule || actor.role !== rule[0]) throw Error('artifact not owned by this role');
-      const round = input.kind === 'delivery' ? t.round : ['implementation', 'code_review', 'resolution'].includes(input.kind) ? input.round : 0;
+      const round = input.kind === 'delivery' ? t.round : ['implementation', 'code_review', 'resolution', 'documentation', 'documentation_review'].includes(input.kind) ? input.round : 0;
       if (!Number.isInteger(round) || round < 0) throw Error('invalid round');
       const file = `groups/${g.group_id}/tasks/${t.task_id}/${rule[1] || `code-review-${String(round).padStart(2, '0')}.md`}`;
       const submittedPath = relative(g.worktree, resolve(g.worktree, required(input.path, 'path'))).replaceAll('\\', '/');
@@ -209,13 +225,14 @@ export class GroupStore {
       const full = realpathSync(join(g.worktree, file)); const rel = relative(realpathSync(g.worktree), full);
       if (rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel)) throw Error('artifact escapes worktree');
       const content = required(readFileSync(full, 'utf8'), 'artifact content');
-      const stored = this.artifact(t.task_id, input.kind, round);
-      if (stored) { if (stored.content !== content || stored.commit !== (input.commit || null) || stored.verdict !== (input.verdict || null)) throw Error('submitted artifact is immutable'); return { ...stored, replay: true }; }
+      const stored = this.artifact(t.task_id, input.kind, ['documentation', 'documentation_review'].includes(input.kind) ? round * 10000 + docsRevision : round);
+      if (stored) { if (stored.content !== content || input.kind !== 'documentation' && stored.commit !== (input.commit || null) || stored.verdict !== (input.verdict || null)) throw Error('submitted artifact is immutable'); return { ...stored, replay: true }; }
       const resolutionKind = this.db.prepare("SELECT kind FROM work WHERE task_id=? AND owner='coordinator' AND status='open' AND kind IN (?,?)").get(t.task_id, `blocked-${round}`, `revision-${round}`)?.kind;
-      const workKind = input.kind === 'implementation' ? `implementation-${round}` : input.kind === 'code_review' ? `code_review-${round}` : input.kind === 'resolution' ? resolutionKind : input.kind === 'delivery' ? `delivery-${round}` : input.kind;
+      const workKind = ['documentation', 'documentation_review'].includes(input.kind) ? `${input.kind}-${round}-${docsRevision}` : input.kind === 'implementation' ? `implementation-${round}` : input.kind === 'code_review' ? `code_review-${round}` : input.kind === 'resolution' ? resolutionKind : input.kind === 'delivery' ? `delivery-${round}` : input.kind;
       const work = this.db.prepare("SELECT * FROM work WHERE task_id=? AND kind=? AND owner=? AND status='open'").get(t.task_id, workKind || '', actor.role);
       if (!work) throw new TeamError('NO_OPEN_WORK', 'No matching open work for this submission; a new delivery requires review feedback or Coordinator resolution', 'read_current_work');
-      const value = { task_id: t.task_id, kind: input.kind, round, path: file, content, commit: input.commit || null, verdict: input.verdict || null, at: new Date().toISOString() };
+      const artifactRound = ['documentation', 'documentation_review'].includes(input.kind) ? round * 10000 + docsRevision : round;
+      const value = { task_id: t.task_id, kind: input.kind, round, revision: docsRevision, path: file, content, commit: input.commit || null, verdict: input.verdict || null, at: new Date().toISOString() };
       if (input.kind === 'plan' || input.kind === 'plan_review') {
         const changed = git(g.worktree, 'diff', t.base_commit, '--name-only', '--', '.', `:(exclude)groups/${g.group_id}/**`);
         if (changed) throw Error('production changed before the single plan review');
@@ -226,7 +243,7 @@ export class GroupStore {
         const uncommitted = git(g.worktree, 'status', '--porcelain'); if (uncommitted) throw Error('delivery requires a clean committed worktree');
         if (git(g.worktree, 'show', `${commit}:${file}`) !== content.trim()) throw Error('implementation evidence is not committed');
         this.assertEvidence(g, t, true);
-        t.round = round; t.delivery = { id: `D${round}`, commit, round }; t.review = null;
+        t.round = round; t.delivery = { id: `D${round}`, commit, round }; t.review = null; t.documentation = null; t.docs_revision = 1;
       }
       if (input.kind === 'code_review') {
         if (!t.delivery || t.delivery.round !== round || input.commit !== t.delivery.commit) throw Error('review targets a stale delivery');
@@ -234,8 +251,20 @@ export class GroupStore {
         this.assertDelivery(g, t);
         t.review = { round, verdict: input.verdict, commit: input.commit, path: file };
       }
-      if (input.kind === 'delivery') { if (t.review?.verdict !== 'pass') throw Error('delivery requires passing code review'); this.assertDelivery(g, t); }
-      this.db.prepare('INSERT INTO artifacts VALUES (?,?,?,?)').run(t.task_id, input.kind, round, json(value));
+      if (input.kind === 'documentation') {
+        if (t.review?.verdict !== 'pass') throw Error('documentation requires passing code review');
+        this.assertDelivery(g, t, true);
+        const commit = commitDocuments(git, g, t);
+        t.documentation = { code_commit: t.delivery.commit, commit, revision: docsRevision, round, verdict: null, report: file };
+        value.commit = commit;
+        this.assertDelivery(g, t);
+      }
+      if (input.kind === 'documentation_review') {
+        if (!t.documentation || t.documentation.revision !== docsRevision || !['pass', 'changes_requested'].includes(input.verdict)) throw Error('documentation review requires current alignment and pass/changes_requested');
+        this.assertDelivery(g, t); t.documentation.verdict = input.verdict;
+      }
+      if (input.kind === 'delivery') { if (t.review?.verdict !== 'pass' || t.documentation?.verdict !== 'pass') throw Error('delivery requires passing code and documentation reviews'); this.assertDelivery(g, t); }
+      this.db.prepare('INSERT INTO artifacts VALUES (?,?,?,?)').run(t.task_id, input.kind, artifactRound, json(value));
       this.db.prepare("UPDATE work SET status='complete',result=? WHERE id=?").run(json({ artifact: file, round }), work.id);
       switch (input.kind) {
         case 'task': this.addWork(t, 'plan', 'executor'); break;
@@ -244,24 +273,30 @@ export class GroupStore {
         case 'implementation': this.addWork(t, `code_review-${round}`, 'validator'); break;
         case 'code_review':
           if (input.verdict !== 'blocked') this.db.prepare("UPDATE work SET status='cancelled' WHERE task_id=? AND kind=? AND status='open'").run(t.task_id, `blocked-${round}`);
-          if (input.verdict === 'pass') this.addWork(t, `delivery-${round}`, 'coordinator');
+          if (input.verdict === 'pass') this.addWork(t, `documentation-${round}-${docsRevision}`, 'validator');
           else if (input.verdict === 'changes_requested') this.addWork(t, `implementation-${round + 1}`, 'executor');
           else this.addWork(t, `blocked-${round}`, 'coordinator');
           break;
-        case 'delivery': this.notice(g.group_id, 'lead', { type: 'delivery', task_id: t.task_id, path: file, delivery: t.delivery, review: t.review }); break;
+        case 'documentation': this.addWork(t, `documentation_review-${round}-${docsRevision}`, 'coordinator'); break;
+        case 'documentation_review':
+          if (input.verdict === 'pass') this.addWork(t, `delivery-${round}`, 'coordinator');
+          else { t.docs_revision = docsRevision + 1; this.addWork(t, `documentation-${round}-${t.docs_revision}`, 'validator'); }
+          break;
+        case 'delivery': this.notice(g.group_id, 'lead', { type: 'delivery', task_id: t.task_id, path: file, delivery: t.delivery, review: t.review, documentation: t.documentation }); break;
         case 'resolution': this.db.prepare("UPDATE work SET status='cancelled' WHERE task_id=? AND kind=? AND status='open'").run(t.task_id, `code_review-${round}`); this.addWork(t, `implementation-${round + 1}`, 'executor'); break;
       }
       this.put('tasks', t.task_id, t); return value;
     });
   }
-  assertDelivery(g, t) {
+  assertDelivery(g, t, allowDocumentation = false) {
     if (!t.delivery) throw Error('no delivery');
     git(g.worktree, 'merge-base', '--is-ancestor', t.delivery.commit, 'HEAD');
     const prefix = `groups/${g.group_id}/tasks/${t.task_id}/`;
-    const allowed = [`${prefix}code-review-*.md`, `${prefix}review-*/**`, `${prefix}delivery.md`, `${prefix}decision-*.md`];
+    const allowed = [`${prefix}code-review-*.md`, `${prefix}review-*/**`, `${prefix}delivery.md`, `${prefix}decision-*.md`, `${prefix}documentation-*.md`, `${prefix}documentation-review-*.md`, ...(allowDocumentation || t.documentation ? t.documentation_paths || [] : [])];
     const changed = git(g.worktree, 'diff', t.delivery.commit, '--name-only', '--', '.', ...allowed.map(p => `:(exclude)${p}`));
-    const untracked = git(g.worktree, 'ls-files', '--others', '--exclude-standard').split(/\r?\n/).filter(p => p && !(p.startsWith(prefix) && /^(code-review-\d+\.md$|review-\d+\/|delivery\.md$|decision-\d+\.md$)/.test(p.slice(prefix.length))));
+    const untracked = git(g.worktree, 'ls-files', '--others', '--exclude-standard').split(/\r?\n/).filter(p => p && !((allowDocumentation || t.documentation) && t.documentation_paths?.includes(p)) && !(p.startsWith(prefix) && /^(code-review-\d+\.md$|review-\d+\/|delivery\.md$|decision-\d+\.md$|documentation-(review-)?\d+-\d+\.md$)/.test(p.slice(prefix.length))));
     if (changed || untracked.length) throw new TeamError('DELIVERY_CHANGED', 'production files changed during review or delivery documents changed; review the registered snapshot only', 'report_to_coordinator');
+    if (t.documentation && !allowDocumentation && t.documentation_paths?.length && git(g.worktree, 'diff', t.documentation.commit, '--name-only', '--', ...t.documentation_paths)) throw Error('aligned documentation changed after submission');
     this.assertEvidence(g, t);
   }
   assertEvidence(g, t, allowImplementationUpdate = false) {
@@ -275,7 +310,7 @@ export class GroupStore {
     }
   }
   requestChanges(task, reason) {
-    return this.tx(() => { const t = this.task(task); required(reason, 'reason'); if (!['pending', 'accepted'].includes(t.outcome) || t.finalization?.merged || !t.delivery) throw Error('task cannot be revised now'); t.outcome = 'pending'; t.review = null; this.db.prepare("UPDATE work SET status='cancelled' WHERE task_id=? AND kind LIKE 'delivery-%' AND status='open'").run(task); this.addWork(t, `revision-${t.round}`, 'coordinator'); this.notice(t.group_id, 'coordinator', { type: 'lead_changes', task_id: task, reason }); return this.put('tasks', task, t); });
+    return this.tx(() => { const t = this.task(task); required(reason, 'reason'); if (!['pending', 'accepted'].includes(t.outcome) || t.finalization?.merged || !t.delivery) throw Error('task cannot be revised now'); t.outcome = 'pending'; t.review = null; this.db.prepare("UPDATE work SET status='cancelled' WHERE task_id=? AND status='open'").run(task); this.addWork(t, `revision-${t.round}`, 'coordinator'); this.notice(t.group_id, 'coordinator', { type: 'lead_changes', task_id: task, reason }); return this.put('tasks', task, t); });
   }
   accept(task, rationale) {
     return this.tx(() => { const t = this.task(task), g = this.group(t.group_id); required(rationale, 'rationale'); if (t.outcome === 'accepted') { this.assertDelivery(g, t); return t; } if (t.outcome !== 'pending' || !this.artifact(task, 'delivery', t.round) || t.review?.verdict !== 'pass') throw Error('task is not ready for acceptance'); this.assertDelivery(g, t); t.outcome = 'accepted'; t.acceptance_decision = { rationale, commit: t.delivery.commit, at: new Date().toISOString() }; return this.put('tasks', task, t); });

@@ -1,0 +1,6 @@
+{
+  "integration": {
+    "executable": "node",
+    "args": ["tests/run-tests.mjs"]
+  }
+}

@@ -1,16 +1,45 @@
 import { ROLES, git, alive, identifier } from './group-store.mjs';
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname, isAbsolute } from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { ServiceManager } from './service-manager.mjs';
+import { writeDefinition, readDefinition, committedDefinition, syncGroupBaseline } from './group-definitions.mjs';
+import { beginOnboarding, assertOnboarded, sharedRoleVersion, onboardingState } from './group-onboarding.mjs';
+import { scheduleOnboarding } from '../../scripts/group-init-runner.mjs';
 
 export const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+function assertNoLegacyConflict(store, group, branch = null) {
+  const root = join(store.common, 'pi-team', 'v1');
+  if (!existsSync(root)) return;
+  for (const name of readdirSync(root).filter(x => x.endsWith('.json') && !x.endsWith('-runtime.json'))) {
+    let old; try { old = JSON.parse(readFileSync(join(root, name), 'utf8').replace(/^\uFEFF/, '')); } catch { continue; }
+    if (!(old.task_id && (old.outcome === 'pending' || (!old.outcome && !['cleaned', 'reclaimed'].includes(old.status))))) continue;
+    const oldGroup = old.group_id || old.module_id;
+    const oldPath = old.worktree || old.worktree_path || old.checkout_path;
+    const samePath = typeof oldPath === 'string' && isAbsolute(oldPath) && resolve(oldPath).toLowerCase() === resolve(group.worktree).toLowerCase();
+    if (oldGroup?.toLowerCase() === group.group_id.toLowerCase() || samePath || branch && old.branch?.toLowerCase() === branch.toLowerCase()) {
+      throw Error(`unresolved legacy task ${old.task_id} conflicts with group ${group.group_id}; inspect and close it in the v1 checkout before using this group`);
+    }
+  }
+}
 export function roleConfig(root = sourceRoot) { return JSON.parse(readFileSync(join(root, '.pi/roles.json'), 'utf8')); }
+function definitionForGroup(store, groupId) {
+  const definition = readDefinition(store, groupId);
+  try {
+    const group = store.group(groupId);
+    if (resolve(group.worktree).toLowerCase() !== definition.worktree.toLowerCase()) throw Error('registered group worktree is immutable; group.md worktree does not match the runtime binding');
+  } catch (error) { if (!error.message.startsWith('unknown group:')) throw error; }
+  return definition;
+}
 export function createGroup(store, input) {
-  store.assertCutover();
   identifier(input.group_id);
+  if (store.list().some(group => group.group_id.toLowerCase() === input.group_id.toLowerCase())) throw Error('group registration conflict: runtime group id already exists');
   if (!isAbsolute(input.worktree || '')) throw Error('group worktree must be an absolute path');
+  if (typeof input.description !== 'string' || !input.description.trim()) throw Error('group description is required');
+  const definitionPath = join(store.projectRoot, 'groups', input.group_id, 'group.md');
+  if (existsSync(definitionPath)) throw Error('group registration conflict: groups/<id>/group.md already exists');
   const branch = `codex/group-${input.group_id}-idle`;
   const base = input.base_ref || 'develop';
   git(store.projectRoot, 'show-ref', '--verify', `refs/heads/${base}`);
@@ -18,17 +47,88 @@ export function createGroup(store, input) {
   if (existsSync(path)) {
     if (git(path, 'rev-parse', '--path-format=absolute', '--git-common-dir') !== store.common || git(path, 'branch', '--show-current') !== branch || git(path, 'status', '--porcelain')) throw Error('existing path is not this clean group idle worktree');
   } else git(store.projectRoot, 'worktree', 'add', '-b', branch, path, base);
-  return store.createGroup({ ...input, worktree: path, idle_branch: branch });
+  try {
+    const definition = writeDefinition(store, { ...input, worktree: path, base_ref: base });
+    const group = store.createGroup({ ...input, name: definition.name, worktree: path, idle_branch: branch });
+    const onboarding = beginOnboarding(store, input.group_id, { role_version: sharedRoleVersion(sourceRoot) });
+    return { group, onboarding };
+  } catch (error) {
+    // Keep any created branch/worktree for inspection; never erase Lead data.
+    throw error;
+  }
+}
+export function syncGroup(store, groupId) {
+  const g = store.group(groupId), definition = definitionForGroup(store, groupId);
+  committedDefinition(store, groupId);
+  if (git(store.projectRoot, 'branch', '--show-current') !== definition.base_ref) throw Error(`switch the clean Lead checkout to configured base_ref ${definition.base_ref} before syncing`);
+  assertNoLegacyConflict(store, g, g.idle_branch); return syncGroupBaseline(store, groupId);
+}
+export function adoptGroup(store, groupId, input) {
+  return store.operation(`group:${groupId}`, () => {
+    const g = store.group(groupId);
+    if (g.active_task) throw Error('finish or explicitly close the existing task before adopting a legacy v2 registration');
+    if (existsSync(join(store.projectRoot, 'groups', groupId, 'group.md'))) throw Error('definition already exists; use group-update or group-init');
+    if (typeof input.description !== 'string' || !input.description.trim() || typeof input.base_ref !== 'string' || !input.base_ref.trim()) throw Error('adoption requires Lead-written description and base_ref');
+    git(store.projectRoot, 'show-ref', '--verify', `refs/heads/${input.base_ref}`);
+    if (git(g.worktree, 'branch', '--show-current') !== g.idle_branch || git(g.worktree, 'status', '--porcelain')) throw Error('adoption requires the preserved clean idle group worktree');
+    quiesceGroup(store, groupId);
+    writeDefinition(store, { ...input, group_id: groupId, name: input.name || g.name, worktree: g.worktree });
+    return beginOnboarding(store, groupId, { role_version: sharedRoleVersion(sourceRoot) });
+  });
+}
+export function reconcileRegistration(store, groupId, options = {}) {
+  let definition = readDefinition(store, groupId);
+  try { return { group: store.group(groupId), onboarding: updateGroup(store, groupId, {}, options) }; }
+  catch (error) { if (!error.message.startsWith('unknown group:')) throw error; }
+  const branch = `codex/group-${groupId}-idle`;
+  if (!existsSync(definition.worktree) || git(definition.worktree, 'branch', '--show-current') !== branch || git(definition.worktree, 'status', '--porcelain')) throw Error('registered group worktree must exist on its clean idle branch');
+  const group = store.createGroup({ group_id: groupId, name: definition.name, worktree: definition.worktree, idle_branch: branch });
+  return { group, onboarding: beginOnboarding(store, groupId, { role_version: sharedRoleVersion(options.sourceRoot || sourceRoot) }) };
+}
+function quiesceGroup(store, groupId) {
+  new ServiceManager(store).stopGroup(groupId);
+  if (store.sessions(groupId).some(session => alive(session.pid))) stopGroup(store, groupId, true);
+  const deadline = Date.now() + 10000;
+  while (store.sessions(groupId).some(session => alive(session.pid)) && Date.now() < deadline) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  if (store.sessions(groupId).some(session => alive(session.pid))) throw Error('role processes have not quiesced; retry after they exit');
+}
+export function updateGroup(store, groupId, patch = {}, options = {}) {
+  return store.operation(`group:${groupId}`, () => {
+    const current = definitionForGroup(store, groupId);
+    if (patch.archived === true && store.group(groupId).active_task) throw Error('finish or explicitly close the active task before archiving the group');
+    const next = { group_id: groupId, name: patch.name ?? current.name, description: patch.description ?? current.description, worktree: current.worktree, base_ref: patch.base_ref ?? current.base_ref, archived: patch.archived ?? current.archived };
+    const version = sharedRoleVersion(options.sourceRoot || sourceRoot);
+    const oldLifecycle = onboardingState(store, groupId, 'lead');
+    if (next.name === current.name && next.description === current.description && next.worktree === current.worktree && next.base_ref === current.base_ref && next.archived === current.archived && oldLifecycle?.role_version === version && oldLifecycle.definition_hash === current.definition_hash) return oldLifecycle;
+    writeDefinition(store, next, { replace: true });
+    const g = store.group(groupId);
+    if (g.name !== next.name || g.archived !== next.archived) { g.name = next.name; g.archived = next.archived; store.put('groups', groupId, g); }
+    if (next.description === current.description && onboardingState(store, groupId, 'lead')?.role_version === version && onboardingState(store, groupId, 'lead')?.definition_hash === current.definition_hash) { if (next.archived) quiesceGroup(store, groupId); return onboardingState(store, groupId, 'lead'); }
+    if (g.active_task) return beginOnboarding(store, groupId, { role_version: version });
+    quiesceGroup(store, groupId);
+    return beginOnboarding(store, groupId, { role_version: version });
+  });
+}
+export function applyDesiredGroup(store, groupId, options = {}) {
+  const g = store.group(groupId);
+  if (g.active_task || !g.desired_definition) return onboardingState(store, groupId, 'lead');
+  quiesceGroup(store, groupId);
+  return beginOnboarding(store, groupId, { role_version: sharedRoleVersion(options.sourceRoot || sourceRoot) });
 }
 export function startTask(store, group, input) { return store.operation(`group:${group}`, () => startTaskUnlocked(store, group, input)); }
 function startTaskUnlocked(store, group, input) {
-  store.assertCutover(); const g = store.group(group); store.assertIdle(group);
+  const roleVersion = sharedRoleVersion(sourceRoot); assertOnboarded(store, group, roleVersion); const definition = definitionForGroup(store, group); committedDefinition(store, group); const g = store.group(group); assertNoLegacyConflict(store, g); store.assertIdle(group);
+  input = { ...input, base_ref: input.base_ref || definition.base_ref };
+  if (input.base_ref !== definition.base_ref) throw Error(`task base_ref must match registered group base_ref ${definition.base_ref}`);
+  if (git(store.projectRoot, 'status', '--porcelain') || git(store.projectRoot, 'branch', '--show-current') !== input.base_ref) throw Error('task start requires a clean committed Lead checkout on the registered base_ref');
+  if (git(g.worktree, 'rev-parse', 'HEAD') !== git(store.projectRoot, 'rev-parse', 'HEAD')) throw Error('sync the clean idle group worktree to the committed Lead baseline before starting a task');
   identifier(input.task_id);
   if (typeof input.objective !== 'string' || !input.objective.trim() || !Array.isArray(input.acceptance) || !input.acceptance.length || input.acceptance.some(x => typeof x !== 'string' || !x.trim())) throw Error('task requires an objective and observable acceptance results');
   if (g.archived || g.active_task) throw Error('group is not available');
   if (git(g.worktree, 'status', '--porcelain')) throw Error('group worktree is dirty');
   try { store.task(input.task_id); throw Error('task already exists'); } catch (e) { if (!e.message.startsWith('unknown task:')) throw e; }
   const branch = input.branch || `codex/${group}/${input.task_id}`;
+  assertNoLegacyConflict(store, g, branch);
   git(g.worktree, 'check-ref-format', '--branch', branch);
   git(g.worktree, 'show-ref', '--verify', `refs/heads/${input.base_ref}`);
   if (g.transition && JSON.stringify(g.transition.input) !== JSON.stringify(input)) throw Error('unfinished task transition; retry the original descriptor');
@@ -40,21 +140,24 @@ function startTaskUnlocked(store, group, input) {
   return store.startTask(group, { ...input, branch });
 }
 export function promptFor(group, role) {
-  return `You are the persistent ${role} of group ${group.group_id}. Worktree: ${group.worktree}. Read AGENTS.md and your selected private skill. Use team_read to discover the active task and generation. Never assume an old task is still current. Prefix assistant text with [current_state: "a concrete description"]. Submit process documents through team_submit; writing a file alone does not hand off work. End each completed turn idle; the runtime wakes you for new work. Do not poll or stop the group. Native Windows command syntax applies to bash; use PowerShell examples and dedicated read/grep/find tools. Only Lead accepts and merges.`;
+  return `You are the persistent ${role} of group ${group.group_id}. Group responsibility: ${group.applied_definition?.description || 'read groups/' + group.group_id + '/group.md'}. Worktree: ${group.worktree}. Read AGENTS.md and your selected private skill. Use team_read to discover onboarding or the active task and generation. Never assume an old task is still current. Prefix assistant text with [current_state: "a concrete description"]. Submit process documents through team_submit; writing a file alone does not hand off work. End each completed turn idle; the runtime wakes you for new work. Do not poll or stop the group. Native Windows command syntax applies to bash; use PowerShell examples and dedicated read/grep/find tools. Only Lead accepts and merges.`;
 }
 export function roleArgs(store, group, role, sessionId, root = sourceRoot) {
   const c = store.session(group.group_id, role)?.config || roleConfig(root)[role]; if (!c) throw Error('unknown role');
   const home = process.env.PI_CODING_AGENT_DIR || join(process.env.USERPROFILE || process.env.HOME, '.pi/agent');
   const web = join(home, 'npm/node_modules/pi-web-access/index.ts');
   const tools = role === 'coordinator' && !existsSync(web) ? c.tools.filter(t => !['web_search', 'fetch_content', 'get_search_content', 'source_check'].includes(t)) : c.tools;
-  const args = ['--approve', '--provider', c.provider, '--model', c.model, '--thinking', 'medium', '--name', `${group.group_id}:${role}`, '--session-id', sessionId, '--no-extensions', '--no-skills', '--tools', tools.join(','), '--skill', join(root, '.pi/skills', c.skill, 'SKILL.md'), '--append-system-prompt', join(root, '.pi/agents', `${role}.md`), '--extension', join(root, '.pi/communication/extensions/group.ts')];
+  const persisted = store.session(group.group_id, role);
+  const args = ['--approve', '--provider', c.provider, '--model', c.model, '--thinking', 'medium', '--name', `${group.group_id}:${role}`];
+  if (persisted?.session_path) args.push('--session', persisted.session_path); else args.push('--session-id', sessionId);
+  args.push('--no-extensions', '--no-skills', '--tools', tools.join(','), '--skill', join(root, '.pi/skills', c.skill, 'SKILL.md'), '--append-system-prompt', join(root, '.pi/agents', `${role}.md`), '--extension', join(root, '.pi/communication/extensions/group.ts'));
   if (role === 'coordinator') {
     if (existsSync(web)) args.push('--extension', web);
   }
   const prompt = join(store.root, `${group.group_id}-${role}-prompt.txt`); writeFileSync(prompt, promptFor(group, role)); args.push(`@${prompt}`); return args;
 }
 export async function launchGroup(store, groupId, options = {}) {
-  store.assertCutover(); const g = store.group(groupId); if (g.archived) throw Error('group archived');
+  assertOnboarded(store, groupId, sharedRoleVersion(options.sourceRoot || sourceRoot)); const g = store.group(groupId); definitionForGroup(store, groupId); assertNoLegacyConflict(store, g, g.idle_branch); if (g.archived) throw Error('group archived');
   const result = [];
   for (const role of ROLES) {
     const old = store.session(groupId, role);
@@ -83,6 +186,7 @@ export async function launchGroup(store, groupId, options = {}) {
 }
 export function stopGroup(store, group, force = false) {
   if (!force) store.assertIdle(group);
+  new ServiceManager(store).stopGroup(group);
   for (const s of store.sessions(group)) if (alive(s.pid)) {
     if (process.platform === 'win32') {
       if (!s.started_at) throw Error('process identity lacks start time; inspect before reclaim');
@@ -96,15 +200,21 @@ export function stopGroup(store, group, force = false) {
 }
 export function finalize(store, taskId, options = {}) {
   const t = store.task(taskId);
-  return store.operation('integration', () => store.operation(`group:${t.group_id}`, () => {
+  const result = store.operation('integration', () => store.operation(`group:${t.group_id}`, () => {
     try { return finalizeUnlocked(store, taskId, options); }
     catch (error) { const current = store.task(taskId); current.finalization = { ...current.finalization, last_error: error.message, failed_at: new Date().toISOString() }; store.put('tasks', taskId, current); throw error; }
   }));
+  if (store.group(t.group_id).desired_definition) {
+    const state = applyDesiredGroup(store, t.group_id);
+    if (state?.status === 'pending') result.initialization = (options.scheduleOnboarding || scheduleOnboarding)(store, t.group_id);
+  }
+  return result;
 }
 function finalizeUnlocked(store, taskId, options = {}) {
   const t = store.task(taskId), g = store.group(t.group_id); store.assertIdle(g.group_id);
   if (t.finalization?.complete) return t.finalization;
   if (!['accepted', 'incomplete'].includes(t.outcome)) throw Error('Lead acceptance or explicit incomplete closure required');
+  new ServiceManager(store).stopGroup(g.group_id);
   const target = t.base_ref;
   if (t.outcome === 'accepted') {
     if (t.finalization?.merged && (git(store.projectRoot, 'rev-parse', 'HEAD') !== t.finalization.commit || git(store.projectRoot, 'status', '--porcelain') || git(store.projectRoot, 'branch', '--show-current') !== target)) throw Error('integrated target changed; inspect before retrying finalization');
@@ -112,18 +222,48 @@ function finalizeUnlocked(store, taskId, options = {}) {
       store.assertDelivery(g, t);
       if (git(store.projectRoot, 'branch', '--show-current') !== target || git(store.projectRoot, 'status', '--porcelain')) throw Error('Lead must finalize from clean target branch');
       // Commit only process evidence after acceptance; production content stays the reviewed delivery.
-      git(g.worktree, 'add', '--', `groups/${g.group_id}`);
+      if (git(g.worktree, 'diff', '--cached', '--name-only')) throw Error('finalization requires an empty index');
+      git(g.worktree, 'add', '--', `groups/${g.group_id}/tasks/${taskId}`);
       if (git(g.worktree, 'diff', '--cached', '--name-only')) git(g.worktree, 'commit', '-m', `docs: retain ${taskId} process evidence`);
+      // Lead may commit desired group definitions while a task is running.
+      // Other target changes require a new reviewed delivery before merging.
+      const targetChanges = git(store.projectRoot, 'diff', t.base_commit, 'HEAD', '--name-only').split(/\r?\n/).filter(Boolean);
+      if (targetChanges.some(path => !/^groups\/[^/]+\/group\.md$/.test(path) && !isCompletedTaskEvidence(store, path, t.group_id, taskId))) throw Error('target implementation changed since task baseline; rebase and re-review before integration');
       git(store.projectRoot, 'merge', '--no-edit', t.branch);
+      const finalSnapshot = t.documentation?.commit || t.delivery.commit;
+      const mergedChanges = git(store.projectRoot, 'diff', finalSnapshot, 'HEAD', '--name-only', '--', '.', ':(exclude)groups/**').trim();
+      if (mergedChanges) throw Error('integrated implementation differs from reviewed code and documentation');
       t.finalization = { merged: true, commit: git(store.projectRoot, 'rev-parse', 'HEAD') }; store.put('tasks', taskId, t);
     }
     if (!t.finalization.tested) {
-      if (!options.skipTests) execFileSync(process.execPath, [join(store.projectRoot, 'tests/run-tests.mjs')], { cwd: store.projectRoot, stdio: 'pipe', windowsHide: true });
-      t.finalization.tested = true; store.put('tasks', taskId, t);
+      if (!options.skipTests) {
+        const spec = JSON.parse(readFileSync(join(store.projectRoot, '.pi/project.json'), 'utf8')).integration;
+        if (!spec || typeof spec.executable !== 'string' || !Array.isArray(spec.args) || spec.args.some(x => typeof x !== 'string')) throw Error('configure .pi/project.json integration executable and args');
+        execFileSync(spec.executable === 'node' ? process.execPath : spec.executable, spec.args, { cwd: store.projectRoot, stdio: 'pipe', windowsHide: true, shell: false });
+      }
+      t.finalization.tested = !options.skipTests; t.finalization.independently_verified = Boolean(options.skipTests); store.put('tasks', taskId, t);
     }
   } else if (git(g.worktree, 'status', '--porcelain')) throw Error('incomplete task evidence must be committed or explicitly preserved before detach');
   git(g.worktree, 'switch', g.idle_branch);
   git(g.worktree, 'merge', '--ff-only', target);
   store.tx(() => { g.active_task = null; g.generation += 1; store.put('groups', g.group_id, g); t.finalization = { ...t.finalization, complete: true, last_error: null, branch_preserved: true }; store.put('tasks', taskId, t); });
   return t.finalization;
+}
+
+function isCompletedTaskEvidence(store, path, currentGroupId, currentTaskId) {
+  const match = /^groups\/([^/]+)\/tasks\/([^/]+)\/(.+)$/.exec(path);
+  if (!match) return false;
+  const [, groupId, taskId] = match;
+  if (groupId === currentGroupId) return false;
+  if (match[3].split('/').some(part => !part || part === '.' || part === '..')) return false;
+  if (taskId === currentTaskId) return false;
+  const row = store.db.prepare('SELECT data FROM tasks WHERE id=?').get(taskId);
+  if (!row) return false;
+  const task = JSON.parse(row.data);
+  if (task.task_id !== taskId || task.group_id !== groupId || task.outcome !== 'accepted' || !task.finalization?.complete || !task.finalization.commit) return false;
+  try {
+    const completedBlob = git(store.projectRoot, 'rev-parse', `${task.finalization.commit}:${path}`);
+    const targetBlob = git(store.projectRoot, 'rev-parse', `HEAD:${path}`);
+    return completedBlob === targetBlob;
+  } catch { return false; }
 }

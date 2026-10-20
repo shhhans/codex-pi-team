@@ -1,7 +1,17 @@
 import { GroupStore } from '../../.pi/runtime/group-store.mjs';
 import { execute } from '../../scripts/pi-team-v2.mjs';
+import { createGroup, updateGroup, adoptGroup, syncGroup } from '../../.pi/runtime/group-service.mjs';
+import { scheduleOnboarding } from '../../scripts/group-init-runner.mjs';
+import { registeredGroups } from '../../.pi/runtime/group-onboarding.mjs';
 
 const definitions = [
+  ['team_groups', 'Read registered configuration and runtime state independently of Blackboard.', ['project_root'], {}],
+  ['team_service_recover', 'Recover a service operation lock only after its recorded process owner is proven absent.', ['project_root'], {}],
+  ['team_group_create', 'Register a persistent responsibility group and automatically run finite real-model onboarding.', ['project_root', 'group_id', 'description', 'worktree', 'base_ref'], { description: { type: 'string' }, name: { type: 'string' }, worktree: { type: 'string' }, base_ref: { type: 'string' } }],
+  ['team_group_update', 'Change desired group responsibilities; reinitialize fresh sessions after safe task closure.', ['project_root', 'group_id', 'description'], { description: { type: 'string' }, name: { type: 'string' } }],
+  ['team_group_init', 'Explicitly retry finite onboarding after inspecting a fault.', ['project_root', 'group_id'], {}],
+  ['team_group_adopt', 'Explicitly generate a definition for an idle pre-definition v2 group and run fresh onboarding; preserve its history.', ['project_root', 'group_id', 'description', 'base_ref'], { description: { type: 'string' }, base_ref: { type: 'string' }, name: { type: 'string' } }],
+  ['team_group_sync', 'Synchronize an idle clean group worktree from the committed Lead baseline.', ['project_root', 'group_id'], {}],
   ['team_send', 'Send a durable message to a group Coordinator.', ['project_root', 'group_id', 'body'], { body: { type: 'string' } }],
   ['team_inbox', 'Read Coordinator reports after a message cursor.', ['project_root', 'group_id'], { cursor: { type: 'integer' } }],
   ['team_wait', 'Wait up to 55 seconds for new Coordinator reports.', ['project_root', 'group_id'], { cursor: { type: 'integer' }, timeout_ms: { type: 'integer' } }],
@@ -14,6 +24,13 @@ export async function call(name, args) {
   const store = new GroupStore(args.project_root);
   try {
     switch (name) {
+      case 'team_groups': return registeredGroups(store);
+      case 'team_service_recover': return execute(store, 'service-recover', []);
+      case 'team_group_create': { const created = createGroup(store, args); return { ...created, initialization: scheduleOnboarding(store, args.group_id) }; }
+      case 'team_group_update': { const updated = updateGroup(store, args.group_id, args); return { ...updated, initialization: updated.status === 'pending' ? scheduleOnboarding(store, args.group_id) : null }; }
+      case 'team_group_init': return execute(store, 'group-init', [args.group_id]);
+      case 'team_group_adopt': { const state = adoptGroup(store, args.group_id, args); return { ...state, initialization: scheduleOnboarding(store, args.group_id) }; }
+      case 'team_group_sync': return syncGroup(store, args.group_id);
       case 'team_send': return store.send({ group_id: args.group_id, role: 'lead' }, { to: 'coordinator', body: args.body });
       case 'team_inbox': return store.inbox(args.group_id, 'lead', args.cursor || 0);
       case 'team_wait': return execute(store, 'wait', [args.group_id, String(args.cursor || 0), String(args.timeout_ms ?? 55000)]);

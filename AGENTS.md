@@ -2,57 +2,49 @@
 
 Read this before exploring. Use native Windows commands; never invoke WSL without Lead authorization.
 
-## Implementation progress and deployment boundary (2026-10-20)
+## Implementation and deployment boundary (2026-10-20)
 
-This checkout implements v2 on `codex/group-runtime`; the canonical `develop`
-checkout has not been switched to this launcher/protocol. The deterministic
-suite passed 20 scenarios, covering native Pi extension loading, submission
-and inbox races, recovery, and Git integration behavior. A real module-onboarding
-run completed in an isolated project copy: one plan review, D1, independent
-52-test core-suite reproduction by Executor and Validator, passing code review,
-Coordinator delivery, and Lead acceptance/integration inside that copy.
+This checkout contains the v2 persistent-group implementation, including configuration registration, finite onboarding, documentation alignment and structured services. The current increment passed the parallel deterministic suite and bounded real three-role lifecycle acceptance in an isolated project; see project_state.md for scope and evidence. These results do not establish original-project deployment or long-term unattended maintenance. Do not report tests, live onboarding, original-project provisioning, cutover or group registration as completed unless you inspect the relevant current evidence. Detailed prior outcomes belong in `project_state.md` and runtime verification artifacts; the Lead owns final updates to that operational snapshot.
 
-An implementation-time clarification reached Executor at a tool boundary
-before delivery. A provider outage required an explicitly authorized temporary
-model replacement while retaining task/session history. This is bounded
-protocol evidence, not a model-quality comparison, clinical validation, or
-deployment into the original target project. Final Pi error-metadata adaptation
-and a recovery-race correction have deterministic coverage; do not claim every
-final change received another complete real-provider run. Detailed outcomes
-belong in project_state.md and runtime verification artifacts.
+The canonical `develop` checkout still contains the v1 launcher and protocol. This checkout is on `codex/group-runtime`; use its CLI and ADR 0009 only. Do not combine commands or workflows from the two checkouts. Cutover and provisioning in an original target project remain separate work. Preserve legacy records and uncommitted changes; inspect the legacy inventory before cutover. Connection-only provider probes do not change role configuration or authorize tasks.
 
-Remaining work includes explicit v1 cutover and original-project group
-provisioning. Read persisted group/session records before claiming a group is
-registered or running; registration, completed tasks and live processes are
-different facts. Model connection probes do not update .pi/roles.json or
-authorize new tasks. Do not switch defaults or launch work from a status request.
+## Start here
 
-## Active architecture
+- The supported Windows entrypoint is `pi-team.cmd`; lifecycle implementation is `scripts/pi-team.ps1` and `scripts/pi-team-v2.mjs`.
+- The normative v2 protocol is `ADR/0009-persistent-group-workflow.md`.
+- Stable architecture and goal snapshots are `architect.md` and `goal.md`. `project_state.md` is an operational snapshot and is maintained by Lead.
+- `groups/<id>/group.md` is the durable module-group definition. Runtime state is a projection and does not by itself prove the definition is committed or onboarding is complete.
+- `.pi/communication/extensions/group.ts`, `.pi/runtime/` and `scripts/group-init-runner.mjs` contain active runtime behavior. Historical material under `.pi/legacy/` is non-normative; do not modify it.
+- `.pi/agents/` contains Coordinator, Executor and Validator instructions; `.pi/skills/` contains their active private workflows.
+- The deterministic test entrypoint is `tests/run-tests.ps1`; the cross-shell Node entrypoint is `node tests/run-tests.mjs`. Do not run tests unless the Lead requests verification or the assigned task requires it.
 
-The normative protocol is ADR/0009-persistent-group-workflow.md. ADR 0002 describes the superseded v1 workflow. The supported entrypoint is pi-team.cmd; scripts/pi-team.ps1 forwards to the v2 Node CLI. Node 24.11 or newer and Pi 0.84.2 are the supported runtime baseline.
+## Group definitions and onboarding
 
-Each persistent group owns one module, one fixed Git worktree and three long-lived sessions: Coordinator, Executor and Validator. A group handles one task at a time. Lead owns external objectives, module boundaries, acceptance and integration. Coordinator arranges work and outside communication; Executor plans/implements; Validator performs exactly one adversarial plan review and subsequent source/diff/test reviews. Validator may read production source but must not edit it.
+Lead owns group definitions. YAML front matter in `groups/<id>/group.md` contains `schema_version: 1`, `id`, `name`, absolute `worktree`, `base_ref` and optional `archived`; its Markdown body states module responsibility and boundaries. Directory and header IDs must match. Lead commits definitions in the target checkout before task work and uses `group-sync` only with clean Lead state and a clean idle group worktree.
 
-## Navigation
+`group-create`/`team_group_create` registers a definition and schedules finite onboarding. Real Executor and Validator sessions each submit an explicit responsibility acknowledgement; Coordinator submits only after both and reports its receipt to Lead. Onboarding is not business work; the runner stops all three sessions. `group-init`/`team_group_init` retries onboarding only after inspecting its fault. `group-update`/`team_group_update` changes desired responsibility; a new definition must wait for a safe task boundary, reset all three role sessions and require fresh acknowledgements. Do not start a task from stale or uncommitted group configuration.
 
-- .pi/roles.json is the single launch configuration for providers, models, tools and role skills.
-- .pi/agents/ contains the three active role instructions. .pi/skills/coordinate-group, execute-group-task and review-group-task contain their private workflows. Other role skills are retired v1 material and are not loaded.
-- .pi/runtime/group-store.mjs owns the SQLite authority; group-service.mjs owns Git and process lifecycle.
-- .pi/communication/extensions/group.ts exposes team_read, team_send and team_submit, handles durable inbox recovery and display-only current_state prefixes.
-- plugins/pi-team/server.mjs exposes Lead inbox/wait/send/inspect/accept/finalize tools. Blackboard tools, contract negotiation and ACKs are retired.
-- groups/<group>/group.md describes the module. groups/<group>/tasks/<task>/ contains process evidence, committed with the code.
-- tests/run-tests.ps1 or node tests/run-tests.mjs runs active behavior and real-extension loading tests. Older tests are v1 specifications, not v2 acceptance evidence.
+## Active roles and boundaries
 
-## Communication and evidence
+- Coordinator coordinates one task within Lead scope, writes process documents, handles external communication, and independently reviews Validator's module-documentation alignment. Coordinator uses structured `team_service` actions only for services declared in the target `.pi/services.json`.
+- Executor implements one Lead-assigned task in the group's fixed worktree, creates local delivery commits and maintains implementation evidence.
+- Validator independently reviews one frozen plan and each delivered code version. After a code review passes, Validator may edit only the explicitly delegated module Markdown paths and its documentation report; it does not edit production code.
+- Lead owns group identity, module boundaries, objective, delegation, acceptance, target integration and cutover. Agents report blockers or unrelated defects to Lead through Coordinator and do not widen their assignment.
 
-Use team_read for current task_id/generation and open work. team_submit atomically records a document snapshot, completes the work and queues the successor. Writing a file or sending chat does not submit a result. Duplicate submissions are idempotent; submitted plans and review reports are immutable. implementation.md gets a snapshot for each delivery. Full Git commits bind code Review; human prose uses D1, D2, etc.
+## Task and document workflow
 
-Use team_send for questions and answers. All three same-group roles may communicate. Only Coordinator contacts Lead or other Coordinators. Inter-group commitments and scope expansion require Lead. No Agent accepts, merges or pushes. Executor is authorized to create local delivery commits on the task branch. Normal repair/review loops do not require Coordinator approval.
+There is at most one active task per group. The Lead-owned task includes objective, acceptance results, base ref and, when needed, explicit `documentation_paths` and `documentation_checklist`. Coordinator writes `task.md`; Executor writes `plan.md`; Validator submits exactly one adversarial `plan-review.md`. The plan review is advice, not a pass/ACK gate. Executor reads it and implements while recording concern handling. A second plan-review round is prohibited.
 
-Begin assistant text with [current_state: "a concrete activity"]. Malformed or absent prefixes never block work or imply completion. Do not poll, invent lifecycle state calls, construct transport envelopes or create unassigned subtasks. End each completed turn idle; sessions and worktrees persist across tasks.
+After each Executor delivery, Validator reviews its exact commit/source/diff/tests and submits `code-review-NN.md`. Following a passing code review, Validator checks assigned module Markdown against delivered behavior and submits a documentation report. Runtime commits only the explicit documentation paths. Coordinator checks the exact code commit, documentation commit, checklist and actual module text, then passes or returns that revision. Delivery to Lead requires both reviews to pass. Lead alone accepts and integrates. Process files live under `groups/<group>/tasks/<task>/`; independent Validator evidence lives under `review-NN/`.
 
-## Hygiene and cutover
+## Runtime, services and validation
 
-Reusable role instructions and skills remain task-agnostic. Put task details in process documents and runtime context. Never modify existing .pi/legacy/ history. Preserve old runtime records and current user changes. v2 refuses to start groups while unresolved v1 tasks remain; close them explicitly using the pre-cutover checkout rather than silently migrating them. Stable snapshots are architect.md, goal.md and project_state.md; update them when architecture or operations change, not per message.
+SQLite below `<git-common-dir>/pi-team-runtime/v2` owns work, messages, session identity, receipts and recoverable projections. Documents are written before explicit `team_submit`; a successful `ok:true` receipt proves handoff. Use runtime-injected identity and `work_id`; writing a file, chat prose, process availability and `current_state` do not advance workflow. Only Coordinator contacts Lead or another group; same-group peers communicate directly. Handle steering messages before submitting. Unfinished work and rejected team tools require recovery, not a completion claim.
 
-The role-tools boundary in .pi/runtime/role-tools.mjs injects turn identity. Use work_id when submitting; only ok:true receipts prove handoff. Rejections and unfinished work are durable Coordinator concerns. Incoming messages can steer a running turn at tool boundaries; check and handle them before delivery. Review evidence belongs under review-NN/, separate from delivered verification files.
+Coordinator's `team_service` offers describe/status/start/stop for named entries in `.pi/services.json`; arbitrary shell command strings are unsupported. Development mode uses the group worktree; review mode exports an explicit delivery commit to an isolated snapshot. The target `.pi/project.json` declares finalization's integration executable and string-array args. Lead acceptance is required before finalization.
+
+Use `inventory`/`team_groups` and inspect persisted records before saying a group is registered, onboarded or running; these are separate states. `doctor` is a local prerequisite check, not proof of provider availability. Keep test results, live-provider evidence and original-project deployment distinct. Do not mark the current implementation complete based on prior runs.
+
+## Reusable-content hygiene
+
+Keep this file, active role prompts and active skills task-agnostic. Do not add task identifiers, issue numbers, task-only artifacts, host paths, raw prompts, envelopes, audit rows or runtime traces. Task-specific scope belongs in the assigned task document or runtime context.

@@ -1,14 +1,50 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import { GroupStore, git, parseCurrentState } from '../.pi/runtime/group-store.mjs';
-import { createGroup, startTask, finalize, roleArgs, launchGroup, stopGroup } from '../.pi/runtime/group-service.mjs';
+import { startTask, finalize, roleArgs, launchGroup, stopGroup, updateGroup, syncGroup } from '../.pi/runtime/group-service.mjs';
 import { call, rpc } from '../plugins/pi-team/server.mjs';
 import { RoleTools } from '../.pi/runtime/role-tools.mjs';
+import { submitOnboarding, markOnboardingStopped, onboardingState } from '../.pi/runtime/group-onboarding.mjs';
+import { scheduleOnboarding } from '../scripts/group-init-runner.mjs';
+import { fixture, registerFixtureGroup } from './group-fixture.mjs';
+
+function acceptReportTask(store, groupId, taskId) {
+  const group = store.group(groupId);
+  const task = group.active_task === taskId ? store.task(taskId) : startTask(store, groupId, { task_id: taskId, objective: 'retain a bounded report', acceptance: ['report retained'], base_ref: 'develop' });
+  const prefix = `groups/${groupId}/tasks/${taskId}`;
+  const write = (name, body) => {
+    const path = join(group.worktree, prefix, name);
+    mkdirSync(join(group.worktree, prefix), { recursive: true }); writeFileSync(path, body);
+    return `${prefix}/${name}`;
+  };
+  const actor = role => ({ group_id: groupId, role, task_id: taskId, generation: task.generation });
+  const submit = (role, kind, name, extra = {}) => store.submit(actor(role), { kind, path: write(name, `# ${name}\nReport evidence.\n`), ...extra });
+  submit('coordinator', 'task', 'task.md'); submit('executor', 'plan', 'plan.md'); submit('validator', 'plan_review', 'plan-review.md');
+  const implementation = write('implementation.md', '# Report only\nNo production changes.\n');
+  git(group.worktree, 'add', '.'); git(group.worktree, 'commit', '-m', `report delivery ${taskId}`);
+  const commit = git(group.worktree, 'rev-parse', 'HEAD');
+  store.submit(actor('executor'), { kind: 'implementation', round: 1, commit, path: implementation });
+  store.submit(actor('validator'), { kind: 'code_review', round: 1, commit, verdict: 'pass', path: write('code-review-01.md', '# Review\nPass.\n') });
+  submit('validator', 'documentation', 'documentation-1-1.md', { round: 1 });
+  submit('coordinator', 'documentation_review', 'documentation-review-1-1.md', { round: 1, verdict: 'pass' });
+  submit('coordinator', 'delivery', 'delivery.md');
+  const reviewDir = join(group.worktree, prefix, 'review-01'); mkdirSync(reviewDir, { recursive: true }); writeFileSync(join(reviewDir, 'log.md'), '# Independent review evidence\n');
+  store.accept(taskId, 'Report acceptance criteria met.');
+  return task;
+}
+
+function seedCompletedReportAndCandidate() {
+  const f = fixture();
+  registerFixtureGroup(f.store, 'other', join(f.root, 'other'));
+  acceptReportTask(f.store, 'sample', 'T1'); finalize(f.store, 'T1', { skipTests: true });
+  syncGroup(f.store, 'other');
+  acceptReportTask(f.store, 'other', 'T2');
+  return f;
+}
 
 test('runtime-owned identity sends without metadata and rejects a stale turn after switching tasks', () => {
   const f = fixture(); try {
@@ -59,7 +95,7 @@ test('late implementation rewrite is rejected, normal model stop alerts Coordina
     f.submit('coordinator', 'resolution', 'decision-1.md', { round: 1 });
     assert.equal(f.store.read('sample', 'validator').work.length, 0);
     const d2 = f.deliver(2); assert.notEqual(d2, commit);
-    f.submit('validator', 'code_review', 'code-review-02.md', { round: 2, commit: d2, verdict: 'pass' });
+    f.submit('validator', 'code_review', 'code-review-02.md', { round: 2, commit: d2, verdict: 'pass' }); f.alignDocs(2);
     assert.equal(f.store.task('T1').review.verdict, 'pass');
     assert.equal(f.store.db.prepare("SELECT count(*) AS n FROM artifacts WHERE kind='plan_review'").get().n, 1);
   } finally { f.cleanup(); }
@@ -77,6 +113,100 @@ test('delivery document changes cannot be hidden under task paths; independent r
   } finally { f.cleanup(); }
 });
 
+test('documentation alignment is scoped, code-bound, revisable, and frozen before delivery', () => {
+  const f = fixture({ documentationPaths: ['README.md'] }); try {
+    f.prepare();
+    writeFileSync(join(f.wt, 'app.mjs'), 'export const result = 2;\n');
+    const commit = f.deliver(1);
+    f.submit('validator', 'code_review', 'code-review-01.md', { round: 1, commit, verdict: 'pass' });
+    f.file('documentation-1-1.md', '# Documentation review\nREADME describes the delivered result.\n');
+    writeFileSync(join(f.wt, 'README.md'), '# Sample module\nThe module exports result 2.\n');
+    writeFileSync(join(f.wt, 'app.mjs'), 'export const result = 99;\n');
+    assert.throws(() => f.submit('validator', 'documentation', 'documentation-1-1.md', { round: 1 }), /production files changed/);
+    git(f.wt, 'restore', 'app.mjs');
+    f.submit('validator', 'documentation', 'documentation-1-1.md', { round: 1 });
+    const docs = f.store.task('T1').documentation;
+    assert.equal(docs.code_commit, commit);
+    assert.equal(git(f.wt, 'show', `${docs.commit}:README.md`), '# Sample module\nThe module exports result 2.');
+    assert.deepEqual(git(f.wt, 'diff', commit, docs.commit, '--name-only').split(/\r?\n/), ['README.md']);
+    f.file('documentation-review-1-1.md', '# Documentation verdict\nChanges requested: explain how the result is verified.\n');
+    f.submit('coordinator', 'documentation_review', 'documentation-review-1-1.md', { round: 1, verdict: 'changes_requested' });
+    assert.equal(f.store.task('T1').docs_revision, 2);
+    assert.throws(() => f.submit('coordinator', 'delivery', 'delivery.md'), /No matching open work/);
+    f.file('documentation-1-2.md', '# Documentation review\nREADME describes the result and verification.\n');
+    writeFileSync(join(f.wt, 'README.md'), '# Sample module\nThe module exports result 2, verified by the integration check.\n');
+    f.submit('validator', 'documentation', 'documentation-1-2.md', { round: 1 });
+    const revised = f.store.task('T1').documentation;
+    f.file('documentation-review-1-2.md', '# Documentation verdict\nPass.\n');
+    f.submit('coordinator', 'documentation_review', 'documentation-review-1-2.md', { round: 1, verdict: 'pass' });
+    writeFileSync(join(f.wt, 'README.md'), '# silently changed after review\n');
+    assert.throws(() => f.submit('coordinator', 'delivery', 'delivery.md'), /documentation changed after submission|delivery documents changed/);
+    git(f.wt, 'restore', 'README.md');
+    f.file('delivery.md', '# Delivered\n'); f.submit('coordinator', 'delivery', 'delivery.md');
+    assert.equal(f.store.task('T1').documentation.verdict, 'pass');
+  } finally { f.cleanup(); }
+});
+
+test('onboarding cannot be marked stopped while a role is live or still busy', () => {
+  const f = fixture(); try {
+    f.store.cancel('T1', 'close fixture task'); finalize(f.store, 'T1');
+    const priorEpoch = f.store.group('sample').definition_epoch;
+    const state = updateGroup(f.store, 'sample', { description: 'Updated sample responsibilities.' });
+    assert.equal(state.status, 'pending'); assert.equal(state.epoch, priorEpoch + 1);
+    const launches = {};
+    for (const role of ['executor', 'validator', 'coordinator']) {
+      const launch_id = `re-onboard-${role}`; launches[role] = launch_id;
+      f.store.register('sample', role, { pid: 2147483647, launch_id, session_id: `re-session-${role}` });
+      submitOnboarding(f.store, { group_id: 'sample', role, launch_id, definition_epoch: state.epoch, lifecycle_id: state.operation_id }, { body: `ACK updated ${role} responsibilities.` });
+    }
+    f.store.updateSession('sample', 'executor', launches.executor, { pid: process.pid, busy: false });
+    assert.throws(() => markOnboardingStopped(f.store, 'sample'), /have not stopped/);
+    f.store.updateSession('sample', 'executor', launches.executor, { pid: 2147483647, busy: true });
+    assert.throws(() => markOnboardingStopped(f.store, 'sample'), /have not stopped/);
+    f.store.updateSession('sample', 'executor', launches.executor, { busy: false });
+    assert.equal(markOnboardingStopped(f.store, 'sample').status, 'ready');
+  } finally { f.cleanup(); }
+});
+
+test('acknowledged onboarding with only dead role processes recovers to ready without launching models', async () => {
+  const f = fixture(); try {
+    f.store.cancel('T1', 'close fixture task'); finalize(f.store, 'T1');
+    const state = updateGroup(f.store, 'sample', { description: 'Recovered sample responsibilities.' });
+    const launches = {};
+    for (const role of ['executor', 'validator', 'coordinator']) {
+      const launch_id = `dead-recovery-${role}`; launches[role] = launch_id;
+      f.store.register('sample', role, { pid: 2147483647, launch_id, session_id: `dead-session-${role}` });
+      submitOnboarding(f.store, { group_id: 'sample', role, launch_id, definition_epoch: state.epoch, lifecycle_id: state.operation_id }, { body: `ACK recovered ${role} responsibilities.` });
+    }
+    assert.equal(onboardingState(f.store, 'sample', 'lead').status, 'acknowledged');
+    const scheduled = scheduleOnboarding(f.store, 'sample', { timeout: 1000 });
+    assert.equal(scheduled.status, 'scheduled');
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && onboardingState(f.store, 'sample', 'lead').status !== 'ready') await new Promise(resolve => setTimeout(resolve, 25));
+    assert.equal(onboardingState(f.store, 'sample', 'lead').status, 'ready');
+    assert.ok(f.store.sessions('sample').every(session => session.pid === 2147483647));
+  } finally { f.cleanup(); }
+});
+
+test('a committed desired definition applies after task completion and schedules its new epoch', () => {
+  const f = fixture(); try {
+    f.prepare(); const commit = f.deliver(1);
+    f.submit('validator', 'code_review', 'code-review-01.md', { round: 1, commit, verdict: 'pass' }); f.alignDocs(1);
+    f.submit('coordinator', 'delivery', 'delivery.md'); f.store.accept('T1', 'criteria checked');
+    const oldEpoch = f.store.group('sample').definition_epoch;
+    assert.equal(updateGroup(f.store, 'sample', { description: 'New responsibilities for next tasks.' }).status, 'waiting_for_task');
+    git(f.main, 'add', 'groups/sample/group.md'); git(f.main, 'commit', '-m', 'update registered group responsibilities');
+    const result = finalize(f.store, 'T1', { skipTests: true, scheduleOnboarding: () => ({ status: 'stubbed' }) });
+    assert.equal(result.complete, true); assert.equal(result.initialization.status, 'stubbed');
+    assert.equal(f.store.group('sample').definition_epoch, oldEpoch + 1);
+    assert.equal(onboardingState(f.store, 'sample', 'lead').status, 'pending');
+    assert.equal(f.store.group('sample').desired_definition, null);
+    assert.ok(f.store.artifact('T1', 'delivery', 1));
+    assert.match(readFileSync(join(f.main, 'groups/sample/group.md'), 'utf8'), /New responsibilities/);
+    assert.equal(f.store.sessions('sample').length, 0);
+  } finally { f.cleanup(); }
+});
+
 test('a recovered review cancels its pending runtime escalation before Coordinator can open an unnecessary revision', () => {
   const f = fixture(); try {
     f.prepare(); const commit = f.deliver(1);
@@ -88,28 +218,13 @@ test('a recovered review cancels its pending runtime escalation before Coordinat
     assert.ok(f.store.read('sample', 'coordinator').work.some(w => w.kind === 'blocked-1'));
     git(f.wt, 'restore', 'app.mjs');
     assert.equal(tools.invoke('team_submit', input).ok, true);
+    assert.deepEqual(f.store.read('sample', 'validator').work.map(w => w.kind), ['documentation-1-1']);
+    f.alignDocs(1);
     assert.deepEqual(f.store.read('sample', 'coordinator').work.map(w => w.kind), ['delivery-1']);
     assert.throws(() => f.submit('coordinator', 'resolution', 'decision-1.md', { round: 1 }), /No matching open work/);
     assert.equal(f.store.read('sample', 'executor').work.length, 0);
   } finally { f.cleanup(); }
 });
-
-export function fixture() {
-  const root = mkdtempSync(join(tmpdir(), 'pi-group-'));
-  const main = join(root, 'main'), wt = join(root, 'group'); mkdirSync(main);
-  git(main, 'init', '-b', 'develop'); git(main, 'config', 'core.autocrlf', 'false'); git(main, 'config', 'user.name', 'Runtime Test'); git(main, 'config', 'user.email', 'test@example.invalid');
-  writeFileSync(join(main, 'app.mjs'), 'export const result = 1;\n'); git(main, 'add', '.'); git(main, 'commit', '-m', 'baseline');
-  const store = new GroupStore(main); createGroup(store, { group_id: 'sample', worktree: wt, base_ref: 'develop' });
-  const input = { task_id: 'T1', objective: 'return two', acceptance: ['result equals two'], base_ref: 'develop' };
-  startTask(store, 'sample', input);
-  const file = (name, body = `# ${name}\nEvidence and reasoning.\n`) => { const path = `groups/sample/tasks/T1/${name}`; mkdirSync(dirname(join(wt, path)), { recursive: true }); writeFileSync(join(wt, path), body); return path; };
-  const actor = role => ({ group_id: 'sample', role, task_id: 'T1', generation: 1 });
-  const submit = (role, kind, name, extra = {}) => store.submit(actor(role), { kind, path: file(name), ...extra });
-  const prepare = () => { submit('coordinator', 'task', 'task.md'); submit('executor', 'plan', 'plan.md'); submit('validator', 'plan_review', 'plan-review.md'); };
-  const deliver = round => { file('implementation.md', `# Implementation ${round}\nPlan review addressed. Tests run.\n`); git(wt, 'add', '.'); git(wt, 'commit', '--allow-empty', '-m', `delivery ${round}`); const commit = git(wt, 'rev-parse', 'HEAD'); store.submit(actor('executor'), { kind: 'implementation', round, commit, path: 'groups/sample/tasks/T1/implementation.md' }); return commit; };
-  const cleanup = () => { store.close(); rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); };
-  return { root, main, wt, store, file, actor, submit, prepare, deliver, cleanup };
-}
 
 test('one adversarial review leads to implementation, repair loop, independent acceptance and next task', () => {
   const f = fixture(); try {
@@ -120,6 +235,7 @@ test('one adversarial review leads to implementation, repair loop, independent a
     const d2 = f.deliver(2);
     assert.throws(() => f.submit('validator', 'code_review', 'code-review-02.md', { round: 2, commit: d1, verdict: 'pass' }), /stale delivery/);
     f.submit('validator', 'code_review', 'code-review-02.md', { round: 2, commit: d2, verdict: 'pass' });
+    f.alignDocs(2);
     assert.throws(() => f.store.accept('T1', 'yes'), /not ready/);
     f.submit('coordinator', 'delivery', 'delivery.md'); f.store.accept('T1', 'criteria checked against D2');
     const done = finalize(f.store, 'T1', { skipTests: true }); assert.equal(done.complete, true);
@@ -183,18 +299,22 @@ test('review cannot approve changed production; blocked review requires recorded
 
 test('Lead contacts Coordinator, only Coordinators cross groups; inbox uses a cursor and bounded wait', async () => {
   const f = fixture(); try {
-    createGroup(f.store, { group_id: 'other', worktree: join(f.root, 'other'), base_ref: 'develop' });
+    registerFixtureGroup(f.store, 'other', join(f.root, 'other'));
     assert.throws(() => f.store.send(f.actor('executor'), { group_id: 'other', to: 'coordinator', body: 'request' }), /cross-group/);
     assert.throws(() => f.store.send(f.actor('validator'), { to: 'lead', body: 'report' }), /only Coordinator/);
     assert.throws(() => f.store.send({ group_id: 'sample', role: 'lead' }, { to: 'executor', body: 'work' }), /Coordinator only/);
     f.store.send(f.actor('coordinator'), { group_id: 'other', to: 'coordinator', body: 'dependency' });
     assert.equal(f.store.inbox('other', 'coordinator').at(-1).data.body, 'dependency');
     const result = await call('team_send', { project_root: f.main, group_id: 'sample', body: 'clarification' }); assert.ok(result.message_id);
-    assert.deepEqual(await call('team_wait', { project_root: f.main, group_id: 'sample', timeout_ms: 0 }), []);
+    const waiting = await call('team_wait', { project_root: f.main, group_id: 'sample', timeout_ms: 0 });
+    assert.equal(waiting.filter(m => m.data?.type !== 'onboarding_ack').length, 0);
     f.store.send(f.actor('coordinator'), { to: 'lead', body: 'need decision' });
-    const messages = await call('team_inbox', { project_root: f.main, group_id: 'sample' }); assert.equal(messages.length, 1);
-    assert.deepEqual(await call('team_inbox', { project_root: f.main, group_id: 'sample', cursor: messages[0].id }), []);
-    assert.equal((await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list' })).result.tools.length, 6);
+    const messages = await call('team_inbox', { project_root: f.main, group_id: 'sample' });
+    const business = messages.filter(m => m.data?.type !== 'onboarding_ack'); assert.equal(business.length, 1);
+    assert.equal(business[0].data.body, 'need decision');
+    assert.equal((await call('team_inbox', { project_root: f.main, group_id: 'sample', cursor: business[0].id })).filter(m => m.data?.type !== 'onboarding_ack').length, 0);
+    const listedTools = (await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list' })).result.tools.map(tool => tool.name);
+    assert.ok(listedTools.includes('team_group_create')); assert.ok(listedTools.includes('team_inbox'));
   } finally { f.cleanup(); }
 });
 
@@ -227,7 +347,7 @@ test('SQLite rolls back a killed writer; independent processes converge on one h
 test('native Windows entrypoint and stdio Lead server expose the same authority', async () => {
   const f = fixture(); try {
     const output = execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(import.meta.dirname, '../scripts/pi-team.ps1'), 'inventory'], { encoding: 'utf8', windowsHide: true, env: { ...process.env, PI_TEAM_PROJECT_ROOT: f.main } });
-    assert.equal(JSON.parse(output).groups[0].group_id, 'sample');
+    assert.equal(JSON.parse(output).groups[0].definition.id, 'sample');
     const response = await new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [join(import.meta.dirname, '../plugins/pi-team/server.mjs')], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
       let buffer = ''; const timer = setTimeout(() => { child.kill(); reject(Error('MCP response timeout')); }, 15000);
@@ -240,7 +360,7 @@ test('native Windows entrypoint and stdio Lead server expose the same authority'
 
 test('Lead changes pass through Coordinator and retain old delivery evidence', () => {
   const f = fixture(); try {
-    f.prepare(); const commit = f.deliver(1); f.submit('validator', 'code_review', 'code-review-01.md', { round: 1, commit, verdict: 'pass' });
+    f.prepare(); const commit = f.deliver(1); f.submit('validator', 'code_review', 'code-review-01.md', { round: 1, commit, verdict: 'pass' }); f.alignDocs(1);
     f.submit('coordinator', 'delivery', 'delivery.md'); f.store.accept('T1', 'checked');
     f.store.requestChanges('T1', 'missing acceptance evidence');
     assert.equal(f.store.task('T1').outcome, 'pending'); assert.equal(f.store.read('sample', 'coordinator').work.at(-1).kind, 'revision-1');
@@ -265,6 +385,50 @@ test('Windows hidden launcher forwards group identity and resumes original sessi
   } finally { try { stopGroup(f.store, 'sample', true); } finally { if (previous === undefined) delete process.env.PI_CMD; else process.env.PI_CMD = previous; f.cleanup(); } }
 });
 
+test('accepted report-only deliveries from different groups can finalize sequentially', () => {
+  const f = fixture(); try {
+    registerFixtureGroup(f.store, 'other', join(f.root, 'other'));
+    acceptReportTask(f.store, 'sample', 'T1'); acceptReportTask(f.store, 'other', 'T2');
+    assert.equal(finalize(f.store, 'T1', { skipTests: true }).complete, true);
+    assert.equal(finalize(f.store, 'T2', { skipTests: true }).complete, true);
+  } finally { f.cleanup(); }
+});
+
+test('finalization rejects process paths without a completed accepted task record', () => {
+  const f = seedCompletedReportAndCandidate(); try {
+    // A real pending task record must not authorize its process files.
+    registerFixtureGroup(f.store, 'pending', join(f.root, 'pending'));
+    startTask(f.store, 'pending', { task_id: 'T3', objective: 'pending report', acceptance: ['retained'], base_ref: 'develop' });
+    const path = 'groups/pending/tasks/T3/claim.md'; mkdirSync(join(f.main, 'groups/pending/tasks/T3'), { recursive: true }); writeFileSync(join(f.main, path), '# Pending claim\n');
+    git(f.main, 'add', path); git(f.main, 'commit', '-m', 'unaccepted task evidence');
+    assert.throws(() => finalize(f.store, 'T2', { skipTests: true }), /target implementation changed/);
+  } finally { f.cleanup(); }
+});
+
+test('finalization rejects forged task paths and modified completed report evidence', async t => {
+  await t.test('forged path', () => {
+    const f = seedCompletedReportAndCandidate(); try {
+      const path = 'groups/other/tasks/FORGED/claim.md'; mkdirSync(join(f.main, 'groups/other/tasks/FORGED'), { recursive: true }); writeFileSync(join(f.main, path), '# Forged claim\n');
+      git(f.main, 'add', path); git(f.main, 'commit', '-m', 'forged task evidence');
+      assert.throws(() => finalize(f.store, 'T2', { skipTests: true }), /target implementation changed/);
+    } finally { f.cleanup(); }
+  });
+  await t.test('modified completed evidence', () => {
+    const f = seedCompletedReportAndCandidate(); try {
+      const path = join(f.main, 'groups/sample/tasks/T1/task.md'); writeFileSync(path, '# Changed after completion\n');
+      git(f.main, 'add', '.'); git(f.main, 'commit', '-m', 'modify completed report');
+      assert.throws(() => finalize(f.store, 'T2', { skipTests: true }), /target implementation changed/);
+    } finally { f.cleanup(); }
+  });
+});
+
+test('finalization continues to reject production changes since the task baseline', () => {
+  const f = seedCompletedReportAndCandidate(); try {
+    writeFileSync(join(f.main, 'app.mjs'), 'export const result = 99;\n'); git(f.main, 'add', 'app.mjs'); git(f.main, 'commit', '-m', 'unreviewed production change');
+    assert.throws(() => finalize(f.store, 'T2', { skipTests: true }), /target implementation changed/);
+  } finally { f.cleanup(); }
+});
+
 test('cutover refuses unfinished legacy work and busy group switching', () => {
   const f = fixture(); try {
     const old = join(f.store.common, 'pi-team/v1'); mkdirSync(old, { recursive: true }); writeFileSync(join(old, 'OLD.json'), JSON.stringify({ task_id: 'OLD', outcome: 'pending' }));
@@ -279,9 +443,8 @@ test('cutover refuses unfinished legacy work and busy group switching', () => {
 test('integration test failure preserves the merge and retries without merging twice', () => {
   const f = fixture(), old = process.env.PI_INTEGRATION_NEGATIVE;
   try {
-    mkdirSync(join(f.main, 'tests')); writeFileSync(join(f.main, 'tests/run-tests.mjs'), "if(process.env.PI_INTEGRATION_NEGATIVE) throw Error('negative-control integration failure');\n");
-    git(f.main, 'add', '.'); git(f.main, 'commit', '-m', 'independent target change');
-    f.prepare(); const commit = f.deliver(1); f.submit('validator', 'code_review', 'code-review-01.md', { round: 1, commit, verdict: 'pass' });
+    mkdirSync(join(f.wt, 'tests')); writeFileSync(join(f.wt, 'tests/run-tests.mjs'), "if(process.env.PI_INTEGRATION_NEGATIVE) throw Error('negative-control integration failure');\n");
+    f.prepare(); const commit = f.deliver(1); f.submit('validator', 'code_review', 'code-review-01.md', { round: 1, commit, verdict: 'pass' }); f.alignDocs(1);
     f.submit('coordinator', 'delivery', 'delivery.md'); f.store.accept('T1', 'checked');
     process.env.PI_INTEGRATION_NEGATIVE = '1'; assert.throws(() => finalize(f.store, 'T1'));
     const integrated = git(f.main, 'rev-parse', 'HEAD'); assert.equal(f.store.task('T1').finalization.merged, true); assert.ok(f.store.task('T1').finalization.last_error);
@@ -318,7 +481,7 @@ test('installed Pi loads the real extension: tools, message prefix, handoff, gua
       result.runtime.sendUserMessage = (content, options) => steered.push({ role, content, options });
       const ext = result.extensions[0]; loaded.push(ext);
       for (const fn of ext.handlers.get('session_start') || []) await fn({}, ctx);
-      assert.deepEqual([...ext.tools.keys()], role === 'coordinator' ? ['team_read', 'team_send', 'team_submit'] : ['bash', 'team_read', 'team_send', 'team_submit']);
+      assert.deepEqual([...ext.tools.keys()], role === 'coordinator' ? ['team_read', 'team_send', 'team_submit', 'team_service'] : ['bash', 'team_read', 'team_send', 'team_submit']);
     }
     const [c, e, v] = loaded;
     const tool = (ext, name, input) => ext.tools.get(name).definition.execute('call', input, undefined, undefined, ctx);
