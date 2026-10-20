@@ -52,6 +52,8 @@ test('late implementation rewrite is rejected, normal model stop alerts Coordina
     assert.equal(result.ok, false); assert.match(result.code, /DELIVERY/);
     assert.equal(f.store.task('T1').review, null);
     tools.finish(); f.store.settle('sample', 'validator', 'v'); tools.finish();
+    const reopened = new GroupStore(f.main);
+    try { new RoleTools(reopened, 'sample', 'validator', 'v').finish(); } finally { reopened.close(); }
     assert.equal(f.store.inbox('sample', 'coordinator').filter(m => m.data.type === 'unfinished_work').length, 1);
     assert.equal(f.store.read('sample', 'validator').work[0].status, 'open');
     f.submit('coordinator', 'resolution', 'decision-1.md', { round: 1 });

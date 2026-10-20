@@ -43,7 +43,7 @@ export class GroupStore {
       CREATE TABLE IF NOT EXISTS sessions (group_id TEXT NOT NULL, role TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(group_id,role));
       CREATE TABLE IF NOT EXISTS operations (name TEXT PRIMARY KEY, pid INTEGER NOT NULL);
       PRAGMA user_version=2;`);
-    if (!this.db.prepare("PRAGMA table_info(messages)").all().some(c => c.name === "presented_at")) this.db.exec("ALTER TABLE messages ADD COLUMN presented_at TEXT");
+    this.tx(() => { if (!this.db.prepare("PRAGMA table_info(messages)").all().some(c => c.name === "presented_at")) this.db.exec("ALTER TABLE messages ADD COLUMN presented_at TEXT"); });
   }
   close() { this.db.close(); }
   tx(fn) { this.db.exec('BEGIN IMMEDIATE'); try { const result = fn(); this.db.exec('COMMIT'); return result; } catch (e) { this.db.exec('ROLLBACK'); throw e; } }
@@ -156,7 +156,7 @@ export class GroupStore {
       if (!work.length && !rejection) return;
       // New arrivals will get their own turn; no alert for a normal handoff race.
       if (!rejection && this.pending(group, role).length) return;
-      const key = `${role}:${work.map(w => w.id).join(',')}:${rejection?.code || 'unfinished'}`;
+      const key = `${this.group(group).active_task}:${role}:${work.map(w => w.id).join(',')}`;
       if (this.db.prepare("SELECT 1 FROM messages WHERE group_id=? AND json_extract(data,'$.alert_key')=?").get(group, key)) return;
       const t = this.group(group).active_task ? this.task(this.group(group).active_task) : null;
       if (t && work.some(w => w.kind === `code_review-${t.round}`)) this.addWork(t, `blocked-${t.round}`, 'coordinator');
