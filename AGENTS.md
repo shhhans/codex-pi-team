@@ -2,6 +2,31 @@
 
 Read this before exploring. Use native Windows commands; never invoke WSL without Lead authorization.
 
+## Implementation progress and deployment boundary (2026-10-20)
+
+This checkout implements v2 on `codex/group-runtime`; the canonical `develop`
+checkout has not been switched to this launcher/protocol. The deterministic
+suite passed 20 scenarios, covering native Pi extension loading, submission
+and inbox races, recovery, and Git integration behavior. A real module-onboarding
+run completed in an isolated project copy: one plan review, D1, independent
+52-test core-suite reproduction by Executor and Validator, passing code review,
+Coordinator delivery, and Lead acceptance/integration inside that copy.
+
+An implementation-time clarification reached Executor at a tool boundary
+before delivery. A provider outage required an explicitly authorized temporary
+model replacement while retaining task/session history. This is bounded
+protocol evidence, not a model-quality comparison, clinical validation, or
+deployment into the original target project. Final Pi error-metadata adaptation
+and a recovery-race correction have deterministic coverage; do not claim every
+final change received another complete real-provider run. Detailed outcomes
+belong in project_state.md and runtime verification artifacts.
+
+Remaining work includes explicit v1 cutover and original-project group
+provisioning. Read persisted group/session records before claiming a group is
+registered or running; registration, completed tasks and live processes are
+different facts. Model connection probes do not update .pi/roles.json or
+authorize new tasks. Do not switch defaults or launch work from a status request.
+
 ## Active architecture
 
 The normative protocol is ADR/0009-persistent-group-workflow.md. ADR 0002 describes the superseded v1 workflow. The supported entrypoint is pi-team.cmd; scripts/pi-team.ps1 forwards to the v2 Node CLI. Node 24.11 or newer and Pi 0.84.2 are the supported runtime baseline.
