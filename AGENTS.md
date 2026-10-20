@@ -29,3 +29,5 @@ Begin assistant text with [current_state: "a concrete activity"]. Malformed or a
 ## Hygiene and cutover
 
 Reusable role instructions and skills remain task-agnostic. Put task details in process documents and runtime context. Never modify existing .pi/legacy/ history. Preserve old runtime records and current user changes. v2 refuses to start groups while unresolved v1 tasks remain; close them explicitly using the pre-cutover checkout rather than silently migrating them. Stable snapshots are architect.md, goal.md and project_state.md; update them when architecture or operations change, not per message.
+
+The role-tools boundary in .pi/runtime/role-tools.mjs injects turn identity. Use work_id when submitting; only ok:true receipts prove handoff. Rejections and unfinished work are durable Coordinator concerns. Incoming messages can steer a running turn at tool boundaries; check and handle them before delivery. Review evidence belongs under review-NN/, separate from delivered verification files.

@@ -77,6 +77,23 @@ test('delivery document changes cannot be hidden under task paths; independent r
   } finally { f.cleanup(); }
 });
 
+test('a recovered review cancels its pending runtime escalation before Coordinator can open an unnecessary revision', () => {
+  const f = fixture(); try {
+    f.prepare(); const commit = f.deliver(1);
+    f.store.register('sample', 'validator', { pid: process.pid, launch_id: 'v' });
+    const tools = new RoleTools(f.store, 'sample', 'validator', 'v'); tools.invoke('team_read');
+    writeFileSync(join(f.wt, 'app.mjs'), 'accidental drift');
+    const input = { kind: 'code_review', verdict: 'pass', path: f.file('code-review-01.md'), commit };
+    assert.equal(tools.invoke('team_submit', input).ok, false); tools.finish();
+    assert.ok(f.store.read('sample', 'coordinator').work.some(w => w.kind === 'blocked-1'));
+    git(f.wt, 'restore', 'app.mjs');
+    assert.equal(tools.invoke('team_submit', input).ok, true);
+    assert.deepEqual(f.store.read('sample', 'coordinator').work.map(w => w.kind), ['delivery-1']);
+    assert.throws(() => f.submit('coordinator', 'resolution', 'decision-1.md', { round: 1 }), /No matching open work/);
+    assert.equal(f.store.read('sample', 'executor').work.length, 0);
+  } finally { f.cleanup(); }
+});
+
 export function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'pi-group-'));
   const main = join(root, 'main'), wt = join(root, 'group'); mkdirSync(main);

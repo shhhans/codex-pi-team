@@ -243,6 +243,7 @@ export class GroupStore {
         case 'plan_review': this.addWork(t, 'implementation-1', 'executor'); break;
         case 'implementation': this.addWork(t, `code_review-${round}`, 'validator'); break;
         case 'code_review':
+          if (input.verdict !== 'blocked') this.db.prepare("UPDATE work SET status='cancelled' WHERE task_id=? AND kind=? AND status='open'").run(t.task_id, `blocked-${round}`);
           if (input.verdict === 'pass') this.addWork(t, `delivery-${round}`, 'coordinator');
           else if (input.verdict === 'changes_requested') this.addWork(t, `implementation-${round + 1}`, 'executor');
           else this.addWork(t, `blocked-${round}`, 'coordinator');
