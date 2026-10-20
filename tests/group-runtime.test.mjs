@@ -321,8 +321,11 @@ test('installed Pi loads the real extension: tools, message prefix, handoff, gua
     assert.equal(steered.at(-1).options.deliverAs, 'steer');
     assert.match(steered.at(-1).content, /late but pre-delivery requirement/);
     assert.equal((await guard({ toolName: 'write', input: { path: 'app.mjs' } }, ctx)).block, true);
-    const blockedSubmit = await tool(e, 'team_submit', { kind: 'implementation', path: 'missing.md' });
-    assert.equal(blockedSubmit.isError, true); assert.equal(JSON.parse(blockedSubmit.content[0].text).code, 'INBOX_PENDING');
+    await assert.rejects(() => tool(e, 'team_submit', { kind: 'implementation', path: 'missing.md' }), error => {
+      assert.equal(JSON.parse(error.message).ok, false);
+      assert.equal(JSON.parse(error.message).code, 'INBOX_PENDING');
+      return true;
+    });
     for (const fn of e.handlers.get('turn_start')) await fn({}, ctx);
     assert.equal(await guard({ toolName: 'write', input: { path: 'app.mjs' } }, ctx), undefined);
     assert.equal((await guard({ toolName: 'edit', input: { path: 'groups/sample/tasks/T1/plan.md' } }, ctx)).block, true);

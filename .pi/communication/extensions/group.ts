@@ -21,7 +21,12 @@ export default function (pi: ExtensionAPI) {
   try { const policy = JSON.parse(readFileSync(resolve(process.env.PI_TEAM_SOURCE_ROOT || process.cwd(), '.pi/team-runtime.json'), 'utf8').replace(/^\uFEFF/, '')).compression; if (policy.threshold_percent > 0 && policy.threshold_percent <= 1) threshold = policy.threshold_percent; if (Number.isInteger(policy.max_compact_retries) && policy.max_compact_retries >= 0) maxCompactFailures = policy.max_compact_retries; } catch { /* A display/compact preference cannot corrupt work; use defaults. */ }
   let queuedSteering = false;
   const roleTools = new RoleTools(store, group, role, launch);
-  const reply = (result: any) => ({ ...text(result), isError: result.ok === false });
+  const reply = (result: any) => {
+    // Pi derives toolResult.isError from a thrown execution error, not from an
+    // extra isError property on AgentToolResult. Preserve structured JSON.
+    if (result.ok === false) throw new Error(JSON.stringify(result));
+    return text(result);
+  };
   const text = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] });
   const wake = () => {
     if (stopped || active || compacting || !ctx?.isIdle() || store.session(group, role)?.fault) return;
