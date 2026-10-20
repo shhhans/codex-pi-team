@@ -21,3 +21,13 @@ Three sessions remain alive when a task completes. Only idle groups can change t
 ## Enforcement boundary
 
 Tool wrappers limit obvious file mutations and stage-dependent Executor commands. This is not a shell sandbox: Validator shell use can inspect code and run tests, and its prohibition on production edits remains a role rule. Git/evidence checks reject drift before review submission and Lead acceptance. Transport delivery is not proof of causal message use; live validation must inspect resulting documents and revisions.
+
+## Reliable handoffs and timely messages
+
+Role tools inject the task/generation captured for the current agent turn. Old turns cannot be relabelled onto a new task. Team tools return explicit ok results; successful submissions include a transaction receipt, and rejected submissions never imply completion. work_id selects owned work; round/delivery defaults derive from runtime.
+
+Messages have separate presented_at and read_at timestamps. Runtime steers new arrivals at tool/turn boundaries without terminating running commands. A same-batch mutation cannot proceed while a steering message awaits the next model response. Submission atomically rejects unpresented inbox messages, closing the check/send race. Successful settlement acknowledges only presented messages; failed turns and session replacement allow redelivery.
+
+Registered deliveries freeze code and delivered task documents. Review evidence lives in review-NN/, separate from Executor evidence. Validator reviews the registered commit and does not commit. Late corrections require normal feedback or a Coordinator resolution before a new delivery. This is enforced at submission as well as ordinary write-tool boundaries; the shell remains a role-policy boundary, not a sandbox.
+
+A normal model stop does not complete open work. Unfinished work or an unresolved team-tool rejection emits a deduplicated durable Coordinator notification (Lead for Coordinator). Unfinished code review also creates blocked-N work so Coordinator can record a resolution, cancel the superseded review assignment, and open the next implementation without another plan review. Work and artifacts remain the only workflow authority.

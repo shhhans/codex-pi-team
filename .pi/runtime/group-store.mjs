@@ -18,6 +18,10 @@ export function parseCurrentState(text) {
   try { const value = JSON.parse(match[1]); return typeof value === 'string' && value.trim() && value.length <= 500 ? value : null; } catch { return null; }
 }
 
+export class TeamError extends Error {
+  constructor(code, message, next_action = 'read_current_work') { super(message); this.code = code; this.next_action = next_action; }
+}
+
 export class GroupStore {
   constructor(projectRoot) {
     const [major, minor] = process.versions.node.split('.').map(Number);
@@ -39,6 +43,7 @@ export class GroupStore {
       CREATE TABLE IF NOT EXISTS sessions (group_id TEXT NOT NULL, role TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(group_id,role));
       CREATE TABLE IF NOT EXISTS operations (name TEXT PRIMARY KEY, pid INTEGER NOT NULL);
       PRAGMA user_version=2;`);
+    if (!this.db.prepare("PRAGMA table_info(messages)").all().some(c => c.name === "presented_at")) this.db.exec("ALTER TABLE messages ADD COLUMN presented_at TEXT");
   }
   close() { this.db.close(); }
   tx(fn) { this.db.exec('BEGIN IMMEDIATE'); try { const result = fn(); this.db.exec('COMMIT'); return result; } catch (e) { this.db.exec('ROLLBACK'); throw e; } }
@@ -77,6 +82,7 @@ export class GroupStore {
     return this.tx(() => {
       const old = this.session(group, role);
       if (old && old.launch_id !== input.launch_id && alive(old.pid)) throw Error('role already has a live session');
+      this.db.prepare('UPDATE messages SET presented_at=NULL WHERE group_id=? AND recipient=? AND read_at IS NULL').run(group, role);
       const value = { ...input, group_id: group, role, busy: false, claim: null, ready_at: new Date().toISOString() };
       this.db.prepare('INSERT OR REPLACE INTO sessions VALUES (?,?,?)').run(group, role, json(value));
       for (const work of this.db.prepare("SELECT * FROM work WHERE group_id=? AND owner=? AND status='open'").all(group, role)) this.notice(group, role, { type: 'work_recovered', task_id: work.task_id, work_id: work.id, kind: work.kind });
@@ -114,24 +120,60 @@ export class GroupStore {
     const g = this.group(group); return { group: g, task: g.active_task ? this.task(g.active_task) : null, work: this.db.prepare("SELECT * FROM work WHERE group_id=? AND owner=? AND status='open' ORDER BY id").all(group, role), messages: this.inbox(group, role).filter(m => m.data.type === 'message' || !m.data.task_id || m.data.task_id === g.active_task).slice(-20), sessions: this.sessions(group) };
   }
   inbox(group, recipient, cursor = 0) { return this.db.prepare('SELECT * FROM messages WHERE group_id=? AND recipient=? AND id>? ORDER BY id').all(group, recipient, cursor).map(r => ({ ...r, data: JSON.parse(r.data) })); }
+  pending(group, role) {
+    const g = this.group(group);
+    return this.inbox(group, role).filter(m => !m.read_at && !m.presented_at &&
+      (!m.data.task_id || m.data.task_id === g.active_task) &&
+      (!m.data.work_id || this.db.prepare('SELECT status FROM work WHERE id=?').get(m.data.work_id)?.status === 'open'));
+  }
+  present(group, role, launch) {
+    return this.tx(() => this.presentInside(group, role, launch));
+  }
+  presentInside(group, role, launch) {
+    const s = this.session(group, role);
+    if (!s || s.launch_id !== launch) throw Error('stale role process');
+    const messages = this.pending(group, role);
+    const now = new Date().toISOString();
+    for (const m of messages) this.db.prepare('UPDATE messages SET presented_at=? WHERE id=?').run(now, m.id);
+    s.claim = [...new Set([...(s.claim || []), ...messages.map(m => m.id)])];
+    this.db.prepare('UPDATE sessions SET data=? WHERE group_id=? AND role=?').run(json(s), group, role);
+    return messages;
+  }
   claim(group, role, launch) {
     return this.tx(() => {
       if (this.db.prepare('SELECT 1 FROM operations WHERE name=?').get(`group:${group}`)) return null;
       const s = this.session(group, role); if (!s || s.launch_id !== launch || s.busy) return null;
-      const g = this.group(group);
-      const messages = this.db.prepare('SELECT * FROM messages WHERE group_id=? AND recipient=? AND read_at IS NULL ORDER BY id LIMIT 20').all(group, role).map(r => ({ ...r, data: JSON.parse(r.data) })).filter(m => {
-        const stale = m.data.task_id && m.data.type !== 'message' && (m.data.task_id !== g.active_task || (m.data.work_id && this.db.prepare('SELECT status FROM work WHERE id=?').get(m.data.work_id)?.status !== 'open'));
-        if (stale) this.db.prepare('UPDATE messages SET read_at=? WHERE id=?').run(new Date().toISOString(), m.id);
-        return !stale;
+      const messages = this.presentInside(group, role, launch); if (!messages.length) return null;
+      const current = this.session(group, role); current.busy = true;
+      this.db.prepare('UPDATE sessions SET data=? WHERE group_id=? AND role=?').run(json(current), group, role);
+      return messages;
+    });
+  }
+  alertUnfinished(group, role, launch, rejection = null) {
+    return this.tx(() => {
+      const session = this.session(group, role); if (session?.launch_id !== launch) return;
+      const work = this.read(group, role).work;
+      if (!work.length && !rejection) return;
+      // New arrivals will get their own turn; no alert for a normal handoff race.
+      if (!rejection && this.pending(group, role).length) return;
+      const key = `${role}:${work.map(w => w.id).join(',')}:${rejection?.code || 'unfinished'}`;
+      if (this.db.prepare("SELECT 1 FROM messages WHERE group_id=? AND json_extract(data,'$.alert_key')=?").get(group, key)) return;
+      const t = this.group(group).active_task ? this.task(this.group(group).active_task) : null;
+      if (t && work.some(w => w.kind === `code_review-${t.round}`)) this.addWork(t, `blocked-${t.round}`, 'coordinator');
+      this.notice(group, role === 'coordinator' ? 'lead' : 'coordinator', {
+        type: 'unfinished_work', alert_key: key, task_id: t?.task_id, role,
+        work: work.map(w => ({ id: w.id, kind: w.kind })), rejection,
+        detail: 'Turn ended without completing assigned work. Database state is authoritative; inspect and resolve or ask the owner to continue.'
       });
-      if (!messages.length) return null;
-      Object.assign(s, { busy: true, claim: messages.map(m => m.id) }); this.db.prepare('UPDATE sessions SET data=? WHERE group_id=? AND role=?').run(json(s), group, role); return messages;
     });
   }
   settle(group, role, launch, success = true) {
     return this.tx(() => {
       const s = this.session(group, role); if (!s || s.launch_id !== launch) return;
-      if (success) for (const n of s.claim || []) this.db.prepare('UPDATE messages SET read_at=? WHERE id=?').run(new Date().toISOString(), n);
+      for (const n of s.claim || []) {
+          if (success) this.db.prepare('UPDATE messages SET read_at=? WHERE id=?').run(new Date().toISOString(), n);
+          else this.db.prepare('UPDATE messages SET presented_at=NULL WHERE id=? AND read_at IS NULL').run(n);
+        }
       Object.assign(s, { busy: false, claim: null }); this.db.prepare('UPDATE sessions SET data=? WHERE group_id=? AND role=?').run(json(s), group, role);
     });
   }
@@ -154,7 +196,9 @@ export class GroupStore {
   artifact(task, kind, round = 0) { return unpack(this.db.prepare('SELECT data FROM artifacts WHERE task_id=? AND kind=? AND round=?').get(task, kind, round)); }
   submit(actor, input) {
     return this.tx(() => {
-      const { g, t } = this.identity(actor); if (t.outcome !== 'pending') throw Error('task is closed');
+      const { g, t } = this.identity(actor);
+      if (actor.launch_id && this.pending(g.group_id, actor.role).length) throw new TeamError('INBOX_PENDING', 'New messages must be presented before submission', 'read_messages_and_reconsider');
+      if (t.outcome !== 'pending') throw Error('task is closed');
       const rules = { task: ['coordinator', 'task.md'], plan: ['executor', 'plan.md'], plan_review: ['validator', 'plan-review.md'], implementation: ['executor', 'implementation.md'], code_review: ['validator', ''], delivery: ['coordinator', 'delivery.md'], resolution: ['coordinator', `decision-${input.round}.md`] };
       const rule = rules[input.kind]; if (!rule || actor.role !== rule[0]) throw Error('artifact not owned by this role');
       const round = input.kind === 'delivery' ? t.round : ['implementation', 'code_review', 'resolution'].includes(input.kind) ? input.round : 0;
@@ -170,7 +214,7 @@ export class GroupStore {
       const resolutionKind = this.db.prepare("SELECT kind FROM work WHERE task_id=? AND owner='coordinator' AND status='open' AND kind IN (?,?)").get(t.task_id, `blocked-${round}`, `revision-${round}`)?.kind;
       const workKind = input.kind === 'implementation' ? `implementation-${round}` : input.kind === 'code_review' ? `code_review-${round}` : input.kind === 'resolution' ? resolutionKind : input.kind === 'delivery' ? `delivery-${round}` : input.kind;
       const work = this.db.prepare("SELECT * FROM work WHERE task_id=? AND kind=? AND owner=? AND status='open'").get(t.task_id, workKind || '', actor.role);
-      if (!work) throw Error('no matching open work; second plan review is not allowed');
+      if (!work) throw new TeamError('NO_OPEN_WORK', 'No matching open work for this submission; a new delivery requires review feedback or Coordinator resolution', 'read_current_work');
       const value = { task_id: t.task_id, kind: input.kind, round, path: file, content, commit: input.commit || null, verdict: input.verdict || null, at: new Date().toISOString() };
       if (input.kind === 'plan' || input.kind === 'plan_review') {
         const changed = git(g.worktree, 'diff', t.base_commit, '--name-only', '--', '.', `:(exclude)groups/${g.group_id}/**`);
@@ -204,7 +248,7 @@ export class GroupStore {
           else this.addWork(t, `blocked-${round}`, 'coordinator');
           break;
         case 'delivery': this.notice(g.group_id, 'lead', { type: 'delivery', task_id: t.task_id, path: file, delivery: t.delivery, review: t.review }); break;
-        case 'resolution': this.addWork(t, `implementation-${round + 1}`, 'executor'); break;
+        case 'resolution': this.db.prepare("UPDATE work SET status='cancelled' WHERE task_id=? AND kind=? AND status='open'").run(t.task_id, `code_review-${round}`); this.addWork(t, `implementation-${round + 1}`, 'executor'); break;
       }
       this.put('tasks', t.task_id, t); return value;
     });
@@ -213,9 +257,10 @@ export class GroupStore {
     if (!t.delivery) throw Error('no delivery');
     git(g.worktree, 'merge-base', '--is-ancestor', t.delivery.commit, 'HEAD');
     const prefix = `groups/${g.group_id}/tasks/${t.task_id}/`;
-    const changed = git(g.worktree, 'diff', t.delivery.commit, '--name-only', '--', '.', `:(exclude)${prefix}**`);
-    const untracked = git(g.worktree, 'ls-files', '--others', '--exclude-standard').split(/\r?\n/).filter(p => p && !p.startsWith(prefix));
-    if (changed || untracked.length) throw Error('production files changed during review');
+    const allowed = [`${prefix}code-review-*.md`, `${prefix}review-*/**`, `${prefix}delivery.md`, `${prefix}decision-*.md`];
+    const changed = git(g.worktree, 'diff', t.delivery.commit, '--name-only', '--', '.', ...allowed.map(p => `:(exclude)${p}`));
+    const untracked = git(g.worktree, 'ls-files', '--others', '--exclude-standard').split(/\r?\n/).filter(p => p && !(p.startsWith(prefix) && /^(code-review-\d+\.md$|review-\d+\/|delivery\.md$|decision-\d+\.md$)/.test(p.slice(prefix.length))));
+    if (changed || untracked.length) throw new TeamError('DELIVERY_CHANGED', 'production files changed during review or delivery documents changed; review the registered snapshot only', 'report_to_coordinator');
     this.assertEvidence(g, t);
   }
   assertEvidence(g, t, allowImplementationUpdate = false) {
@@ -225,7 +270,7 @@ export class GroupStore {
       // implementation.md intentionally gets a new snapshot in the next delivery.
       if (a.kind === 'implementation' && allowImplementationUpdate || a.kind === 'delivery' && a.round < t.round) continue;
       const current = readFileSync(join(g.worktree, a.path), 'utf8');
-      if (current.replaceAll('\r\n', '\n') !== a.content.replaceAll('\r\n', '\n')) throw Error(`submitted evidence changed: ${a.path}`);
+      if (current.replaceAll('\r\n', '\n') !== a.content.replaceAll('\r\n', '\n')) throw new TeamError('DELIVERY_EVIDENCE_CHANGED', `submitted evidence changed: ${a.path}`, 'report_to_coordinator');
     }
   }
   requestChanges(task, reason) {

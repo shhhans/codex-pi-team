@@ -8,6 +8,72 @@ import { execFileSync, spawn } from 'node:child_process';
 import { GroupStore, git, parseCurrentState } from '../.pi/runtime/group-store.mjs';
 import { createGroup, startTask, finalize, roleArgs, launchGroup, stopGroup } from '../.pi/runtime/group-service.mjs';
 import { call, rpc } from '../plugins/pi-team/server.mjs';
+import { RoleTools } from '../.pi/runtime/role-tools.mjs';
+
+test('runtime-owned identity sends without metadata and rejects a stale turn after switching tasks', () => {
+  const f = fixture(); try {
+    f.store.register('sample', 'executor', { pid: process.pid, launch_id: 'e' });
+    const tools = new RoleTools(f.store, 'sample', 'executor', 'e');
+    assert.equal(tools.invoke('team_send', { to: 'validator', body: 'hello' }).ok, true);
+    const message = f.store.inbox('sample', 'validator').at(-1);
+    assert.equal(message.data.task_id, 'T1');
+    f.store.cancel('T1', 'switch test'); finalize(f.store, 'T1');
+    startTask(f.store, 'sample', { task_id: 'T2', objective: 'next', acceptance: ['next'], base_ref: 'develop' });
+    assert.equal(tools.invoke('team_send', { to: 'validator', body: 'old turn' }).code, 'STALE_TURN');
+    assert.equal(f.store.inbox('sample', 'validator').filter(m => m.data.body === 'old turn').length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('submission inbox barrier is atomic, structured, and replay creates only one successor', () => {
+  const f = fixture(); try {
+    f.store.register('sample', 'coordinator', { pid: process.pid, launch_id: 'c' });
+    const tools = new RoleTools(f.store, 'sample', 'coordinator', 'c');
+    tools.invoke('team_read'); const path = f.file('task.md');
+    f.store.send({ group_id: 'sample', role: 'lead' }, { to: 'coordinator', body: 'late requirement' });
+    assert.equal(tools.invoke('team_submit', { kind: 'task', path }).code, 'INBOX_PENDING');
+    assert.equal(f.store.artifact('T1', 'task'), null);
+    const read = tools.invoke('team_read'); assert.ok(read.messages.some(m => m.data.body === 'late requirement'));
+    const work_id = read.work[0].id;
+    assert.equal(tools.invoke('team_submit', { work_id: 9999, kind: 'task', path }).code, 'WRONG_WORK');
+    const receipt = tools.invoke('team_submit', { work_id, kind: 'task', path });
+    assert.equal(receipt.ok, true); assert.equal(receipt.receipt.work_id, work_id);
+    assert.equal(tools.invoke('team_submit', { work_id, kind: 'task', path }).receipt.replay, true);
+    assert.equal(f.store.read('sample', 'executor').work.length, 1);
+  } finally { f.cleanup(); }
+});
+
+test('late implementation rewrite is rejected, normal model stop alerts Coordinator once and resolution permits D2', () => {
+  const f = fixture(); try {
+    f.prepare(); const commit = f.deliver(1);
+    f.store.register('sample', 'validator', { pid: process.pid, launch_id: 'v' });
+    const tools = new RoleTools(f.store, 'sample', 'validator', 'v'); tools.invoke('team_read');
+    f.file('implementation.md', '# late correction\n');
+    const result = tools.invoke('team_submit', { kind: 'code_review', verdict: 'pass', path: f.file('code-review-01.md') });
+    assert.equal(result.ok, false); assert.match(result.code, /DELIVERY/);
+    assert.equal(f.store.task('T1').review, null);
+    tools.finish(); f.store.settle('sample', 'validator', 'v'); tools.finish();
+    assert.equal(f.store.inbox('sample', 'coordinator').filter(m => m.data.type === 'unfinished_work').length, 1);
+    assert.equal(f.store.read('sample', 'validator').work[0].status, 'open');
+    f.submit('coordinator', 'resolution', 'decision-1.md', { round: 1 });
+    assert.equal(f.store.read('sample', 'validator').work.length, 0);
+    const d2 = f.deliver(2); assert.notEqual(d2, commit);
+    f.submit('validator', 'code_review', 'code-review-02.md', { round: 2, commit: d2, verdict: 'pass' });
+    assert.equal(f.store.task('T1').review.verdict, 'pass');
+    assert.equal(f.store.db.prepare("SELECT count(*) AS n FROM artifacts WHERE kind='plan_review'").get().n, 1);
+  } finally { f.cleanup(); }
+});
+
+test('delivery document changes cannot be hidden under task paths; independent review evidence is permitted', () => {
+  const f = fixture(); try {
+    f.prepare(); f.file('takeover.md', '# ownership v1\n'); const commit = f.deliver(1);
+    f.file('review-01/independent.log', 'independent tests passed\n');
+    f.file('takeover.md', '# silently changed v2\n');
+    assert.throws(() => f.submit('validator', 'code_review', 'code-review-01.md', { round: 1, commit, verdict: 'pass' }), /delivery documents changed/);
+    git(f.wt, 'restore', 'groups/sample/tasks/T1/takeover.md');
+    f.submit('validator', 'code_review', 'code-review-01.md', { round: 1, commit, verdict: 'pass' });
+    assert.equal(f.store.task('T1').review.verdict, 'pass');
+  } finally { f.cleanup(); }
+});
 
 export function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'pi-group-'));
@@ -223,26 +289,44 @@ test('task switching recovers a recorded Git/SQLite interruption and keeps opera
 test('installed Pi loads the real extension: tools, message prefix, handoff, guards and session recovery', async () => {
   const packageRoot = process.env.PI_TEAM_PI_PACKAGE_ROOT || join(process.env.APPDATA || '', 'npm/node_modules/@earendil-works/pi-coding-agent');
   const { loadExtensions } = await import(pathToFileURL(join(packageRoot, 'dist/core/extensions/loader.js')).href);
-  const f = fixture(); const previous = {}; const loaded = [];
+  const f = fixture(); const previous = {}; const loaded = []; const steered = [];
   const ctx = { isIdle: () => true, sessionManager: { getSessionFile: () => join(f.root, 'session.jsonl') }, ui: { setStatus() {} }, getContextUsage: () => ({ percent: 0 }) };
   try {
     for (const role of ['coordinator', 'executor', 'validator']) {
       for (const [key, value] of Object.entries({ PI_TEAM_GROUP_ID: 'sample', PI_TEAM_ROLE: role, PI_TEAM_LAUNCH_ID: role, PI_TEAM_PROJECT_ROOT: f.main, PI_TEAM_SESSION_ID: `${role}-session` })) { if (!(key in previous)) previous[key] = process.env[key]; process.env[key] = value; }
       const result = await loadExtensions([join(import.meta.dirname, '../.pi/communication/extensions/group.ts')], f.wt);
       assert.deepEqual(result.errors, []);
+      result.runtime.sendUserMessage = (content, options) => steered.push({ role, content, options });
       const ext = result.extensions[0]; loaded.push(ext);
       for (const fn of ext.handlers.get('session_start') || []) await fn({}, ctx);
       assert.deepEqual([...ext.tools.keys()], role === 'coordinator' ? ['team_read', 'team_send', 'team_submit'] : ['bash', 'team_read', 'team_send', 'team_submit']);
     }
     const [c, e, v] = loaded;
     const tool = (ext, name, input) => ext.tools.get(name).definition.execute('call', input, undefined, undefined, ctx);
-    const submit = async (ext, kind, name, extra = {}) => tool(ext, 'team_submit', { task_id: 'T1', generation: 1, kind, path: f.file(name), ...extra });
+    const submit = async (ext, kind, name, extra = {}) => { await tool(ext, 'team_read', {}); const result = await tool(ext, 'team_submit', { task_id: 'T1', generation: 1, kind, path: f.file(name), ...extra }); assert.equal(JSON.parse(result.content[0].text).ok, true, result.content[0].text); return result; };
     assert.equal(JSON.parse((await tool(c, 'team_read', {})).content[0].text).task.task_id, 'T1');
     await submit(c, 'task', 'task.md'); await submit(e, 'plan', 'plan.md');
     const guard = e.handlers.get('tool_call')[0];
     assert.equal((await guard({ toolName: 'write', input: { path: 'app.mjs' } }, ctx)).block, true);
     await submit(v, 'plan_review', 'plan-review.md');
     assert.equal(await guard({ toolName: 'write', input: { path: 'app.mjs' } }, ctx), undefined);
+    // A notification arriving during implementation is steered before the next
+    // model response. Same-batch mutations/submissions must wait for that response.
+    for (const fn of e.handlers.get('agent_start')) await fn({}, ctx);
+    await tool(e, 'team_read', {});
+    f.store.send(f.actor('validator'), { to: 'executor', body: 'late but pre-delivery requirement' });
+    for (const fn of e.handlers.get('tool_result')) await fn({ toolName: 'bash' }, ctx);
+    assert.equal(steered.at(-1).options.deliverAs, 'steer');
+    assert.match(steered.at(-1).content, /late but pre-delivery requirement/);
+    assert.equal((await guard({ toolName: 'write', input: { path: 'app.mjs' } }, ctx)).block, true);
+    const blockedSubmit = await tool(e, 'team_submit', { kind: 'implementation', path: 'missing.md' });
+    assert.equal(blockedSubmit.isError, true); assert.equal(JSON.parse(blockedSubmit.content[0].text).code, 'INBOX_PENDING');
+    for (const fn of e.handlers.get('turn_start')) await fn({}, ctx);
+    assert.equal(await guard({ toolName: 'write', input: { path: 'app.mjs' } }, ctx), undefined);
+    assert.equal((await guard({ toolName: 'edit', input: { path: 'groups/sample/tasks/T1/plan.md' } }, ctx)).block, true);
+    const validatorGuard = v.handlers.get('tool_call')[0];
+    assert.equal((await validatorGuard({ toolName: 'write', input: { path: 'groups/sample/tasks/T1/verification/log.txt' } }, ctx)).block, true);
+    assert.equal(await validatorGuard({ toolName: 'write', input: { path: 'groups/sample/tasks/T1/review-01/log.txt' } }, ctx), undefined);
     const shell = await tool(e, 'bash', { command: "Write-Output ('native-' + $PSVersionTable.PSEdition)" });
     assert.match(shell.content[0].text, /native-Desktop/);
     for (const fn of e.handlers.get('message_end')) await fn({ message: { role: 'assistant', content: [{ type: 'text', text: '[current_state: "reviewing evidence"]\nbody' }] } }, ctx);
