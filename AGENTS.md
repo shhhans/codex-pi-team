@@ -2,11 +2,11 @@
 
 Read this before exploring. Use native Windows commands; never invoke WSL without Lead authorization.
 
-## Implementation and deployment boundary (2026-10-20)
+## Implementation and deployment boundary
 
 This checkout contains the v2 persistent-group implementation, including configuration registration, finite onboarding, documentation alignment and structured services. The current increment passed the parallel deterministic suite and bounded real three-role lifecycle acceptance in an isolated project; see project_state.md for scope and evidence. These results do not establish original-project deployment or long-term unattended maintenance. Do not report tests, live onboarding, original-project provisioning, cutover or group registration as completed unless you inspect the relevant current evidence. Detailed prior outcomes belong in `project_state.md` and runtime verification artifacts; the Lead owns final updates to that operational snapshot.
 
-The canonical `develop` checkout still contains the v1 launcher and protocol. This checkout is on `codex/group-runtime`; use its CLI and ADR 0009 only. Do not combine commands or workflows from the two checkouts. Cutover and provisioning in an original target project remain separate work. Preserve legacy records and uncommitted changes; inspect the legacy inventory before cutover. Connection-only provider probes do not change role configuration or authorize tasks.
+The active `develop` implementation is persistent-group v2. Use its CLI and ADR 0009; v1 work is retained only as historical branches/records and is not automatically migrated. Original-target provisioning and reconciliation of unfinished legacy tasks remain explicit Lead work. Preserve legacy records and uncommitted changes. Connection-only provider probes do not change role configuration or authorize tasks.
 
 ## Start here
 

@@ -1,3 +1,21 @@
+# Project state — v2 closeout (2026-10-22)
+
+## Current authoritative snapshot
+
+The Coordinator/Executor/Validator persistent-group v2 implementation is accepted for integration into develop. ADR0009 is normative. Registration uses group.md front matter; fixed worktrees, finite real onboarding, SQLite handoffs, immutable deliveries, independent reviews, documentation alignment, read-only Blackboard role state, exact joint-candidate binding and guarded integration are implemented. Coordinator may choose direct, plan-only or one plan review; omission retains the compatible review route. Final independent code/documentation review and Lead acceptance remain required.
+
+Latest deterministic suite before closeout: 89/89 passed (133.306s). Real Rooster isolated integration accepted and finalized the model/planning/evaluation cohort at cb80ede1; Lead targeted regression 109/109 and independent joint suite 20/20 passed. Coordinators exchanged 29 cross-group messages. Lead still built/bound the candidate and accepted/integrated it; this is observed end-to-end integration, not autonomous unattended coordination or original Rooster cutover.
+
+Two controlled report tasks also completed independent reviews and integration: MELATONIN-WARM-01 at 1445a605 and MELATONIN-FLEX-01 at b374f605. Original flow took 37m41s; direct flow 25m05s. This is not a causal A/B speedup: fresh onboarding reset history, the second task removed ambiguous duplicate-interface requirements, and its Validator process exited and needed recovery. The warm report's claimed three independent Validator reruns was corrected by trace to two. Excess context/reporting/verification overhead, premature unassigned discovery, late reading of the current task and dead-process busy-state visibility remain deferred issues. Do not claim they are fixed.
+
+Current user-selected role defaults: Coordinator minimax-cn/MiniMax-M3.1-Flash; Executor volcengine-ark/glm-5.3-flash; Validator volcengine-ark/deepseek-v4-flash. Credentials and custom model availability remain local Pi configuration, not repository secrets or a guarantee of provider availability. Shared prompt/version changes require group-init before future work.
+
+All isolated-project groups have no active business task and role processes were explicitly stopped for closeout. Their fixed worktrees, task branches, runtime SQLite, raw traces and verification artifacts remain preserved. The original dirty Rooster checkout and its legacy tasks were not changed. See implementation_notes/V2-CLOSEOUT-2026-10-22.md for evidence, retained branches and remaining limits.
+
+## Historical progress (superseded where it conflicts with the snapshot above)
+
+The following entries describe earlier checkpoints. Statements that develop remained v1 and that planning was mandatory are historical, not current instructions.
+
 # Project state — persistent group implementation (2026-10-20)
 
 The v2 implementation follows ADR/0009-persistent-group-workflow.md. It replaces the active v1 role and Blackboard/contract negotiation paths with persistent Coordinator/Executor/Validator groups, fixed worktrees, document handoff and one SQLite authority under the Git common directory.

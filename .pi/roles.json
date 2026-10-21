@@ -21,8 +21,8 @@
     ]
   },
   "executor": {
-    "provider": "minimax-cn",
-    "model": "MiniMax-M3.1-Flash",
+    "provider": "volcengine-ark",
+    "model": "glm-5.3-flash",
     "skill": "execute-group-task",
     "tools": [
       "read",
@@ -38,8 +38,8 @@
     ]
   },
   "validator": {
-    "provider": "minimax-cn",
-    "model": "MiniMax-M3.1-Flash",
+    "provider": "volcengine-ark",
+    "model": "deepseek-v4-flash",
     "skill": "review-group-task",
     "tools": [
       "read",
