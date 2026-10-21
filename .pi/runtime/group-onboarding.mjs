@@ -8,9 +8,15 @@ function schema(store) { store.db.exec('CREATE TABLE IF NOT EXISTS group_lifecyc
 function load(store, id) { schema(store); const row = store.db.prepare('SELECT data FROM group_lifecycle WHERE group_id=?').get(id); return row ? JSON.parse(row.data) : null; }
 function save(store, state) { store.db.prepare('INSERT OR REPLACE INTO group_lifecycle VALUES (?,?)').run(state.group_id, JSON.stringify(state)); return state; }
 export function sharedRoleVersion(sourceRoot) {
-  const hash = createHash('sha256');
   const config = join(sourceRoot, '.pi/roles.json');
-  if (existsSync(config)) { hash.update('roles.json'); hash.update(readFileSync(config)); }
+  return sharedRoleVersionFromSource(sourceRoot, existsSync(config) ? readFileSync(config, 'utf8') : null);
+}
+// Reconstruct a historical role version from the exact source bytes while
+// reading the current prompt and skill files. Used only for explicit config
+// migrations that must prove those instructions did not change.
+export function sharedRoleVersionFromSource(sourceRoot, rolesSource) {
+  const hash = createHash('sha256');
+  if (rolesSource !== null) { hash.update('roles.json'); hash.update(rolesSource); }
   for (const role of ROLES) {
     const path = join(sourceRoot, '.pi/agents', `${role}.md`);
     hash.update(role); if (existsSync(path)) hash.update(readFileSync(path));
@@ -89,6 +95,17 @@ export function markOnboardingStopped(store, group) {
     if (store.sessions(group).some(s => alive(s.pid) || s.busy)) throw Error('onboarding roles have not stopped');
     state.status = 'ready'; state.stopped_at = new Date().toISOString(); return save(store, state);
   });
+}
+// Explicit provider/model migration preserves the existing definition epoch,
+// receipts and session history. It is intentionally separate from onboarding:
+// no role acknowledgement is fabricated or required.
+export function recordProviderModelMigration(store, group, { expected_role_version, role_version, migration }) {
+  schema(store);
+  const state = load(store, group);
+  if (!state || state.status !== 'ready' || state.role_version !== expected_role_version) throw Error('group lifecycle changed during provider/model migration');
+  state.role_version = role_version;
+  state.provider_model_migrations = [...(state.provider_model_migrations || []), migration];
+  return save(store, state);
 }
 // UI reads this projection without reconciling or launching models.
 export function registeredGroups(store) {

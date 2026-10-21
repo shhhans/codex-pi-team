@@ -6,9 +6,10 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { ServiceManager } from './service-manager.mjs';
 import { writeDefinition, readDefinition, committedDefinition, syncGroupBaseline } from './group-definitions.mjs';
-import { beginOnboarding, assertOnboarded, sharedRoleVersion, onboardingState } from './group-onboarding.mjs';
+import { beginOnboarding, assertOnboarded, sharedRoleVersion, sharedRoleVersionFromSource, onboardingState, recordProviderModelMigration } from './group-onboarding.mjs';
 import { scheduleOnboarding } from '../../scripts/group-init-runner.mjs';
 import { assertProviderResumeAllowed } from './provider-fault.mjs';
+import { observeProcesses } from './process-observation.mjs';
 
 export const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 function assertNoLegacyConflict(store, group, branch = null) {
@@ -26,6 +27,77 @@ function assertNoLegacyConflict(store, group, branch = null) {
   }
 }
 export function roleConfig(root = sourceRoot) { return JSON.parse(readFileSync(join(root, '.pi/roles.json'), 'utf8')); }
+function stableValue(value) { return Array.isArray(value) ? value.map(stableValue) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stableValue(value[key])])) : value; }
+function stableJson(value) { return JSON.stringify(stableValue(value)); }
+function withoutProviderModel(config) { const { provider, model, ...rest } = config || {}; return rest; }
+function sourceRolesObject(raw, label) {
+  let roles; try { roles = JSON.parse(raw.replace(/^\uFEFF/, '')); } catch { throw Error(`${label} must be valid roles.json content`); }
+  if (!roles || Array.isArray(roles) || typeof roles !== 'object' || ROLES.some(role => !roles[role]) || Object.keys(roles).some(role => !ROLES.includes(role))) throw Error(`${label} must define exactly coordinator, executor and validator`);
+  return roles;
+}
+/**
+ * Migrate only provider/model fields for a ready group's persisted role sessions.
+ * `priorRolesSource` must contain the exact prior roles.json bytes. Existing
+ * tasks, session IDs, conversation paths, receipts and the definition epoch are
+ * preserved. Stopped sessions can be resumed under the current roles.json.
+ */
+export function migrateProviderModel(store, groupId, { priorRolesSource, sourceRoot: root = sourceRoot, observe = observeProcesses } = {}) {
+  return store.operation(`group:${groupId}`, () => {
+    if (typeof priorRolesSource !== 'string' || !priorRolesSource) throw Error('exact prior roles.json content is required for migration provenance');
+    const group = store.group(groupId), lifecycle = onboardingState(store, groupId, 'lead');
+    if (group.archived || group.desired_definition) throw Error('provider/model migration requires a non-archived group with no pending definition');
+    if (!lifecycle || lifecycle.status !== 'ready') throw Error('provider/model migration requires completed onboarding and stopped initialization');
+    const prior = sourceRolesObject(priorRolesSource, 'prior roles source');
+    const currentRaw = readFileSync(join(root, '.pi/roles.json'), 'utf8'), current = sourceRolesObject(currentRaw, 'current roles source');
+    const priorVersion = sharedRoleVersionFromSource(root, priorRolesSource);
+    if (priorVersion !== lifecycle.role_version) throw Error('prior roles source does not reconstruct the recorded role version; prompt or skill provenance is not verifiable');
+    assertOnboarded(store, groupId, priorVersion);
+    const sessions = store.sessions(groupId);
+    if (sessions.length !== ROLES.length || ROLES.some(role => !sessions.some(session => session.role === role))) throw Error('migration requires one persisted session for each role');
+    const changes = [], processEvidence = [];
+    for (const role of ROLES) {
+      const old = prior[role], next = current[role], session = sessions.find(item => item.role === role);
+      if (!old || !next || !session.config || stableJson(session.config) !== stableJson(old)) throw Error(`persisted ${role} configuration does not match the supplied prior roles source`);
+      if (![old.provider, old.model, next.provider, next.model].every(value => typeof value === 'string' && value.trim())) throw Error(`provider and model must be nonempty strings for ${role}`);
+      if (stableJson(withoutProviderModel(old)) !== stableJson(withoutProviderModel(next))) throw Error(`migration may change only provider and model; ${role} tools or role configuration changed`);
+      if (old.provider === next.provider && old.model === next.model) continue;
+      changes.push({ role, from: { provider: old.provider, model: old.model }, to: { provider: next.provider, model: next.model } });
+    }
+    if (!changes.length) throw Error('current roles.json does not change any provider/model');
+    const observation = observe(sessions.map(session => session.pid));
+    for (const session of sessions) {
+      if (!Number.isInteger(session.pid) || session.pid < 1) throw Error(`process identity is missing for ${session.role}; inspect the registration before migration`);
+      const actual = observation.get(session.pid);
+      if (!actual || actual.status === 'unknown') throw Error(`process identity is unknown for ${session.role}; inspect it before migration`);
+      if (actual.status === 'running') {
+        if (!session.process_start_stamp || !actual.stamp) throw Error(`process identity cannot be verified for ${session.role}; inspect it before migration`);
+        if (actual.stamp === session.process_start_stamp) throw Error(`role process is still running for ${session.role}; stop it before migration`);
+        processEvidence.push({ role: session.role, pid: session.pid, recorded_process_start_stamp: session.process_start_stamp, observed_process_start_stamp: actual.stamp, result: 'pid_reused_unrelated_process_preserved' });
+      } else if (actual.status === 'stopped') processEvidence.push({ role: session.role, pid: session.pid, process_start_stamp: session.process_start_stamp || null, result: 'recorded_process_stopped' });
+      else throw Error(`process state is not safe to migrate for ${session.role}`);
+    }
+    const nextVersion = sharedRoleVersion(root), at = new Date().toISOString(), migrationId = randomUUID();
+    const receipt = { id: migrationId, kind: 'provider_model_migration', group_id: groupId, at, prior_role_version: lifecycle.role_version, role_version: nextVersion, prior_roles_source: priorRolesSource, target_roles_source: currentRaw, prior_sessions: sessions, changes, process_evidence: processEvidence, definition_epoch: lifecycle.epoch, active_task: group.active_task || null };
+    store.tx(() => {
+      const latest = onboardingState(store, groupId, 'lead');
+      if (latest?.role_version !== lifecycle.role_version || latest?.status !== 'ready') throw Error('group lifecycle changed during provider/model migration');
+      for (const role of ROLES) {
+        const next = current[role], session = store.session(groupId, role);
+        session.config = next;
+        // A PID may now belong to an unrelated process. Never let alive(pid)
+        // reuse the stale registration on group-resume.
+        session.pid = null; session.launcher_pid = null; session.launcher_owned = false;
+        session.fault = null; session.provider_fault = null; session.model_migration_id = migrationId;
+        store.db.prepare('UPDATE sessions SET data=? WHERE group_id=? AND role=?').run(JSON.stringify(session), groupId, role);
+      }
+      recordProviderModelMigration(store, groupId, { expected_role_version: lifecycle.role_version, role_version: nextVersion, migration: { id: migrationId, at, changes } });
+      store.db.exec('CREATE TABLE IF NOT EXISTS provider_model_migrations (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, data TEXT NOT NULL)');
+      store.db.prepare('INSERT INTO provider_model_migrations VALUES (?,?,?)').run(migrationId, groupId, JSON.stringify(receipt));
+      for (const role of ROLES) store.notice(groupId, role, { type: 'provider_model_migrated', migration_id: migrationId, detail: 'Provider/model changed. Existing assignments, conversation history and receipts are preserved; continue current assigned work.' });
+    });
+    return receipt;
+  });
+}
 function definitionForGroup(store, groupId) {
   const definition = readDefinition(store, groupId);
   try {

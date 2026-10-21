@@ -1,5 +1,5 @@
 import { GroupStore, git, alive } from '../.pi/runtime/group-store.mjs';
-import { createGroup, updateGroup, adoptGroup, reconcileRegistration, syncGroup, startTask, launchGroup, stopGroup, finalize, sourceRoot, roleConfig } from '../.pi/runtime/group-service.mjs';
+import { createGroup, updateGroup, adoptGroup, reconcileRegistration, syncGroup, startTask, launchGroup, stopGroup, finalize, migrateProviderModel, sourceRoot, roleConfig } from '../.pi/runtime/group-service.mjs';
 import { registeredGroups, onboardingState } from '../.pi/runtime/group-onboarding.mjs';
 import { scheduleOnboarding } from './group-init-runner.mjs';
 import { ServiceManager } from '../.pi/runtime/service-manager.mjs';
@@ -31,6 +31,7 @@ export async function execute(store, command, args) {
     case 'group-adopt': { const state = adoptGroup(store, a, readInput(b)); return { ...state, initialization: scheduleOnboarding(store, a) }; }
     case 'group-update': { const updated = updateGroup(store, a, readInput(b)); return { ...updated, initialization: updated.status === 'pending' ? scheduleOnboarding(store, a) : null }; }
     case 'group-init': { const { onboarding: updated } = reconcileRegistration(store, a); return { ...updated, initialization: ['pending', 'failed', 'acknowledged'].includes(updated.status) ? scheduleOnboarding(store, a) : null }; }
+    case 'group-provider-migrate': return migrateProviderModel(store, a, { priorRolesSource: readFileSync(b, 'utf8') });
     case 'group-sync': return syncGroup(store, a);
     case 'service-recover': return new ServiceManager(store).recoverLock();
     case 'group-start': case 'group-resume': return launchGroup(store, a);
@@ -62,7 +63,7 @@ export async function execute(store, command, args) {
       try { invokeWindows('codex.cmd', ['mcp', 'remove', 'agent-blackboard']); retired = true; } catch { /* May have been supplied by a plugin rather than a standalone entry. */ }
       return { registered: 'pi-team', retired_standalone_blackboard: retired, note: 'Disable any separately installed Blackboard plugin connection during cutover.' };
     }
-    default: throw Error(`Unknown v2 command: ${command}. Use group-create <json>, group-adopt/update <group> <json>, group-init/sync/start/stop/resume/archive <group>, start <group> <task-json>, send/inbox/wait, inspect/accept/finalize <task>, integration-create <json>, integration-inspect <id>, integration-bind <id> <verification-task>, integration-finalize <id> <json>, blackboard [port], service-recover, inventory, doctor, codex-setup.`);
+    default: throw Error(`Unknown v2 command: ${command}. Use group-create <json>, group-adopt/update <group> <json>, group-init/sync/start/stop/resume/archive <group>, group-provider-migrate <group> <exact-prior-roles-json>, start <group> <task-json>, send/inbox/wait, inspect/accept/finalize <task>, integration-create <json>, integration-inspect <id>, integration-bind <id> <verification-task>, integration-finalize <id> <json>, blackboard [port], service-recover, inventory, doctor, codex-setup.`);
   }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

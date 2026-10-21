@@ -1,7 +1,7 @@
 {
   "coordinator": {
-    "provider": "volcengine-ark",
-    "model": "kimi-k3",
+    "provider": "minimax-cn",
+    "model": "MiniMax-M3.1-Flash",
     "skill": "coordinate-group",
     "tools": [
       "read",
@@ -21,8 +21,8 @@
     ]
   },
   "executor": {
-    "provider": "volcengine-ark",
-    "model": "glm-5.3",
+    "provider": "minimax-cn",
+    "model": "MiniMax-M3.1-Flash",
     "skill": "execute-group-task",
     "tools": [
       "read",
@@ -38,8 +38,8 @@
     ]
   },
   "validator": {
-    "provider": "volcengine-ark",
-    "model": "deepseek-v4-flash",
+    "provider": "minimax-cn",
+    "model": "MiniMax-M3.1-Flash",
     "skill": "review-group-task",
     "tools": [
       "read",
