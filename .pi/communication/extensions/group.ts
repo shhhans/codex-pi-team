@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { GroupStore, parseCurrentState } from '../../runtime/group-store.mjs';
 import { RoleTools } from '../../runtime/role-tools.mjs';
 import { turnContext } from '../../runtime/turn-context.mjs';
+import { classifyProviderFault } from '../../runtime/provider-fault.mjs';
 import { onboardingState } from '../../runtime/group-onboarding.mjs';
 import { ServiceManager } from '../../runtime/service-manager.mjs';
 
@@ -20,7 +21,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerTool({ ...native, label: 'PowerShell', description: 'Run a native Windows PowerShell command in this group worktree. Use PowerShell syntax, not Bash or WSL.', promptSnippet: 'Run native Windows PowerShell commands.' });
   }
   let timer: ReturnType<typeof setInterval> | undefined;
-  let ctx: any, stopped = false, active = false, compacting = false, compactFailures = 0, turnFailed = false, turnGeneration: number | null = null, turnEpoch: number | null = null;
+  let ctx: any, stopped = false, active = false, compacting = false, compactFailures = 0, turnFailed = false, turnGeneration: number | null = null, turnEpoch: number | null = null, providerFault: any = null;
   let threshold = 0.5, maxCompactFailures = 1;
   try { const policy = JSON.parse(readFileSync(resolve(process.env.PI_TEAM_SOURCE_ROOT || process.cwd(), '.pi/team-runtime.json'), 'utf8').replace(/^\uFEFF/, '')).compression; if (policy.threshold_percent > 0 && policy.threshold_percent <= 1) threshold = policy.threshold_percent; if (Number.isInteger(policy.max_compact_retries) && policy.max_compact_retries >= 0) maxCompactFailures = policy.max_compact_retries; } catch { /* A display/compact preference cannot corrupt work; use defaults. */ }
   let queuedSteering = false;
@@ -112,8 +113,9 @@ export default function (pi: ExtensionAPI) {
     active = false;
     if (!turnFailed) roleTools.finish();
     store.settle(group, role, launch, !turnFailed);
-    store.updateSession(group, role, launch, { fault: turnFailed ? 'model_error_or_abort; explicit group-resume required' : null });
-    if (turnFailed) { store.notice(group, role === 'coordinator' ? 'lead' : 'coordinator', { type: 'runtime_fault', role, detail: 'Model run failed after native recovery; work remains open. Inspect and explicitly resume.' }); return; }
+    const fault = turnFailed ? providerFault ? `account_quota_exceeded; reset ${providerFault.reset_at || 'unknown'}; explicit group-resume required` : 'model_error_or_abort; explicit group-resume required' : null;
+    store.updateSession(group, role, launch, { fault, provider_fault: turnFailed ? providerFault : null });
+    if (turnFailed) { store.notice(group, role === 'coordinator' ? 'lead' : 'coordinator', { type: 'runtime_fault', role, detail: 'Model run failed after native recovery; work remains open. Inspect and explicitly resume.', ...(providerFault ? { provider_fault: providerFault } : {}) }); return; }
     const usage = context.getContextUsage();
     if (compacting || compactFailures >= maxCompactFailures || !usage || (usage.percent ?? 0) < threshold * 100) return;
     compacting = true;
@@ -123,6 +125,9 @@ export default function (pi: ExtensionAPI) {
   });
   pi.on('message_end', async (event, context) => {
     if (event.message.role !== 'assistant') return;
+    const classified = event.message.stopReason === 'error' ? classifyProviderFault(event.message.errorMessage, { provider: config.provider, model: config.model }) : null;
+    providerFault = classified?.code === 'account_quota_exceeded' ? classified : null;
+    if (providerFault || store.session(group, role)?.provider_fault) store.updateSession(group, role, launch, { provider_fault: providerFault });
     const content = event.message.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('');
     const state = parseCurrentState(content);
     if (state) { store.updateSession(group, role, launch, { current_state: state, state_at: new Date().toISOString() }); context.ui.setStatus('pi-team', state); }

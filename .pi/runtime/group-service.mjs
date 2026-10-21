@@ -8,6 +8,7 @@ import { ServiceManager } from './service-manager.mjs';
 import { writeDefinition, readDefinition, committedDefinition, syncGroupBaseline } from './group-definitions.mjs';
 import { beginOnboarding, assertOnboarded, sharedRoleVersion, onboardingState } from './group-onboarding.mjs';
 import { scheduleOnboarding } from '../../scripts/group-init-runner.mjs';
+import { assertProviderResumeAllowed } from './provider-fault.mjs';
 
 export const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 function assertNoLegacyConflict(store, group, branch = null) {
@@ -167,6 +168,7 @@ export function roleArgs(store, group, role, sessionId, root = sourceRoot) {
 }
 export async function launchGroup(store, groupId, options = {}) {
   assertOnboarded(store, groupId, sharedRoleVersion(options.sourceRoot || sourceRoot)); const g = store.group(groupId); definitionForGroup(store, groupId); assertNoLegacyConflict(store, g, g.idle_branch); if (g.archived) throw Error('group archived');
+  for (const session of store.sessions(groupId)) assertProviderResumeAllowed(session, { force: options.forceProviderRetry === true });
   const result = [];
   for (const role of ROLES) {
     const old = store.session(groupId, role);

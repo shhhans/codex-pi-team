@@ -378,6 +378,12 @@ test('Windows hidden launcher forwards group identity and resumes original sessi
     const cmd = join(f.root, 'fake-pi.cmd'); writeFileSync(cmd, '@echo off\r\nnode "%~dp0fake-role.mjs" %*\r\n'); process.env.PI_CMD = cmd;
     const first = await launchGroup(f.store, 'sample', { headless: true, timeout: 15000 }); assert.equal(first.length, 3);
     const sessions = f.store.sessions('sample'); assert.equal(new Set(sessions.map(s => s.pid)).size, 3);
+    const coordinator = sessions.find(session => session.role === 'coordinator');
+    f.store.updateSession('sample', 'coordinator', coordinator.launch_id, { fault: 'quota', provider_fault: { code: 'account_quota_exceeded', reset_at: new Date(Date.now() + 60000).toISOString() } });
+    await assert.rejects(launchGroup(f.store, 'sample', { headless: true, timeout: 15000 }), /quota.*reset/);
+    assert.equal(f.store.session('sample', 'coordinator').fault, 'quota', 'blocked resume must not clear the recorded fault');
+    assert.deepEqual(f.store.sessions('sample').map(session => session.launch_id), sessions.map(session => session.launch_id));
+    f.store.updateSession('sample', 'coordinator', coordinator.launch_id, { fault: null, provider_fault: null });
     stopGroup(f.store, 'sample');
     const deadline = Date.now() + 10000; while (f.store.sessions('sample').some(s => { try { process.kill(s.pid, 0); return true; } catch { return false; } }) && Date.now() < deadline) await new Promise(r => setTimeout(r, 100));
     await launchGroup(f.store, 'sample', { headless: true, timeout: 15000 });
