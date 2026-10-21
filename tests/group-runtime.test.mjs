@@ -373,7 +373,7 @@ test('Windows hidden launcher forwards group identity and resumes original sessi
   const f = fixture(), previous = process.env.PI_CMD;
   try {
     const storeURL = pathToFileURL(join(import.meta.dirname, '../.pi/runtime/group-store.mjs')).href;
-    const fake = `import{GroupStore}from ${JSON.stringify(storeURL)};import{writeFileSync}from'node:fs';import{join}from'node:path';const e=process.env,s=new GroupStore(e.PI_TEAM_PROJECT_ROOT),p=join(s.root,e.PI_TEAM_GROUP_ID+'-'+e.PI_TEAM_ROLE+'-test-session.jsonl');writeFileSync(p,'session');s.register(e.PI_TEAM_GROUP_ID,e.PI_TEAM_ROLE,{pid:process.pid,started_at:new Date(Date.now()-process.uptime()*1000).toISOString(),launch_id:e.PI_TEAM_LAUNCH_ID,session_id:e.PI_TEAM_SESSION_ID,session_path:p,config:JSON.parse(e.PI_TEAM_ROLE_CONFIG)});setInterval(()=>{},1000);`;
+    const fake = `import{GroupStore}from ${JSON.stringify(storeURL)};import{writeFileSync}from'node:fs';import{join}from'node:path';const e=process.env,s=new GroupStore(e.PI_TEAM_PROJECT_ROOT),p=join(s.root,e.PI_TEAM_GROUP_ID+'-'+e.PI_TEAM_ROLE+'-test-session.jsonl');writeFileSync(p,'session');s.register(e.PI_TEAM_GROUP_ID,e.PI_TEAM_ROLE,{pid:process.pid,started_at:new Date(Date.now()-process.uptime()*1000).toISOString(),launch_id:e.PI_TEAM_LAUNCH_ID,session_id:e.PI_TEAM_SESSION_ID,session_path:p,config:JSON.parse(e.PI_TEAM_ROLE_CONFIG)});process.stdin.resume();`;
     writeFileSync(join(f.root, 'fake-role.mjs'), fake);
     const cmd = join(f.root, 'fake-pi.cmd'); writeFileSync(cmd, '@echo off\r\nnode "%~dp0fake-role.mjs" %*\r\n'); process.env.PI_CMD = cmd;
     const first = await launchGroup(f.store, 'sample', { headless: true, timeout: 15000 }); assert.equal(first.length, 3);
