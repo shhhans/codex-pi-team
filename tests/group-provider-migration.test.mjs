@@ -47,6 +47,7 @@ test('provider/model migration preserves active work, sessions, onboarding evide
     const setup = migrateFixture(f, { observationTransform: sessions => sessions.map((session, index) => [session.pid, index === 1
       ? { status: 'running', stamp: 'new-unrelated-process-stamp' }
       : { status: 'stopped' }]) });
+    const peerMessageId = f.store.notice('sample', 'validator', { type: 'message', task_id: 'T1', body: 'Existing independent review request.' });
     const oldLifecycle = onboardingState(f.store, 'sample', 'lead');
     const oldSessions = f.store.sessions('sample');
     const receipt = migrateProviderModel(f.store, 'sample', { priorRolesSource: setup.priorRolesSource, sourceRoot: setup.sourceRoot, observe: setup.observe });
@@ -71,6 +72,9 @@ test('provider/model migration preserves active work, sessions, onboarding evide
     assert.equal(audit.prior_roles_source, setup.priorRolesSource);
     assert.deepEqual(audit.prior_sessions.map(session => session.session_path), oldSessions.map(session => session.session_path));
     assert.equal(f.store.inbox('sample', 'coordinator').some(message => message.data.type === 'provider_model_migrated'), true);
+    assert.equal(f.store.inbox('sample', 'validator').some(message => message.data.type === 'provider_model_migrated'), false);
+    assert.equal(f.store.inbox('sample', 'validator').some(message => message.id === peerMessageId && message.data.body === 'Existing independent review request.'), true);
+    assert.equal(f.store.pending('sample', 'validator').some(message => message.id === peerMessageId), true);
   } finally { f.cleanup(); }
 });
 

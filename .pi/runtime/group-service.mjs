@@ -93,7 +93,8 @@ export function migrateProviderModel(store, groupId, { priorRolesSource, sourceR
       recordProviderModelMigration(store, groupId, { expected_role_version: lifecycle.role_version, role_version: nextVersion, migration: { id: migrationId, at, changes } });
       store.db.exec('CREATE TABLE IF NOT EXISTS provider_model_migrations (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, data TEXT NOT NULL)');
       store.db.prepare('INSERT INTO provider_model_migrations VALUES (?,?,?)').run(migrationId, groupId, JSON.stringify(receipt));
-      for (const role of ROLES) store.notice(groupId, role, { type: 'provider_model_migrated', migration_id: migrationId, detail: 'Provider/model changed. Existing assignments, conversation history and receipts are preserved; continue current assigned work.' });
+      const assigned = new Set(store.db.prepare("SELECT DISTINCT owner FROM work WHERE group_id=? AND task_id=? AND status='open'").all(groupId, group.active_task).map(row => row.owner));
+      for (const role of assigned) store.notice(groupId, role, { type: 'provider_model_migrated', migration_id: migrationId, task_id: group.active_task, detail: 'Provider/model changed. Existing assignments, conversation history and receipts are preserved; continue current assigned work.' });
     });
     return receipt;
   });
