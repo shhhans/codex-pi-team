@@ -1,246 +1,90 @@
-# Project State (as of Validator collaboration migration, 2026-10-17)
+# Project state — v2 closeout (2026-10-22)
 
-The stable entrypoint implementation is present at `pi-team.cmd` with its
-PowerShell lifecycle under `scripts/pi-team.ps1`. The runtime uses the Git
-common directory `pi-team/v1` state root and direct role sessions.
-The launcher injects `PI_TEAM_TASK_ID`, `PI_TEAM_ROLE`, `PI_TEAM_AGENT_ID`,
-`PI_TEAM_WORKTREE`, `PI_TEAM_STATE_ROOT`, and `PI_TEAM_SCOPE_ID` for every
-role process; `PI_TEAM_STATE_ROOT` resolves to `<git-common-dir>/pi-team/v1`.
-Do not append state paths to a worktree's `.git`, because that entry may be a
-pointer file.
-The Agent Blackboard uses the separate common-dir root
-`<git-common-dir>/harness-blackboard/v1/`; its Lead task metadata and
-append-only Agent events never live in the worktree.
+## Current authoritative snapshot
 
-## Current integration state
+The Coordinator/Executor/Validator persistent-group v2 implementation is accepted for integration into develop. ADR0009 is normative. Registration uses group.md front matter; fixed worktrees, finite real onboarding, SQLite handoffs, immutable deliveries, independent reviews, documentation alignment, read-only Blackboard role state, exact joint-candidate binding and guarded integration are implemented. Coordinator may choose direct, plan-only or one plan review; omission retains the compatible review route. Final independent code/documentation review and Lead acceptance remain required.
 
-- `develop` is the current Lead-controlled integration branch. Historical
-  tasks may still reference older baselines and are not automatically migrated.
-- The repository is published at `https://github.com/shhhans/codex-pi-team`;
-  local `origin/master` tracks the pushed integration baseline.
-- The main worktree is reserved for the stable `develop` branch and Lead-controlled
-  integration. Task worktrees are sibling directories with one focused branch
-  per task. Lead uses `pi-team.cmd inspect <task-id>` for read-only evidence and
-  `pi-team.cmd finalize <task-id>` to integrate accepted changes, reclaim
-  resources, and remove the task worktree and successfully merged branch as one
-  retryable lifecycle operation. Blackboard lag is reported, not treated as a
-  finalizer authorization gate.
+Latest deterministic suite before closeout: 89/89 passed (133.306s). Real Rooster isolated integration accepted and finalized the model/planning/evaluation cohort at cb80ede1; Lead targeted regression 109/109 and independent joint suite 20/20 passed. Coordinators exchanged 29 cross-group messages. Lead still built/bound the candidate and accepted/integrated it; this is observed end-to-end integration, not autonomous unattended coordination or original Rooster cutover.
 
-## Defect and runtime artifact policy
+Two controlled report tasks also completed independent reviews and integration: MELATONIN-WARM-01 at 1445a605 and MELATONIN-FLEX-01 at b374f605. Original flow took 37m41s; direct flow 25m05s. This is not a causal A/B speedup: fresh onboarding reset history, the second task removed ambiguous duplicate-interface requirements, and its Validator process exited and needed recovery. The warm report's claimed three independent Validator reruns was corrected by trace to two. Excess context/reporting/verification overhead, premature unassigned discovery, late reading of the current task and dead-process busy-state visibility remain deferred issues. Do not claim they are fixed.
 
-Discovered defects do not expand the current task. Agents report them to Lead;
-after the GitHub repository and Issue permissions are configured, Lead records
-them in GitHub Issues. A code fix receives a separate Lead-owned task, branch,
-worktree, review, and merge. The main worktree does not hold an untracked local
-`issues/` ledger.
+Current user-selected role defaults: Coordinator minimax-cn/MiniMax-M3.1-Flash; Executor volcengine-ark/glm-5.3-flash; Validator volcengine-ark/deepseek-v4-flash. Credentials and custom model availability remain local Pi configuration, not repository secrets or a guarantee of provider availability. Shared prompt/version changes require group-init before future work.
 
-Runtime reports, temporary prompts, hand-built envelopes, audit records, and
-other execution traces are not source code and are kept outside Git or in the
-configured runtime/archive store. GitHub Issues receive only concise,
-sanitized evidence. Task artifacts are discovered by `inspect` and remain
-evidence for Lead review; they are not a substitute for the project defect
-ledger.
+All isolated-project groups have no active business task and role processes were explicitly stopped for closeout. Their fixed worktrees, task branches, runtime SQLite, raw traces and verification artifacts remain preserved. The original dirty Rooster checkout and its legacy tasks were not changed. See implementation_notes/V2-CLOSEOUT-2026-10-22.md for evidence, retained branches and remaining limits.
 
-## Lead documentation alignment
+## Historical progress (superseded where it conflicts with the snapshot above)
 
-`architect.md` and `goal.md` are stable Lead-owned snapshots: update them when
-architecture or project goals change, not for every runtime event.
-`project_state.md` is the operational snapshot and must be synchronized after
-material changes to the launcher, lifecycle, integration baseline, repository
-workflow, or task-closure policy. A task is not fully documented until Lead
-has checked this snapshot alongside the diff, tests, and acceptance evidence.
+The following entries describe earlier checkpoints. Statements that develop remained v1 and that planning was mandatory are historical, not current instructions.
 
-`ADR/0002-lead-subagent-collaboration-protocol.md` is the sole normative
-Lead–Subagent collaboration protocol. Active summaries defer to it.
+# Project state — persistent group implementation (2026-10-20)
 
-## Active agent surface
+The v2 implementation follows ADR/0009-persistent-group-workflow.md. It replaces the active v1 role and Blackboard/contract negotiation paths with persistent Coordinator/Executor/Validator groups, fixed worktrees, document handoff and one SQLite authority under the Git common directory.
 
-Exactly three active role definitions live under `.pi/agents/` and are launched
-directly by `pi-team.cmd`; the launcher does not load `pi-subagents`. Each active
-role is defined by its role prompt plus one
-private skill under `.pi/skills/`; **no active role binds persistent
-role memory** (no `memory:` frontmatter, no active `.pi/agent-memory/{role}/MEMORY.md`).
+## Current registration/lifecycle increment
 
-| Agent | Skill | Provider | Memory |
-| --- | --- | --- | --- |
-| `researcher` | `answer-research-question` | `~/.pi/agent/npm/node_modules/pi-web-access/index.ts` (via `subagentOnlyExtensions`) | none (prompt + private skill only) |
-| `executor` | `execute-delegated-task` | n/a | none (prompt + private skill only) |
-| `validator` | `validate-delegated-task` | n/a | none (prompt + private skill only) |
+Persistent configuration registration, finite real-model onboarding, safe-boundary responsibility updates, fresh role sessions, Lead baseline synchronization, standalone read-only Blackboard, structured snapshot services and Validator documentation alignment with Coordinator final review are implemented on `codex/group-runtime`. Definitions are generated by Lead commands; valid `groups/<id>/group.md` files are the registration authority. Existing legacy records and original-project registrations are preserved.
 
-All three roles also load their matching communication-policy extension and
-the Lead-observability `blackboard-update.ts` extension. `blackboard_update`
-accepts only task activity fields; runtime identity, sequence, worktree, and
-observation time are injected or generated by the runtime.
-Researcher additionally loads `pi-web-access`.
+The complete parallel deterministic entrypoint `node tests/run-tests.mjs` passed **46/46 scenarios**, including native Windows process-tree fallback and PID-identity protection. A fresh real-provider acceptance run completed two definition/onboarding epochs, one full three-role business task, independent code review, module-document alignment and final review, an immutable review service checked over HTTP, Lead acceptance and configured integration tests. All role and service processes are stopped. No provider defaults or global MCP registrations were changed.
 
-All active roles inherit the stable, task-agnostic project context from the
-repository root `AGENTS.md`. `Start-Task` and `Research` add one bounded task
-context containing the v3 objective, explanatory context, acceptance results,
-branch/worktree identity, recommended reads, and validation entrypoints.
-Runtime delegation IDs and Researcher artifact paths are generated in task
-state rather than written into the contract. `Resume-Task` adds only a small
-context refresh so a persistent session does not receive duplicate
-project navigation or repeat whole-repository discovery.
+An initial real attempt exposed premature onboarding shutdown; an intermediate run exercised explicit recovery and correction of a model's faux tool-call prose. Evidence from those attempts is preserved alongside the fresh successful run. Later service ownership, stale-lock and Windows process-control corrections have deterministic/native-process coverage rather than another paid model run. Details, artifact location and bounded claims are in `implementation_notes/PERSISTENT-GROUPS-2026-10-20.md`.
 
-## Agent Blackboard
+This is isolated-project protocol evidence, not original-project deployment, v1 cutover or long-term independent module maintenance. The canonical `develop` checkout remains v1.
 
-The repo-local `plugins/agent-blackboard/` exposes Lead-only MCP tools
-for task creation, metadata revisions, acceptance, archival, snapshots,
-cursor-based watching, and rendering. Agents cannot create tasks or edit Lead
-task name/description. The Blackboard is an observation/reminder plane; Lead
-uses `inspect` to judge actual changes and scope. Archived
-tasks remain available through an explicit archived snapshot. A periodic Lead
-heartbeat uses `blackboard_snapshot` with a caller-owned cursor: it returns the
-current active lanes and only new critical changes, without server-side cursor
-checkpointing. Heartbeat polling is independent of `blackboard_watch`, thread
-binding, and wakeup transport.
-The plugin's `pi-team-lead` skill carries the full publish, explicit launch,
-watch, acceptance, reclamation, and archival workflow into new Codex sessions,
-including sessions whose working directory is above this repository.
-Formal publication uses `pi-team.cmd publish <contract-path>`, which validates
-the contract and calls the plugin's canonical Blackboard core even when MCP
-tool discovery is unavailable. MCP readiness is therefore required for live
-watching and UI reminders, but not for publishing and launching the team.
-`pi-team.cmd codex-setup` reproducibly registers the same server as a stable
-user-level stdio MCP entry through the Codex CLI; the current machine has been
-registered this way.
+## Implemented behavior
 
-The legacy role files for `architect`, `critic`, and `engineer`
-are present in `.pi/legacy/agents/` but are not loaded.
+- One active task per group, stable sessions, focused task branches and runtime-injected task/generation identity pinned to the agent turn.
+- One Executor plan and exactly one adversarial Validator plan review before implementation. Code Review reads source/diff/tests and can require multiple fixes.
+- Process documents are grouped by module/task and retained in Git. Runtime content snapshots, local delivery commits and review references preserve version identity.
+- Explicit success/rejection receipts, transactional handoff and idempotent submission. Open work survives read receipts, lost wakeups and process replacement. Interrupted task switching can be retried from its recorded Git transition.
+- Lead communicates through Coordinator using durable send/inbox/wait. Final acceptance and integration remain Lead-owned; finalization preserves group sessions and worktree. Integration failure records progress for retry without re-merging.
+- New inbox arrivals are steered at tool boundaries and checked atomically before submission. Frozen delivery documents and independent review-NN evidence remain separate; unfinished handoffs create durable deduplicated Coordinator alerts.
+- current_state text is display only. No Blackboard activity tool or formal contract/debate/ACK extension is loaded.
+- Runtime health faults pause automatic model retriggers until explicit recovery; compaction saves current-work context and preserves sessions on failure.
+- Role tools/providers/skills have one launch configuration in .pi/roles.json. Native command execution explicitly uses PowerShell.
 
-## Installed packages
+## Historical baseline verification and deployment boundary
 
-`.pi/settings.json` declares no npm packages. Run `pi-team setup` once to
-install these pinned packages in Pi's user package directory:
+The active deterministic suite has 20 passing scenarios, including installed-Pi extension loading, actual PowerShell execution, Windows hidden launcher/session recovery, native CLI/MCP integration, cross-process concurrency, killed-writer rollback, version checks and integration retry. Existing v1 test files remain historical specifications; see tests/MIGRATION.md.
 
-- `npm:pi-intercom@0.11.0` (peer transport)
-- `npm:pi-subagents@0.56.0` (agent loader)
-- `npm:pi-web-access@0.24.2` (Researcher-only web-access provider)
+Real-provider smoke runs in an independent temporary Git repository, keeping experiments separate from canonical state. The first smoke attempt was stopped after discovering that a command-tool stage gate prevented read-only Git discovery; the gate was corrected and all roles restarted in a fresh fixture. The replacement run has causally completed one plan-review round, D1 rejection, D2 repair/pass, Coordinator delivery, same-ID Executor recovery and Lead acceptance/integration. The second task then completed its own plan/review/implementation/code-review/Coordinator-delivery sequence on the same group. After the original smoke driver exited, an independent final driver rechecked the second delivery against current runtime checks and recorded Lead acceptance/integration. The group is idle, both task histories are retained, and the smoke processes are stopped. Sanitized outcomes, process documents and raw event evidence are archived outside Git under the common-dir v2 verification store.
 
-All roles disable ambient extensions and ambient skills through explicit Pi CLI
-flags. Shared intercom is loaded explicitly by each role, while only Researcher
-loads Web Access. `doctor` checks this state
-without modifying it; role-launching commands fail fast if setup is incomplete.
+The handoff-hardening retest completed a real Rooster module-onboarding task: exactly one plan review, a registered delivery, independent reproduction of the 52-test core suite into separate review evidence, successful code-review receipt, and Coordinator delivery. A clarification injected during implementation reached Executor at a tool boundary before delivery and was incorporated into the registered snapshot. MiniMax repeatedly returned provider 529 errors; user-authorized temporary DeepSeek replacement continued the same sessions/task. This is protocol evidence, not confirmation of MiniMax availability or clinical validity. Raw evidence and the unsuccessful pre-fallback attempt remain archived outside Git.
 
-The Deep Research MCP runtime under `.pi/researcher-runtime/` and
-its installed dependencies (`@modelcontextprotocol/sdk` 1.30.0,
-`playwright` ^1.62.1) are preserved in
-`.pi/legacy/deep-research/researcher-runtime/`. The Deep Research
-MCP tools are **not** wired to the active Researcher.
+Implementation is on the isolated codex/group-runtime branch. The canonical develop checkout and global MCP registration have not been switched. Current inventory contains 11 legacy task records still marked pending; their actual process/outcome status must be assessed and explicitly completed or closed using the pre-cutover checkout. They are not silently accepted, cancelled or migrated. Existing user audit changes and .pi/legacy history are preserved.
 
-## Artifact roots (project root)
+Supported baseline: native Windows, Node 24.11+, Pi 0.84.2. The Node SQLite interface is available in the verified host runtime. Coordinator research uses installed pi-web-access when available; credentials remain managed by Pi outside the repository.
+## 2026-10-20: Rooster multigroup responsibility discovery
 
-- `research/` — Researcher artifacts. Default name pattern
-  `<task-id>-<slug>.md`; the slug is a short kebab-case topic label.
-- `implementation_notes/` — Executor notes per task. Required
-  filename pattern `<task-id>.md`; records the current slice state,
-  validation evidence, changed files, and remaining risks.
-- `failures/` — Validator failure artifacts. Default name pattern
-  `<task-id>-<finding-id>.md`; reserved for real failures only.
+The user selected a snapshot of the current dirty Rooster source for a dedicated integration branch. The Lead cloned the committed baseline into `D:/Coding/Projects/Rooster-integration-20261020`, copied the 72 changed/untracked source paths and committed snapshot `8eb35e493a9a659dd9b924bc325236ead5fac631` on `codex/rooster-multigroup-integration`. Content comparison covered 253 files with no content differences after CRLF/LF normalization. The original `D:/Coding/Projects/Rooster` directory, its uncommitted work and two pending v1 records were preserved; this is registration in the dedicated snapshot, not an original-project cutover.
 
-## Legacy preservation
+The user narrowed the next step to three group registrations, source-backed responsibility claims and Lead refinement before business integration. `timeline-api`, `planning-model` and `frontend` completed real three-role onboarding and independent report-only tasks. Frontend/planning delivered D2, timeline delivered D3 after a Validator tool-call-as-prose interruption and Lead-guided correction of Coordinator recovery. All claims were accepted and finalized; every task reports `tested:false` and explicit static independent verification. No Rooster tests, business code changes, service startup or feature integration ran in this phase. The final responsibility decisions and full retained claims/reviews are in the snapshot's `groups/README.md` and group task directories. Responsibility changes were committed and epoch 2 onboarding was scheduled; inspect the snapshot lifecycle receipts for its final readiness rather than infer it from this paragraph.
 
-- `.pi/legacy/agents/` — `architect.md`, `critic.md`, `engineer.md`
-  (unchanged).
-- `.pi/legacy/communication/extensions/` — `architect.ts`,
-  `critic.ts`, `engineer.ts` (unchanged).
-- `.pi/legacy/communication/audit/` — role-specific audit JSONL
-  files.
-- `.pi/legacy/communication/reply-store/` — role-specific replay
-  store JSON.
-- `.pi/legacy/agent-memory/` — role-specific memory for the three
-  deprecated roles, plus the archived historical memories of the
-  previous active Researcher (Deep Research lineage,
-  `.pi/legacy/agent-memory/researcher-deep-research/MEMORY.md`) and
-  Reviewer (`.pi/legacy/agent-memory/reviewer/MEMORY.md`). The active
-  roles themselves no longer bind persistent role memory.
-- `.pi/legacy/deep-research/researcher-runtime/` — Deep Research
-  runtime source/tests/docs/config (no `node_modules`).
-- `.pi/legacy/deep-research/gptr-mcp/` — `gptr-mcp` sidecar
-  source/tests/docs/config (no `.venv`, no `__pycache__`, no
-  `.git`).
-- `.pi/legacy/research/` — Deep Research notes, architecture docs,
-  and adapter source (`runs/` excluded).
-- `.pi/legacy/PROVENANCE.md` — path-to-path provenance manifest,
-  no content hashes.
+The actual parallel report tasks exposed a finalization gap: target changes from another group's completed process evidence were rejected. Finalization now permits only exact process paths belonging to another group's SQLite-recorded accepted and completed task, with identical Git object content in that task's recorded finalization commit and current target HEAD. Unknown/pending/current-group paths, changed evidence and production changes remain rejected. ADR 0009 records the exception. Luna's final targeted regressions passed 6 checks with no failures; no new complete suite was run. The three actual report tasks subsequently finalized sequentially using this change. The earlier 46-test increment result predates these added regressions and should not be reported as a fresh full-suite result.
 
-## Communication state
+Raw model event logs and runtime data remain in the snapshot's `.git/pi-team-runtime/v2/claim-run/`; snapshot provenance is under `.git/pi-team-verification/`. This was an observed workflow with substantive Lead recovery steering, not unattended multigroup maintenance or completed functional integration.
 
-- Active topology: `Researcher <-> Executor <-> Validator`.
-- Researcher and Validator are directly denied in both directions.
-- Lead assigns the concrete Executor/Validator pairing; current policy
-  enforces role topology, not a task-scoped pair identifier.
-- Executor and Validator are persistent for the task. They remain alive
-  through validation/fix and finish each turn by reporting the completed
-  slice and becoming idle/event-driven. Only Lead acceptance permits
-  reclamation.
-- Denied inbound messages are filtered before model context and cause
-  no reply-store access. Allowed inbound messages are retained.
-- Lead wakeups use one explicit active-task binding to a Codex `thread_id` and
-  `host_id`. Only material Agent states enqueue persistent structured reminders;
-  a host adapter delivers and acknowledges them. Wakeups contain no raw
-  envelope or Base64 body and do not replace Lead inspection or acceptance.
-- The four BOOTSTRAP-SELF-004A Reviewer findings are resolved.
-- BOOTSTRAP-SELF-006 resolved the Windows CRLF frontmatter-test defect;
-  both deterministic test files now accept LF and CRLF delimiters.
+Epoch 2 final observation: all three groups have real Executor/Validator/Coordinator acknowledgement receipts. planning-model and timeline-api reached ready. Frontend Coordinator hit MiniMax Token Plan 429 (2062) after its acknowledgement; explicit group-init retry did not settle the lifecycle, which remains failed. All role processes are stopped and all groups have no active business task. The three CLAIM tasks are accepted/finalized, their tested flags are false, and the snapshot has zero business-source changes. Preserve the failure evidence and retry group-init frontend only when the provider constraint is resolved; do not infer frontend readiness from the receipts alone. The snapshot's groups/README.md and .git/pi-team-verification/responsibility-discovery-final.json record the bounded result.
 
-## Validation
+## 2026-10-20: User-selected Kimi/GLM role switch and frontend recovery
 
-- `tests/run-tests.ps1` runs the active module, Blackboard, policy, and
-  compression suites; `node tests/run-tests.mjs` is the cross-shell entrypoint.
-- Validator collaboration was cherry-picked on 2026-10-17. The active suite
-  passed 111/111 tests on 2026-10-19 via `node tests/run-tests.mjs`.
-- Seven targeted role, skill, and protocol checks in
-  `tests/team-contract.test.mjs` also passed. That legacy suite was not run
-  in full; these checks do not establish live model collaboration.
+The user selected `volcengine-ark/kimi-k3` for Coordinator and `volcengine-ark/glm-5.3` for Executor; Validator remains `volcengine-ark/deepseek-v4-flash`. The v2 roles.json and local Pi model catalog were updated with backups under common-dir verification/model-role-switch-20261020. sharedRoleVersion now also hashes roles.json so provider/model/tool configuration changes invalidate prior role epochs and archive old sessions instead of resuming MiniMax configurations.
 
-## Operational limitation
+Frontend in the dedicated Rooster snapshot completed real epoch-3 onboarding with those exact models (verified both persisted session config and actual provider transcript messages). All three real acknowledgement receipts are present, Coordinator receipt followed both peers, lifecycle is ready, role_version matches current config, old epoch-2 sessions are archived, and all frontend initialization processes are stopped. frontend-result.json records the independent final observation. No Rooster business task, test or service integration was started. Other groups have not been re-onboarded under this new role configuration; their prior ready projection does not imply the new role-version guard will admit startup.
 
-The supported collaboration contract does not authorize Agents to add a
-Scout, repeat unbounded discovery, or decompose unassigned subtasks.
-Windows tasks use the native command environment; WSL requires explicit
-Lead authorization.
+Luna ran the registration test file after adding the role-configuration regression: 10 passed, 0 failed, 29.18s. The regression verifies model changes alter the shared version, archive/clear old sessions, increment epoch and reject stale ACKs. Log: common-dir verification/model-role-switch-20261020/group-registration.test.log. This was a focused suite, not a fresh complete deterministic or business-task end-to-end run.
 
-The earlier live intercom smoke established session discovery and an
-Executor-to-Reviewer `socket_delivered` acknowledgement, but not causal
-message use. The current required operational shape is persistent interactive
-Executor/Validator sessions: slice completion reports to Lead, an injected
-peer event starts the next turn, and the receiver returns to idle without
-stop/resume. This remains to be proven end to end.
+## 2026-10-20: Blackboard role cards — awaiting user acceptance
 
-## Completed bootstrap evidence
+Phase one of the approved Blackboard/three-module-decoupling plan is implemented. The user explicitly requires Blackboard acceptance before any Rooster group split or integration. That gate remains closed: no new groups, business tasks, model calls, role startups or Rooster source changes were performed in this phase.
 
-- Blackboard causal live smoke `BB-FIX-001` passed and is archived. A real
-  explicitly configured MiniMax Pi Executor produced the injected-identity
-  `working` event through `blackboard_update`; a real Reviewer then produced
-  `reviewing` and `ready_for_acceptance`. Neither role loaded ambient skills,
-  ambient extensions, `pi-subagents`, or `runs.run`. This proves the Blackboard
-  event path, not the still-separate full persistent-pair lifecycle.
-- Bounded Researcher smoke passed: BOOTSTRAP-SELF-005 answered one
-  official-documentation question with ordinary web-access tools and
-  wrote `research/BOOTSTRAP-SELF-005-node-test-exit-code.md`. Direct
-  content fetch was blocked by the provider's SSRF/TUN guard, so the
-  artifact records that its official-source evidence came through
-  search snippets and `source_check`.
-- The reviewed communication cutover is merged on `master`; canonical
-  untracked legacy material was preserved under `.pi/legacy/` and the
-  canonical worktree was cleaned.
+The read-only snapshot adds three fixed role cards with persisted actual provider/model, independently observed process status, original parsed current_state plus receipt time, and separate fault records. No current-work/phase/completion inference is displayed. OS process-start identity is captured for future session registrations; a live PID without a matching recorded identity is unconfirmed, while a reused PID cannot show the old role as running. Historical records are not rewritten. Responsibilities are expandable. Fetch failures retain previous cards with failure/last-success times; recovery clears the error. Role-version mismatches are shown without launching replacements. Existing snapshot fields remain available.
 
-## Remaining bootstrap work
+Luna ran the Blackboard test file (4 passed / 0 failed, no force-exit) and installed-Pi-extension targeted regression (1 passed / 0 failed). Browser checks covered actual Rooster's 3 groups/9 cards, responsibility disclosure, activity updates, stopped/fault/unstarted fixture states, 500 preservation and recovery. The failure-path test exposed and fixed an existing 200-header-before-snapshot-error bug. No full deterministic suite or paid-provider role run was repeated. Evidence is under common-dir verification/blackboard-phase1-20261020; screenshot and isolated UI test harness are under verification/blackboard-role-cards. The isolated UI server was stopped after testing. Final real read-only server: http://127.0.0.1:64180, retained in the app for user acceptance. Do not begin phase two until the user explicitly accepts this page.
 
-- Prove one complete persistent Executor/Validator contract, validation, and fix exchange with
-  causal message use and Lead acceptance before claiming the live loop.
+## Blackboard accepted; Rooster decoupling in progress
 
-## Issue #2 delivery on develop
+The user explicitly accepted Blackboard and authorized continuing phase two. The earlier acceptance gate is now satisfied. In the dedicated Rooster integration repository, Lead archived planning-model without deleting its definition, worktree or task history, registered sleep-model/planning/evaluation through group-create, and verified all three real role ACKs and ready lifecycles. Timeline-api and frontend responsibility references were updated to the new boundaries; both re-acknowledged in fresh epochs with Kimi K3 Coordinator, GLM 5.3 Executor and DeepSeek V4 Flash Validator. No original Rooster checkout cutover occurred.
 
-- Issue #2 was researched, implemented, independently reviewed, and Lead
-  accepted after a reproducible 42/42 test run. The delivery commit is
-  `1eeceed` and its merge is on `develop`; `master` remains untouched.
-- The implementation isolates non-wt test launchers from visible consoles,
-  records process chains, and performs deterministic fake-launcher cleanup;
-  the real `wt.exe` visibility path remains unchanged.
-- During acceptance, the Reviewer readiness projection required a
-  user-authorized Lead manual reconciliation because the canonical role event
-  and Blackboard state diverged. This protocol defect was recorded as GitHub
-  Issue #8. The manual intervention is explicitly retained in the local
-  lifecycle record and is not represented as a new Reviewer result.
+The architectural contract is committed as docs/module-decoupling-contract.md in the isolated target. Evaluation completed DECOUPLE-BASELINE-01 through plan, one adversarial review, fixed D1, independent code review, Validator documentation alignment and Coordinator independent documentation review/delivery. Lead accepted and finalized it (integration commit 7eb88dd4881bec6968e0a4bcf208edf801377a3f; finalization complete/tested). The immutable baseline contains 25 cases; independent Validator runs passed 27 baseline checks and 30 original targeted regressions, plus a separately implemented comparator with corruption/order sensitivity probes. Documentation distinguishes normalized Git blob and Windows CRLF hashes. This is bounded offline compatibility evidence, not model validity or deployment.
+
+DECOUPLE-MODEL-01 is active in the sleep-model fixed worktree, synchronized from the accepted baseline. Planning migration and final independent evaluation remain pending. Task descriptors and Lead's pre-refactor 22-test result are retained under the target common Git directory pi-team-verification/decoupling. Do not describe the full refactor or final integration as complete until the later group deliveries and their acceptance are inspected.

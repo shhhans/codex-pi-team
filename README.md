@@ -1,327 +1,63 @@
-# Pi Team Entrypoint
+# Pi Team v2
 
-This repository runs a three-role Pi team from isolated Git worktrees. Codex is
-the Lead; Pi supplies the Researcher, Executor, and Validator sessions.
+Pi Team v2 organizes work into persistent module groups. Each group has one fixed worktree and three assigned roles: Coordinator, Executor and Validator. Lead owns group definitions, task scope, external commitments, acceptance and integration. The runtime and documentation changes described here have bounded local verification recorded in project_state.md; do not treat this branch as a deployment or an accepted cutover from v1. Node 24.11+ and Pi 0.84.2 are the intended runtime baseline. Provider credentials remain in Pi, not in the repository.
 
-## Module collaboration (v1)
+## Group definition and onboarding
 
-The active path stores long-lived module contracts, pair session records,
-debate trace, notifications, summaries, and compaction evidence under the
-shared Runtime Store (`<git-common-dir>/pi-team-runtime/v1`). A module permits
-one active task and one Executor/Validator pair. Its contract has one current
-JSON body with stable `data_flow` and `public_interfaces` keys; Executor alone
-can edit it, both roles comment, and both must ACK the complete current body.
-The second ACK freezes it. A body change clears ACKs; after 30 submit/comment
-actions negotiation pauses for a Lead ruling. Notifications are persisted in
-the same locked update as the associated contract event and can be retried by
-one dispatcher without counting as a negotiation action.
+Lead registers a group with `group-create` or `team_group_create`, which writes `groups/<id>/group.md`, creates the fixed worktree and schedules onboarding. The file is the durable group configuration: YAML front matter supplies `schema_version: 1`, `id`, `name`, an absolute `worktree`, `base_ref` and optional `archived`; the Markdown body states the group's module responsibility and boundaries. The directory name and `id` must agree. A valid definition is the source of truth; runtime rows are recoverable projections. Lead commits the new definition, and a task cannot start against an uncommitted or stale definition.
 
-Validator's source isolation is a prompt requirement, not a sandbox claim.
-Lead acceptance remains independent of tests and Blackboard state. Each role
-must save its own summary before its compact is recorded; failed compact leaves
-the session and task worktree intact for retry.
-
-## Repository workflow
-
-`develop` is the stable integration baseline. Each delegated task owns one
-focused branch and one isolated worktree; the task branch is merged back only
-after Lead acceptance and review. A worktree is a checkout location, not a
-separate source of truth. The canonical `finalize <task-id>` command performs
-the reviewed integration and then removes the task worktree and successfully
-merged task branch.
-
-Before acceptance, Lead may run `pi-team.cmd inspect <task-id>` to collect a
-read-only report covering the contract, actual diff, artifacts, tests, process
-ownership, GitHub issue state, and Blackboard observations. Blackboard lag is
-reported as a warning and does not replace Lead judgment. Use `--json` for a
-machine-readable result, `--skip-tests` only when explicitly appropriate, and
-`--output <path>` to persist a sanitized report.
-
-When a task discovers an unrelated defect, the Agent reports it to Lead and the
-current task remains within its frozen scope. Once this repository has a
-configured GitHub remote and verified Issue permissions, Lead records the
-defect in GitHub Issues rather than creating an `issues/` ledger in the main
-worktree. A code fix receives a separate `fix/issue-<number>-<slug>` task,
-branch, worktree, review, and merge. Runtime reports, temporary prompts,
-hand-built envelopes, and audit records stay outside Git or in the configured
-runtime/archive store; GitHub Issues receive only concise, sanitized evidence.
-
-Every new task must use an explicit clean `base_ref`. Until the launcher
-enforces that field during branch creation, Lead must pre-create the task
-branch from the exact ref or stop on a mismatch; starting from whichever
-branch happens to be checked out is not a valid substitute.
-
-The project is published at
-[github.com/shhhans/codex-pi-team](https://github.com/shhhans/codex-pi-team).
-The local `develop` branch is the current integration baseline.
-
-## First-time setup
-
-Install the pinned Pi packages once in Pi's user package directory:
-
-```powershell
-.\pi-team.cmd setup
-```
-
-The command installs `pi-subagents@0.56.0`, `pi-intercom@0.11.0`, and
-`pi-web-access@0.24.2` under `~/.pi/agent/npm/`. It is safe to run again and
-preserves unrelated Pi user settings and packages. Project worktrees do not
-contain or install their own copies.
-
-Check the environment without changing it:
-
-```powershell
-.\pi-team.cmd doctor
-```
-
-Register the Blackboard MCP as a stable user-level Codex stdio server once per
-machine (the plugin continues to provide its skills and UI):
-
-```powershell
-.\pi-team.cmd codex-setup
-```
-
-This command uses the supported `codex mcp add` interface and resolves the
-server's absolute path from this checkout. It can be rerun after moving the
-repository.
-
-`start`, `research`, and `resume` fail before launching a Pi session when the
-shared packages are missing, have the wrong version, or Web Access is globally
-autoloaded.
-
-### Role-specific providers and models
-
-Pi credentials are managed by provider in the user-level `auth.json` (or the
-provider environment variables); never put API keys in this repository. The
-auth file intentionally contains credentials only (`type`, `key`/`env`, or OAuth
-tokens); it has no `baseUrl` field. Built-in providers already carry their
-endpoint. For a custom or proxy provider, define its endpoint and API type in
-the user-level `models.json` at `~/.pi/agent/models.json`:
+The CLI takes a JSON file for `group-create`, with `group_id`, `description`, absolute `worktree`, and optional `name` and `base_ref` fields:
 
 ```json
-{
-  "providers": {
-    "validator-provider": {
-      "baseUrl": "https://api.example.com/v1",
-      "api": "openai-completions",
-      "models": [{ "id": "validator-model", "name": "Validator model" }]
-    }
-  }
-}
+{"group_id":"payments","name":"Payments","description":"Owns the payments module and its integration tests.","worktree":"D:/Work/payments-group","base_ref":"develop"}
 ```
 
-Then store only the matching provider credential in `~/.pi/agent/auth.json`
-(or provide its environment variable):
+`pi-team.cmd group-create group.json` creates the registration and automatically schedules finite onboarding. Lead then commits `groups/payments/group.md`. The Lead MCP offers `team_groups`, `team_group_create`, `team_group_update`, `team_group_init`, and `team_group_sync` for listing, creating, changing, retrying and synchronizing registered groups. For an old idle v2 runtime row with no definition file, `group-adopt <id> descriptor.json` / `team_group_adopt` explicitly writes the Lead-supplied description and base ref, preserves history and requires fresh onboarding. Existing definition files must be reviewed rather than overwritten by adoption. `group-init`/`team_group_init` is an explicit retry after inspecting an onboarding failure; it does not start business work.
 
-```json
-{
-  "validator-provider": { "type": "api_key", "key": "$VALIDATOR_PROVIDER_API_KEY" }
-}
-```
+Group creation runs finite onboarding rather than starting persistent business sessions. Runtime starts actual Executor, Validator and Coordinator sessions; Executor and Validator each submit an explicit acknowledgement of the group and role responsibilities. Only after both receipts does Coordinator acknowledge to Lead, who receives the resulting onboarding receipt. Onboarding is not task work and cannot implement the module. All onboarding sessions then stop. Lead starts the group for assigned work with `group-start` or `group-resume`; those role sessions remain idle between tasks until explicitly stopped or reset by a new definition.
 
-Each active role definition declares its runtime selection in frontmatter:
+When Lead changes a definition with `group-update` or `team_group_update`, the new definition takes effect only after any active task reaches a safe finish. Runtime then stops the old roles and their managed commands, archives old session records, clears all three sessions and starts a new definition epoch. The new Executor and Validator must acknowledge the changed responsibility and Coordinator must acknowledge after both. This avoids carrying role context from an earlier definition into the new one. The fixed worktree remains assigned to the group. `group-sync`/`team_group_sync` fast-forwards a clean idle worktree from the clean, committed Lead checkout; use it after committing a definition or other Lead baseline change. Accepted task finalization also synchronizes the group's idle branch with the target branch.
 
-```yaml
-provider: minimax-cn
-model: MiniMax-M3
-```
+## Tasks and reviews
 
-The launcher reads those fields and passes explicit `--provider` and `--model`
-arguments to every Executor, Validator, and Researcher process. The selected
-provider/model is frozen in task state so `resume` does not silently switch to
-the project default. Use `pi.cmd auth check --provider <provider> --model
-<model> --json --no-refresh` to verify credentials without printing them.
-The model must support the role's configured tools; `--tools` only controls the
-allowlist and does not add tool-calling support to a model.
+Lead assigns one task at a time to each group. The task records an objective, observable acceptance results, base ref, and (when applicable) explicit module Markdown paths and a documentation checklist. Groups may work in parallel. Coordinator writes task.md and selects planning=direct, plan, or review on its task submission. Direct begins implementation; plan adds only a written plan; review adds one adversarial plan review. Omission preserves the legacy review route. Simple known-interface tasks normally use direct. Scope and final independent reviews remain unchanged. The review is advice, not an approval gate. Executor records how concerns were handled and implements without another plan-review round.
 
-## Agent Blackboard
+Executor creates local delivery commits D1, D2, etc. Validator reviews the exact delivery commit and its tests, separating required fixes from suggestions. After code review passes, Validator receives a separate documentation-alignment assignment for the explicitly named module Markdown files, checks them against the delivered implementation, and explains checklist items and any no-change decisions. Runtime commits only those delegated Markdown files. Coordinator then independently checks the code and documentation commits, the checklist and the actual module text. It may pass or return the documentation revision. Coordinator sends delivery.md to Lead only after both reviews pass. Lead alone accepts and integrates.
 
-The repo-local `agent-blackboard` plugin provides a Lead-owned observability
-plane with structured Lead wakeup reminders. Task metadata and append-only
-Agent activity events live at
-`<git-common-dir>/harness-blackboard/v1/`, shared across the main worktree and
-task worktrees. The Lead creates and updates task IDs, names, descriptions, and
-lifecycle; Pi roles can only append their own injected-identity activity with
-`blackboard_update`.
+After definition onboarding, Lead commits `groups/<id>/group.md` and synchronizes the clean idle worktree from the clean Lead checkout. Assign work with `pi-team.cmd start <group> task.json`, then start or resume role sessions with `pi-team.cmd group-start <group>` (or resume an already registered group). The task JSON supplies `task_id`, `objective`, a nonempty `acceptance` array and `base_ref`; optional `documentation_paths` and `documentation_checklist` define the scope of the mandatory documentation review (an empty path list still requires a justified no-change report). Task startup rejects a stale worktree or uncommitted current definition.
 
-The Blackboard is not an authorization or communication bus. Use
-`blackboard_update` for Lead-facing decisions and correction, and use the
-registered Pi Team `pi_team_intercom` tool only for paired peer events.
-The plugin supplies MCP tools for task management, snapshots, cursor-based
-watching, Lead thread registration, structured wakeup listing/acknowledgement,
-and a task-lane UI that requests PiP and falls back inline. For periodic Codex
-heartbeat checks, call `blackboard_snapshot` with the previous returned cursor:
-it always returns the current active lanes plus only new critical changes
-(`blocked`, `changes_requested`, `ready_for_validation`, `ready_for_acceptance`, or
-`completed`). The cursor is caller-owned and is not checkpointed by the
-Blackboard, so retrying with the prior cursor is safe and may repeat changes.
-After `start`, the Lead registers its current Codex `thread_id` and `host_id`.
-Only material states (`blocked`, `changes_requested`, `ready_for_validation`,
-`ready_for_acceptance`, and `completed`) create wakeups. The host adapter maps
-those records to `send_message_to_thread`; it must acknowledge delivery, while
-the Lead still performs the normal snapshot, diff, artifact, and contract
-checks.
-The MCP server and its blackboard core are packaged together inside the plugin;
-the installed cache must not depend on a sibling `.pi/blackboard` path.
-The plugin also supplies `$pi-team-lead`, which carries this complete launch
-and supervision workflow into Codex sessions opened above the repository.
+Task process evidence lives under `groups/<group>/tasks/<task>/`. Writing a document is not a handoff: `team_submit` stores an immutable snapshot and creates successor work atomically. Successful submissions return an `ok:true` receipt; rejections do not complete work. Runtime-injected identity and `work_id` bind work to the current task and role. Review evidence belongs in `review-NN/`; it does not overwrite Executor verification. Messages and unfinished-work alerts are durable, and new messages steer work at tool boundaries.
 
-Publishing a Blackboard task only publishes the Lead-owned objective; it does not
-start Pi roles. The Lead uses the stable entrypoint for publication and then
-explicitly launches the pair:
+## Module services and integration
 
-```powershell
-.\pi-team.cmd publish .\plans\<task-id>-task.md
-.\pi-team.cmd validate .\plans\<task-id>-task.md
-.\pi-team.cmd start .\plans\<task-id>-task.md
-```
+Coordinator can use structured `team_service` actions to describe configured services, inspect status, and start or stop a named service. The project declares managed services in `.pi/services.json` as executable-plus-argument specifications, with optional working directory, environment-variable references, declared ports and loopback health check. An external dependency may instead declare `external: true`, a description and optional loopback health URL; it is reported as unowned and cannot be started or stopped by Pi Team. If an external declaration replaces a currently running managed service, its PID-verified runtime record remains inspectable and stoppable so the old process can be retired safely. Arbitrary shell command strings and free-form environment values are not accepted. Development mode uses the group worktree; review mode exports the registered delivery commit to an isolated snapshot and checks that snapshot for drift. Runtime records process identity, logs and data under its common runtime directory. If Windows taskkill fails under host load, an installed PowerShell 7 provides a native .NET process-tree fallback after creation-time verification; absent or failed fallback remains an explicit error.
 
-`publish` creates the matching active task or aligns its Lead-owned name and
-description with the current contract. `start` checks that the matching
-Blackboard task already exists and is active.
-It snapshots the formal contract under the shared Pi Team state root, binds
-stable Pi session IDs, disables ambient extensions and skills, and loads only
-the role's explicit tools, private skill, and extensions. The Lead then watches
-Blackboard events; Agent events never replace review or acceptance.
+If the service manager exits unexpectedly, `service-recover` (or Lead's `team_service_recover`) removes its operation lock only after verifying that the recorded owner process has exited or its PID has been reused. Live or unreadable locks remain for inspection.
 
-Active roles inherit the stable shared context from `AGENTS.md`. The launcher
-adds a compact role-specific task context at `start`, `research`, and `resume`
-so agents receive the objective, context, acceptance results, recommended reads,
-and validation entrypoints before their first repository exploration. Task-specific
-context is generated at runtime and is not added to reusable prompts or skills.
+Finalization reads `.pi/project.json` from the target project for an explicit integration command (`integration.executable` and string-array `integration.args`). Lead acceptance is required before finalization; it merges the reviewed task branch into the clean target branch (concurrent Lead changes may contain group definitions only), runs the configured integration command, and returns the fixed group worktree to its idle branch. Service processes for the group are stopped during finalization. If integration fails after merge, the merged state is retained for inspection and retry. Do not claim integration tests ran when the configured command was skipped or absent.
 
-## Formal contract and closure
+## Runtime and operations
 
-New task contracts use JSON `version: 3`. A v3 contract contains the task
-objective, optional explanatory context, two to five observable acceptance
-results, explicit `base_ref`, branch, and worktree fields, and optional
-deliverable labels. It does not contain file scope lists, role delegations,
-capability declarations, criterion owners, or artifact mappings. Existing v2
-contracts are historical material and are not automatically migrated.
+### Joint candidates for parallel groups
 
-`inspect <task-id>` reports the actual diff, tests, artifacts, processes,
-Blackboard observations, and reusable-content checks. It does not decide
-whether a change is out of scope. The Lead makes that decision after reading
-the report, then `accept <task-id> <acceptance-file>` records one decision with
-a rationale and optional inspect report reference. A task that cannot be
-accepted uses `close-incomplete <task-id> <closure-file>` with a reason and
-next step; criterion IDs and artifact mappings are not required.
+Lead may assign distinct groups tasks carrying the same optional `integration_id`, all starting from the exact same committed baseline. Coordinator-to-Coordinator messages are addressed to the recipient's active task; `source_task_id` preserves the sender's task identity. This allows different task IDs to exchange interface questions and wake their recipients.
 
-`reconcile` is limited to legacy state and requires an explicit `accepted` or
-`incomplete` outcome; it never infers historic success.
-After acceptance, `finalize <task-id>` is the single delivery operation: it
-creates the integration commit, merges the task branch, runs the integration
-tests, reclaims owned Terminal resources, removes the worktree and merged
-branch, synchronizes the GitHub issue, and archives Blackboard only after those
-steps succeed. A blocked finalizer preserves the task evidence and returns a
-retryable JSON status.
+After the member tasks pass code and documentation review, `integration-create <json>` builds a separate candidate worktree. Its descriptor supplies `integration_id`, at least two `task_ids` from different groups, an independent `verification_group_id`, and an absolute candidate `worktree`. `integration-inspect <id>` returns the exact candidate commit and tree. Assign independent evaluation with the same integration ID and `verification_snapshot: {"integration_id":"...","commit":"...","tree":"..."}` from that manifest. Evaluation checks this fixed joint candidate and keeps its tests and evidence in its own worktree. Lead accepts the member deliveries and independent evaluation, then runs `integration-finalize <id> <json>` with `verification_task_id`. The matching MCP tools are `team_integration_create`, `team_integration_inspect` and `team_integration_finalize`.
 
-Before a GitHub issue becomes a task, `preflight <issue-number>` creates a
-redacted proposal and records the issue state and current `develop` revision.
-The Lead must still verify the behavior on `develop`; issue state alone is not
-proof that a defect remains.
+Evaluation may start alongside the implementing groups to prepare independent reference tests. Once the candidate exists, Lead uses `integration-bind <id> <verification-task-id>` / `team_integration_bind` before evaluation's first delivery. This records the exact immutable snapshot and notifies its Coordinator. Binding an already delivered task or replacing an existing different binding is refused.
 
-The plugin's MCP server is local stdio and has no authentication flow, so
-`/mcp` may label authentication as unsupported. That label is expected. A
-connected server must still become ready and expose its tools; if it does not,
-the stable `publish`, `validate`, and `start` commands remain available while
-live watching and the task-lane UI are unavailable.
+Joint integration requires the exact reviewed commits, unchanged candidate and Lead baseline, explicit independent verification binding, and the configured mandatory integration command. It preserves the original single-task finalizer's target-drift guard. Current implementation and live-provider verification limits remain recorded in `implementation_notes/GROUP-EFFICIENCY.md`.
 
-## Runtime identity and state
+Role-facing `team_read` returns current work cards with canonical submission paths and rounds, new unsettled messages, and a versioned group/task contract. The contract is included on first use, after compaction, after identity changes or with `refresh_context:true`; `detail:true` requests the full diagnostic projection. Routine per-turn system context contains current identity, work and version references without historical ACK bodies. These projections do not change SQLite authority or submission inbox barriers.
 
-The launcher injects the complete runtime identity for every Executor,
-Validator, and Researcher process: `PI_TEAM_TASK_ID`, `PI_TEAM_ROLE`,
-`PI_TEAM_AGENT_ID`, `PI_TEAM_WORKTREE`, `PI_TEAM_STATE_ROOT`, and
-`PI_TEAM_SCOPE_ID`. `start` uses the persisted Executor/Validator identities,
-`resume` reuses those identities and session IDs, and `research` creates a
-temporary Researcher identity for the same task scope.
+An explicit provider `AccountQuotaExceeded` is recorded separately from an ordinary 429, including its reset time when the provider supplies an unambiguous time zone. `group-resume` refuses to clear that fault or launch calls before the known reset. A reset time is a provider estimate, not proof that quota has recovered; inspect the retained error and explicitly resume after it. Native Pi retry policy is unchanged. Work items, branches and session history remain intact during provider faults.
 
-`PI_TEAM_STATE_ROOT` is always `<git-common-dir>/pi-team/v1`. A worktree's
-`.git` entry may be a pointer file rather than a directory, so callers must
-never construct state paths by appending to `<worktree>/.git`; the launcher
-resolves Git's common directory and validates that the state root is a
-directory before starting a process.
+Blackboard shows a fixed Coordinator/Executor/Validator card for each registered group. Cards display the actual session model, OS-observed process state, and the last parsed model `current_state` with its receipt time; they do not infer current work or completion. Stopped sessions retain their last activity. A live PID without a matching recorded process-start identity is shown as unconfirmed. New session registrations record that identity; historical records are not backfilled. Responsibilities are expandable, and refresh errors preserve the last successful view with an explicit stale-data warning. A role-configuration mismatch is displayed without launching replacement roles.
 
-## Extension isolation
+Changing `.pi/roles.json` changes the shared role version. Tool, skill, prompt or responsibility changes require `group-init` and fresh acknowledgements. For a provider/model-only change, Lead may use `group-provider-migrate <group> <exact-prior-roles-json>` after all three role processes have stopped. The operation verifies the exact prior role-version provenance against unchanged prompts/skills, checks that only provider/model fields changed, and checks process identity (a reused PID is detached from the registration without being killed). It records the exact prior source and session records in a durable migration receipt, updates provider/model in persisted configs, preserves session IDs and conversation paths, clears stale PID registrations and provider-fault markers, and creates no onboarding acknowledgements. Only roles with open work receive a migration resume notice; unassigned roles get no migration-only wakeup, and unrelated peer messages remain intact. It can preserve an active task and its work. Then `group-resume` continues that work under the new provider/model. Unknown or live matching process identities reject migration. Updating the file alone does not replace models in persisted sessions.
 
-All three role definitions disable ambient extensions and load their required
-extensions explicitly. Only Researcher loads `pi-web-access`; Executor and
-Validator neither load its provider nor allowlist its tools.
+Runtime authority is SQLite under `<git-common-dir>/pi-team-runtime/v2`; Markdown process evidence remains in Git. Registered group definitions, task records, live sessions and completed tasks are distinct facts. Inspect inventory and persisted session state before reporting that a group is registered or running. Provider/model connection probes do not alter `.pi/roles.json` or authorize new tasks.
 
-See `ADR/0002-lead-subagent-collaboration-protocol.md` for collaboration rules
-and `ADR/0003-stable-pi-team-entrypoint.md` for the lifecycle contract.
+Use the native Windows entrypoint `pi-team.cmd` and the v2 protocol in this checkout. The `develop` branch now uses the Coordinator/Executor/Validator v2 runtime; do not combine historical v1 Researcher/Blackboard/contract-ACK instructions with v2. Finish or explicitly close v1 tasks with the pre-cutover checkout before cutover; v2 does not migrate active v1 work. `pi-team.cmd doctor` checks local prerequisites and is not a live provider check. `pi-team.cmd blackboard [port]` starts an optional read-only local status page; it observes definitions and runtime records but does not create tasks, call models or authorize transitions. The Lead MCP tools include group registration/update/sync, durable send/inbox/wait/inspect/accept/finalize operations; there is no autonomous Lead desktop-chat wakeup.
 
-## Automatic compression and checkpoint resume
-
-The Pi Team compression extension is loaded by every active role. It reads
-the project-level runtime configuration at `.pi/team-runtime.json` and
-applies the effective role policy (with role-card overrides) at session
-start.
-
-The defaults are:
-
-| Field | Default | Range |
-| --- | --- | --- |
-| `compression.threshold_percent` | `0.5` | `(0, 1]` |
-| `compression.max_tool_calls_per_segment` | `0` (disabled) | `[0, 1000]` |
-| `compression.max_compact_retries` | `1` | `[0, 5]` |
-| `compression.output_token_limit` | `65536` | `[1024, 1048576]` |
-
-Role overrides are validated against the same ranges and may only be set on
-the three active roles (`researcher`, `executor`, `validator`). Sensitive
-fields (`api_key`, `token`, `auth`, `password`, `secret`) and host-absolute
-paths are rejected at load time. The `output_token_limit` keeps the
-existing 64K output budget effective.
-
-Behavior:
-
-- After every agent turn, the extension reads `ctx.getContextUsage()`. When
-  the usage percentage crosses the configured threshold and a retry budget
-  remains, it triggers `ctx.compact()` with a custom instruction that
-  preserves the frozen contract, the latest artifact paths, and the open
-  implementation decisions.
-- A per-segment tool-call counter can enforce `max_tool_calls_per_segment` when
-  set to a positive integer. The default `0` disables this cap. A successful
-  `session_compact` resets the counter; a `session_before_compact` event checks
-  the retry budget and refuses further retries when that cap is reached.
-- When a limit stops the role, the extension writes a credential-free,
-  versioned checkpoint to `<state_root>/checkpoints/task-checkpoint-<task>-<role>-<iso>.json`
-  and persists the stop reason, frozen policy, stats, and checkpoint path
-  into the task state at `<state_root>/<task_id>.json`.
-
-Checkpoints never contain API keys, OAuth tokens, or the previous session
-transcript. They carry:
-
-- the frozen compression policy,
-- the frozen provider/model,
-- the resource-limit stop reason and stats,
-- the contract snapshot path,
-- the worktree-relative `injected_artifacts` list the resume command must
-  inject.
-
-Resource-limit stops never auto-create a new session. Lead must explicitly
-resume from the checkpoint:
-
-```powershell
-.\pi-team.cmd resume-checkpoint <task-id> <checkpoint-path> <executor|validator>
-```
-
-The command mints a fresh session ID, reuses the frozen provider/model
-captured in the task state, and injects only the contract snapshot, the
-checkpoint summary, and the listed worktree-relative artifacts. The old
-session ID is recorded as `previous_session_id` for traceability.
-
-Inspect the most recent checkpoint path without launching a session:
-
-```powershell
-Get-Content <state_root>\<task-id>.json | Select-String last_checkpoint_path
-```
-
-## Lead-owned project documents
-
-`ADR/0002-lead-subagent-collaboration-protocol.md` is the normative
-collaboration contract. `architect.md`, `goal.md`, and `project_state.md` are
-Lead-owned summaries and must be realigned when architecture, operational
-goals, or project state changes; they are snapshots, not runtime logs. Task
-findings and defects belong in the task's GitHub Issue or review evidence once
-that repository integration is available.
+See [ADR 0009](ADR/0009-persistent-group-workflow.md) for normative workflow rules, [architect.md](architect.md) for the stable system view, and [tests/MIGRATION.md](tests/MIGRATION.md) for the v1-to-v2 test boundary. The current deterministic and real-provider verification outcomes and their limits are recorded in project_state.md. Original-project deployment and v1 cutover remain separate work.

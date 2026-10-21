@@ -1,100 +1,13 @@
-# Minimal Development Loop — High-level Architecture
+# Pi Team architecture
 
-This document is the project-level architecture for the routine
-development path after
-`ADR/0002-lead-subagent-collaboration-protocol.md`, the sole normative
-collaboration protocol. It is **not** the agent role file
-(`.pi/agents/architect.md`); the active agent surface is
-`.pi/agents/{researcher.md, executor.md, validator.md}`.
+ADR/0009-persistent-group-workflow.md is normative. A group definition in `groups/<id>/group.md` is the durable module configuration; runtime records project its committed responsibility into process and task state. It binds Coordinator, Executor and Validator to one fixed worktree and permits at most one active task. Lead owns definitions, objectives, acceptance and integration. Coordinator handles task decisions and outside contacts within Lead's scope; Executor implements and plans when assigned; Coordinator chooses direct, plan-only, or one adversarial plan review; Validator reviews delivered code, and aligns explicitly assigned module Markdown after code review passes. Coordinator independently checks that documentation alignment before sending final delivery. Lead alone accepts and integrates.
 
-## Roles and responsibilities (active path)
+Group creation schedules finite onboarding: actual Executor and Validator sessions submit responsibility acknowledgements, then Coordinator submits its acknowledgement after both. The onboarding runner stops all three sessions; it does not start business work. Assigned work starts role sessions. A new definition waits for a safe task boundary, then resets all role sessions and requires fresh acknowledgements under a new definition epoch. The fixed worktree persists. Lead changes and commits the definition in the target checkout; `group-sync` fast-forwards a clean idle group worktree from the clean Lead baseline.
 
-Three active roles plus the Lead form the minimal loop:
+The SQLite group runtime is the task/work/message authority. Group identity and definition epoch are stable within a definition; task identity and generation change at task boundaries. Markdown process evidence enters Git; runtime queues, session identity, document snapshots and recovery records stay in the common directory. Each local delivery commit gets a D-number. Code review and acceptance refer to that exact code version. Documentation review records both the code and aligned documentation commits.
 
-| Role | Surface | Skill | Artifact root |
-| --- | --- | --- | --- |
-| Lead (Codex) | user-facing session | n/a | `ADR/`, `architect.md`, `goal.md`, `project_state.md` |
-| Researcher | `.pi/agents/researcher.md` | `answer-research-question` | `research/<task-id>-<slug>.md` |
-| Executor | `.pi/agents/executor.md` | `execute-delegated-task` | `implementation_notes/<task-id>.md` |
-| Validator | `.pi/agents/validator.md` | `validate-delegated-task` | `failures/<task-id>-<finding-id>.md` |
+Pi loads one explicitly selected group extension and private role skill. `.pi/roles.json` supplies tool/provider/model settings. The extension handles durable inbox dispatch, explicit document handoff, group services, compaction and display-only `current_state` text. `team_service` gives Coordinator structured describe/status/start/stop actions for services declared in `.pi/services.json`; review mode uses an isolated export of the registered delivery. `.pi/project.json` specifies the target project's integration executable and argument array. Intercom is not required for correctness. Blackboard and contract-ACK tools are not loaded in role sessions.
 
-## Researcher provider and tool surface
+The Windows wrapper invokes the Node lifecycle service. Lead MCP includes group inventory/create/update/init/sync as well as send/inbox/wait/inspect/accept/finalize. Finalization integrates accepted changes, runs configured project integration and preserves the fixed group worktree and role sessions. Old v1 files remain historical and are not loaded by v2 entrypoints.
 
-The bounded Researcher is wired to the installed local web-access
-provider at `.pi/npm/node_modules/pi-web-access/index.ts`
-(via `subagentOnlyExtensions`). The Researcher exposes only:
-
-- `web_search`
-- `fetch_content`
-- `get_search_content`
-- `source_check`
-
-The Deep Research MCP tools (`research_run`,
-`deep_research_task`, `deep_research_review`,
-`research_synthesis_input`, `research_report_artifact`) are
-**not** exposed to the active Researcher. Multi-question research
-must be decomposed into sequential Researcher questions or escalated
-to Lead via `contact_supervisor` with `reason: "need_decision"`.
-
-## Executor scope
-
-The Executor operates inside an isolated worktree assigned by Lead,
-maintains `implementation_notes/<task-id>.md`, and remains allocated
-through the complete validation/fix cycle. At a slice boundary it reports
-`READY_FOR_VALIDATION`, `FIX_READY`, or `READY_FOR_ACCEPTANCE` and becomes
-idle; it does not stop. Executor does **not** refactor unrelated code,
-edit tests to hide failures, or commit without Lead authorization.
-
-## Validator scope
-
-The Validator is allocated with its paired Executor and waits idle until
-`READY_FOR_VALIDATION` or `FIX_READY`. Before implementation, it comments on
-the Executor's proposed module contract and ACKs the complete body. After the
-contract freezes, Validator independently writes and runs black-box tests
-from public behavior without reading the target implementation or its Git
-diff. It records real failures and never edits production code or normative
-documentation.
-
-## Communication
-
-- Each active role loads its matching runtime-policy extension under
-  `.pi/communication/extensions/{researcher,executor,validator}.ts`.
-- Direct peer exchange is asynchronous and limited to
-  `Researcher <-> Executor <-> Validator`. Researcher and Validator
-  cannot address each other directly.
-- Executor and Validator pairing is assigned by Lead. The role-level
-  ACL proves only the allowed role pair, not same-task identity.
-- The pair persists through validation/fix cycles. Each completed slice is
-  reported to Lead before the role returns to an event-driven idle state;
-  only Lead acceptance triggers reclamation.
-- Routine peer results can travel directly. Material risk, a changed
-  downstream assumption, or a decision request is mirrored to Lead
-  with `contact_supervisor` using `need_decision`, `progress_update`,
-  or `interview_request`.
-- Runtime-policy tests prove policy behavior and extension wiring.
-  They do not, by themselves, prove causal use of the transport.
-- Agents do not create Scout roles, repeat unbounded discovery, or split
-  unassigned subtasks. Lead owns the objective and scope; Executor and
-  Validator negotiate the module contract within those boundaries.
-
-## Agent Blackboard
-
-The repo-local `plugins/agent-blackboard/` is the Lead's observability
-surface. Its MCP tools manage Lead-owned task metadata and watch append-only
-Agent events stored at `<git-common-dir>/harness-blackboard/v1/`. The active Pi
-roles load `.pi/communication/extensions/blackboard-update.ts`; runtime
-identity, sequence, worktree, and observation time are not agent-controlled.
-The Blackboard displays current task objective and activity but does not
-authorize work, prove completion, or replace Lead inspection and acceptance.
-The read-only `pi-team.cmd inspect` command gathers contract, diff, artifact,
-test, process, issue, and Blackboard evidence. The `pi-team.cmd finalize`
-command executes the Lead's accepted decision; Blackboard projection lag is
-returned as a warning rather than a close gate.
-The UI requests PiP when available and otherwise renders inline.
-
-## Legacy
-
-The legacy five-agent material and the Deep Research substrate are
-preserved under `.pi/legacy/`. See `.pi/legacy/PROVENANCE.md` for the
-path-to-path provenance manifest. The canonical repository
-(`D:\Coding\Harness\Pi-team`) is unchanged.
+RoleTools binds identity to each agent turn and emits explicit receipts. Inbox presentation and handling completion have separate timestamps; steering delivers new messages at safe tool boundaries, and submission checks the inbox atomically. Frozen delivery files are separate from independent review evidence. An unfinished handoff emits a deduplicated Coordinator alert and can be resolved through existing work rather than a parallel state machine. This architecture description records intended design; implementation and cutover remain under verification.

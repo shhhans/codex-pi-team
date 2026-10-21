@@ -1,63 +1,9 @@
 # Goal
 
-The stable Windows-native entrypoint is `pi-team.cmd`; its operational
-contract is recorded in `ADR/0003-stable-pi-team-entrypoint.md` and the
-implementation plan in `plans/pi-team-stable-entry.md`.
+Build reliable persistent module groups with simple responsibilities and durable handoffs. Each Lead-owned group has a committed `groups/<id>/group.md` definition, one fixed worktree and Coordinator, Executor and Validator roles. Registration performs finite real-session onboarding: Executor and Validator explicitly acknowledge the definition and their role responsibilities; Coordinator acknowledges only after both, and Lead receives that receipt. Onboarding sessions stop without starting business work. New definitions take effect at a safe task boundary, reset all three role sessions and require fresh acknowledgements.
 
-`ADR/0002-lead-subagent-collaboration-protocol.md` is the sole normative
-collaboration protocol; this file states its operational goal.
+One task is active per group. Coordinator scopes delivery within Lead's objective; Executor implements and plans when assigned; Coordinator chooses a proportionate direct, plan-only, or single plan-review route. Validator independently reviews each code delivery. After code passes, Validator aligns explicitly assigned module Markdown and Coordinator independently checks the alignment and checklist. Lead retains acceptance and integration authority. Different groups may work concurrently.
 
-The routine development path runs as a minimal three-agent loop:
+A lost notification, repeated submission or process restart must not lose work or approve the wrong code version. Runtime receipts and SQLite handoffs are authoritative; display text is not. Process documents are organized by group and task and preserved in Git. The group worktree stays fixed and synchronizes from Lead's committed baseline only at an idle, clean boundary. Coordinator manages declared project services through structured tools, and Lead finalization runs the target project's explicitly configured integration command.
 
-- **Researcher** answers exactly one bounded research question per
-  Lead-delegated task. It uses the user-shared, role-scoped web-access
-  provider (`pi-web-access`) for `web_search`, `fetch_content`,
-  `get_search_content`, and `source_check`. It does not implement
-  code, propose architecture, or chain multiple research questions.
-  It persists one research artifact per task at
-  `research/<task-id>-<slug>.md`.
-
-- **Executor** implements exactly one Lead-delegated change inside
-  the assigned isolated worktree. It uses the smallest coherent
-  change, runs the project's validation commands, and persists
-  `implementation_notes/<task-id>.md`. It reports each completed slice
-  and becomes idle while remaining allocated through validation/fix. It does
-  not refactor unrelated code, edit tests to hide failures, or
-  commit without Lead authorization.
-
-- **Validator** is allocated one-to-one with Executor and waits idle for
-  `READY_FOR_VALIDATION` or `FIX_READY`. It helps freeze the module contract,
-  writes and runs independent black-box tests from that contract, and records
-  real failures at `failures/<task-id>-<finding-id>.md`. It does not inspect
-  the target implementation or edit production code.
-
-- **Lead (Codex)** is the user-facing session that owns canonical
-  state; owns each task's ID, name, description, scope, done criteria,
-  pairing, acceptance, and reclamation; and arbitrates decisions with
-  the User.
-
-Lead decisions are supported by the read-only `inspect` evidence command and
-executed by the deterministic `finalize` command. Inspection informs Lead but
-does not accept a task; finalization performs the accepted integration and
-cleanup without re-deciding from lagging Blackboard projections.
-
-The path is fully traceable: every task has an ID supplied by Lead,
-every artifact lands at a known project-root path, and every peer
-exchange goes through the shared intercom implementation with
-runtime policy enforcement. Application artifacts use human-readable
-Lead task IDs and no content hashes. Transport correlation UUIDs remain
-an internal intercom mechanism and are not application artifact IDs.
-There is no Deep Research MCP, no cross-worktree scope, no
-production-code edits by Validator, no normal stop/resume handoff, and no
-commits without Lead authorization. Executor and Validator remain alive
-until Lead accepts the task and reclaims the pair.
-
-Runtime packages are installed once with `pi-team setup`; project worktrees do
-not download their own copies. All Pi roles reject ambient extensions, and
-only Researcher loads `pi-web-access`.
-
-The Lead also has a local Agent Blackboard observability plane. It keeps task
-metadata under Lead control and appends injected-identity Agent activity under
-`<git-common-dir>/harness-blackboard/v1/`, shared across worktrees. The
-Blackboard helps the Lead notice scope drift and waiting/blocking states; it is
-not an authorization, completion-proof, or communication mechanism.
+Do not restore formal debate, Blackboard lifecycle gates, a second plan review, or autonomous Lead wakeup infrastructure in this version. Keep protocol implementation, isolated-copy evidence, original-project provisioning and cutover claims distinct. Current bounded deterministic and real-provider results are recorded in project_state.md; they do not prove original-project deployment or long-term unattended operation.
