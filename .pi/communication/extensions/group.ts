@@ -5,6 +5,7 @@ import { resolve, relative, isAbsolute } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { GroupStore, parseCurrentState } from '../../runtime/group-store.mjs';
 import { RoleTools } from '../../runtime/role-tools.mjs';
+import { turnContext } from '../../runtime/turn-context.mjs';
 import { onboardingState } from '../../runtime/group-onboarding.mjs';
 import { ServiceManager } from '../../runtime/service-manager.mjs';
 
@@ -51,7 +52,7 @@ export default function (pi: ExtensionAPI) {
   pi.on('turn_start', async () => { queuedSteering = false; });
   pi.on('tool_result', async () => { presentDuringTurn(); });
   pi.on('turn_end', async () => { presentDuringTurn(); });
-  pi.registerTool({ name: 'team_read', label: 'Read group work', description: 'Read the current task/generation, open work, messages and role sessions. Use returned task identity in mutations.', parameters: Type.Object({}), async execute() { return reply(roleTools.invoke('team_read')); } });
+  pi.registerTool({ name: 'team_read', label: 'Read group work', description: 'Read authoritative current work and new messages. Stable group/task context appears once per version; refresh_context requests it again. detail requests full diagnostic history and sessions. Use the returned work id and artifact_path for submission; runtime derives round and path.', parameters: Type.Object({ refresh_context: Type.Optional(Type.Boolean()), detail: Type.Optional(Type.Boolean()) }), async execute(_id, input) { return reply(roleTools.invoke('team_read', input)); } });
   pi.registerTool({ name: 'team_send', label: 'Send group message', description: 'Persist a question, answer, or decision. Same-group roles may communicate; only Coordinators contact Lead or other groups. This does not submit an artifact or finish work.', parameters: Type.Object({ to: Type.String(), group_id: Type.Optional(Type.String()), body: Type.String(), task_id: Type.Optional(Type.String()), generation: Type.Optional(Type.Integer()), refs: Type.Optional(Type.Array(Type.String())), reply_to: Type.Optional(Type.Integer()) }), async execute(_id, input) { return reply(roleTools.invoke('team_send', input)); } });
   pi.registerTool({ name: 'team_submit', label: 'Submit owned work', description: 'Atomically submit owned work; only ok:true receipt proves handoff. Use work_id from team_read. For onboarding use kind=onboarding and body acknowledging group and role responsibilities; no path or task required. Process kinds: task, plan, plan_review, implementation, code_review, documentation, documentation_review, delivery, resolution. Documentation reports: documentation-<round>-<revision>.md; Coordinator review: documentation-review-<round>-<revision>.md, verdict pass/changes_requested. Read current work and task for paths/versions.', parameters: Type.Object({ task_id: Type.Optional(Type.String()), generation: Type.Optional(Type.Integer()), work_id: Type.Optional(Type.Union([Type.Integer(), Type.String()])), kind: Type.String(), path: Type.Optional(Type.String()), body: Type.Optional(Type.String()), round: Type.Optional(Type.Integer()), commit: Type.Optional(Type.String()), verdict: Type.Optional(Type.String()) }), async execute(_id, input) { return reply(queuedSteering ? { ok: false, code: 'INBOX_PENDING', message: 'New inbox messages are queued for your next response. Reconsider before submitting.', next_action: 'read_messages_and_reconsider' } : roleTools.invoke('team_submit', input)); } });
   if (role === 'coordinator') pi.registerTool({ name: 'team_service', label: 'Manage configured service', description: 'Inspect/start/stop a named service from .pi/services.json. No arbitrary command input. Review mode exports the registered delivery commit to an isolated snapshot.', parameters: Type.Object({ action: Type.Union([Type.Literal('describe'), Type.Literal('status'), Type.Literal('start'), Type.Literal('stop'), Type.Literal('recover_lock')]), service_id: Type.Optional(Type.String()), mode: Type.Optional(Type.Union([Type.Literal('development'), Type.Literal('review')])) }), async execute(_id, input) {
@@ -77,7 +78,7 @@ export default function (pi: ExtensionAPI) {
   pi.on('agent_start', async () => { active = true; roleTools.begin(); turnFailed = false; turnGeneration = store.group(group).generation; turnEpoch = store.group(group).definition_epoch; store.updateSession(group, role, launch, { busy: true }); });
   pi.on('before_agent_start', async event => {
     const current = store.read(group, role);
-    return { systemPrompt: `${event.systemPrompt}\nCurrent group context (runtime authority): ${JSON.stringify({ group: current.group, task: current.task, work: current.work, lifecycle: onboardingState(store, group, role) })}` };
+    return { systemPrompt: `${event.systemPrompt}\nCurrent group context (runtime authority): ${JSON.stringify(turnContext(current, onboardingState(store, group, role), role))}` };
   });
   pi.on('tool_call', async event => {
     if (!['bash', 'edit', 'write'].includes(event.toolName)) return;
@@ -118,7 +119,7 @@ export default function (pi: ExtensionAPI) {
     compacting = true;
     const snapshot = store.read(group, role);
     store.updateSession(group, role, launch, { compact_summary: { task: snapshot.task, work: snapshot.work, saved_at: new Date().toISOString() } });
-    context.compact({ customInstructions: `Preserve group identity, active task/generation, open work, latest process-document references and unresolved decisions. Drop old tool transcripts. Resume with team_read. Current durable work: ${JSON.stringify(snapshot.work)}`, onComplete: () => { compacting = false; store.updateSession(group, role, launch, { compacted_at: new Date().toISOString() }); }, onError: () => { compacting = false; compactFailures++; context.ui.setStatus('pi-team-health', 'Compact failed; session and worktree preserved.'); } });
+    context.compact({ customInstructions: `Preserve group identity, active task/generation, open work, latest process-document references and unresolved decisions. Drop old tool transcripts. Resume with team_read. Current durable work: ${JSON.stringify(snapshot.work)}`, onComplete: () => { roleTools.invalidateReadContext(); compacting = false; store.updateSession(group, role, launch, { compacted_at: new Date().toISOString() }); }, onError: () => { compacting = false; compactFailures++; context.ui.setStatus('pi-team-health', 'Compact failed; session and worktree preserved.'); } });
   });
   pi.on('message_end', async (event, context) => {
     if (event.message.role !== 'assistant') return;

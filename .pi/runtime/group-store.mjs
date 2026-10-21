@@ -116,6 +116,12 @@ export class GroupStore {
     return this.tx(() => {
       const g = this.group(group); if (g.archived || g.active_task) throw Error('group is archived or already has a task'); this.assertIdle(group);
       const t = { task_id: id(input.task_id), group_id: group, generation: g.generation + 1, objective: required(input.objective, 'objective'), acceptance: input.acceptance, documentation_paths: documentPaths(input.documentation_paths), documentation_checklist: input.documentation_checklist || ['Check module documentation against the delivered implementation; explain any no-change result.'], base_ref: required(input.base_ref, 'base_ref'), base_commit: git(g.worktree, 'rev-parse', 'HEAD'), branch: required(input.branch, 'branch'), outcome: 'pending', round: 0, delivery: null, review: null, finalization: null };
+      if (input.integration_id != null) t.integration_id = id(input.integration_id);
+      if (input.verification_snapshot != null) {
+        const snapshot = input.verification_snapshot;
+        if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) || snapshot.integration_id !== t.integration_id || !/^[a-f0-9]{40,64}$/.test(snapshot.commit || '') || !/^[a-f0-9]{40,64}$/.test(snapshot.tree || '')) throw Error('verification_snapshot requires matching integration_id and exact Git commit/tree');
+        t.verification_snapshot = { integration_id: t.integration_id, commit: snapshot.commit, tree: snapshot.tree };
+      }
       if (!Array.isArray(t.acceptance) || !t.acceptance.length || t.acceptance.some(x => typeof x !== 'string' || !x.trim())) throw Error('acceptance must contain observable results');
       if (!Array.isArray(t.documentation_checklist) || !t.documentation_checklist.length || t.documentation_checklist.some(x => typeof x !== 'string' || !x.trim())) throw Error('documentation_checklist must contain observable checks');
       if (git(g.worktree, 'branch', '--show-current') !== t.branch || git(g.worktree, 'status', '--porcelain')) throw Error('task requires its clean, explicitly selected branch');
@@ -205,7 +211,9 @@ export class GroupStore {
         if (to !== 'lead' && !ROLES.includes(to)) throw Error('invalid recipient');
         if (target !== actor.group_id && (actor.role !== 'coordinator' || to !== 'coordinator')) throw Error('cross-group communication requires Coordinators');
       }
-      return { message_id: this.notice(target, to, { type: 'message', from_group: actor.group_id, from_role: actor.role, body: input.body, refs: input.refs || [], reply_to: input.reply_to || null, task_id: actor.task_id || null }) };
+      // Inbox eligibility belongs to the recipient's task. Keep the sender's
+      // task separately; different groups deliberately have different task IDs.
+      return { message_id: this.notice(target, to, { type: 'message', from_group: actor.group_id, from_role: actor.role, source_task_id: actor.task_id || null, body: input.body, refs: input.refs || [], reply_to: input.reply_to || null, task_id: this.group(target).active_task || null }) };
     });
   }
   artifact(task, kind, round = 0) { return unpack(this.db.prepare('SELECT data FROM artifacts WHERE task_id=? AND kind=? AND round=?').get(task, kind, round)); }
@@ -226,7 +234,7 @@ export class GroupStore {
       if (rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel)) throw Error('artifact escapes worktree');
       const content = required(readFileSync(full, 'utf8'), 'artifact content');
       const stored = this.artifact(t.task_id, input.kind, ['documentation', 'documentation_review'].includes(input.kind) ? round * 10000 + docsRevision : round);
-      if (stored) { if (stored.content !== content || input.kind !== 'documentation' && stored.commit !== (input.commit || null) || stored.verdict !== (input.verdict || null)) throw Error('submitted artifact is immutable'); return { ...stored, replay: true }; }
+      if (stored) { if (stored.content.replaceAll('\r\n', '\n') !== content.replaceAll('\r\n', '\n') || input.kind !== 'documentation' && stored.commit !== (input.commit || null) || stored.verdict !== (input.verdict || null)) throw Error('submitted artifact is immutable'); return { ...stored, replay: true }; }
       const resolutionKind = this.db.prepare("SELECT kind FROM work WHERE task_id=? AND owner='coordinator' AND status='open' AND kind IN (?,?)").get(t.task_id, `blocked-${round}`, `revision-${round}`)?.kind;
       const workKind = ['documentation', 'documentation_review'].includes(input.kind) ? `${input.kind}-${round}-${docsRevision}` : input.kind === 'implementation' ? `implementation-${round}` : input.kind === 'code_review' ? `code_review-${round}` : input.kind === 'resolution' ? resolutionKind : input.kind === 'delivery' ? `delivery-${round}` : input.kind;
       const work = this.db.prepare("SELECT * FROM work WHERE task_id=? AND kind=? AND owner=? AND status='open'").get(t.task_id, workKind || '', actor.role);
@@ -241,7 +249,7 @@ export class GroupStore {
         const commit = required(input.commit, 'commit'); if (commit !== git(g.worktree, 'rev-parse', '--verify', `${commit}^{commit}`) || commit !== git(g.worktree, 'rev-parse', 'HEAD')) throw Error('delivery must identify current full HEAD commit');
         git(g.worktree, 'merge-base', '--is-ancestor', t.base_commit, commit);
         const uncommitted = git(g.worktree, 'status', '--porcelain'); if (uncommitted) throw Error('delivery requires a clean committed worktree');
-        if (git(g.worktree, 'show', `${commit}:${file}`) !== content.trim()) throw Error('implementation evidence is not committed');
+        if (git(g.worktree, 'show', `${commit}:${file}`).replaceAll('\r\n', '\n') !== content.replaceAll('\r\n', '\n').trim()) throw Error('implementation evidence is not committed');
         this.assertEvidence(g, t, true);
         t.round = round; t.delivery = { id: `D${round}`, commit, round }; t.review = null; t.documentation = null; t.docs_revision = 1;
       }

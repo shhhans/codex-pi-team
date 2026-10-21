@@ -139,8 +139,14 @@ function startTaskUnlocked(store, group, input) {
   else git(g.worktree, 'switch', '-c', branch, g.transition.base_commit);
   return store.startTask(group, { ...input, branch });
 }
-export function promptFor(group, role) {
-  return `You are the persistent ${role} of group ${group.group_id}. Group responsibility: ${group.applied_definition?.description || 'read groups/' + group.group_id + '/group.md'}. Worktree: ${group.worktree}. Read AGENTS.md and your selected private skill. Use team_read to discover onboarding or the active task and generation. Never assume an old task is still current. Prefix assistant text with [current_state: "a concrete description"]. Submit process documents through team_submit; writing a file alone does not hand off work. End each completed turn idle; the runtime wakes you for new work. Do not poll or stop the group. Native Windows command syntax applies to bash; use PowerShell examples and dedicated read/grep/find tools. Only Lead accepts and merges.`;
+export function promptFor(group, role, startup = null) {
+  const action = startup ? startup.work.length
+    ? `Startup assignment: ${JSON.stringify(startup.work.map(({ id, kind }) => ({ id, kind })))}. Use team_read for the current assignment and context.`
+    : startup.messages?.some(message => !message.read_at)
+      ? 'Unsettled messages are available. Use team_read to handle them; if no work is assigned, reply only when necessary and end idle.'
+      : 'No work is assigned to you at startup. End idle and wait for a runtime work or peer-message notification. Do not inventory files, read old tasks, or probe implementation while waiting.'
+    : 'Use team_read to discover onboarding or the active task and generation.';
+  return `You are the persistent ${role} of group ${group.group_id}. Group responsibility: ${group.applied_definition?.description || 'read groups/' + group.group_id + '/group.md'}. Worktree: ${group.worktree}. Read AGENTS.md and your selected private skill. ${action} Never assume an old task is still current. Prefix assistant text with [current_state: "a concrete description"]. Submit process documents through team_submit; writing a file alone does not hand off work. End each completed turn idle; the runtime wakes you for new work. Do not poll or stop the group. Native Windows command syntax applies to bash; use PowerShell examples and dedicated read/grep/find tools. Only Lead accepts and merges.`;
 }
 export function roleArgs(store, group, role, sessionId, root = sourceRoot) {
   const c = store.session(group.group_id, role)?.config || roleConfig(root)[role]; if (!c) throw Error('unknown role');
@@ -154,7 +160,9 @@ export function roleArgs(store, group, role, sessionId, root = sourceRoot) {
   if (role === 'coordinator') {
     if (existsSync(web)) args.push('--extension', web);
   }
-  const prompt = join(store.root, `${group.group_id}-${role}-prompt.txt`); writeFileSync(prompt, promptFor(group, role)); args.push(`@${prompt}`); return args;
+  const startup = store.read(group.group_id, role);
+  startup.work = [...(onboardingState(store, group.group_id, role)?.work || []), ...startup.work];
+  const prompt = join(store.root, `${group.group_id}-${role}-prompt.txt`); writeFileSync(prompt, promptFor(group, role, startup)); args.push(`@${prompt}`); return args;
 }
 export async function launchGroup(store, groupId, options = {}) {
   assertOnboarded(store, groupId, sharedRoleVersion(options.sourceRoot || sourceRoot)); const g = store.group(groupId); definitionForGroup(store, groupId); assertNoLegacyConflict(store, g, g.idle_branch); if (g.archived) throw Error('group archived');
@@ -168,9 +176,11 @@ export async function launchGroup(store, groupId, options = {}) {
     const env = { ...process.env, PI_TEAM_PROJECT_ROOT: store.projectRoot, PI_TEAM_GROUP_ID: groupId, PI_TEAM_ROLE: role, PI_TEAM_LAUNCH_ID: launchId, PI_TEAM_SESSION_ID: sessionId, PI_TEAM_SOURCE_ROOT: options.sourceRoot || sourceRoot, PI_TEAM_ROLE_CONFIG: JSON.stringify(old?.config || roleConfig(options.sourceRoot || sourceRoot)[role]) };
     let child;
     if (options.headless) {
-      const payload = Buffer.from(JSON.stringify({ env: Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith('PI_TEAM_'))), cwd: g.worktree, exe: process.env.PI_CMD || 'pi.cmd', args })).toString('base64');
-      const script = `$d=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}'))|ConvertFrom-Json;foreach($p in $d.env.PSObject.Properties){[Environment]::SetEnvironmentVariable($p.Name,[string]$p.Value,'Process')};Set-Location -LiteralPath $d.cwd;& $d.exe @($d.args);exit $LASTEXITCODE`;
-      child = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env, cwd: g.worktree, windowsHide: true, stdio: 'ignore' });
+      const startup = store.read(groupId, role);
+      const descriptor = join(store.root, `${groupId}-${role}-${launchId}-rpc.json`);
+      const promptFile = args.at(-1).slice(1);
+      writeFileSync(descriptor, JSON.stringify({ env: Object.fromEntries(Object.entries(env).filter(([key]) => key.startsWith('PI_TEAM_'))), cwd: g.worktree, args: args.slice(0, -1), prompt: startup.work.length || startup.messages.some(message => !message.read_at) ? readFileSync(promptFile, 'utf8') : null, log: join(store.root, `${groupId}-${role}-${launchId}-rpc.jsonl`) }));
+      child = spawn(process.execPath, [join(options.sourceRoot || sourceRoot, 'scripts/group-role-runner.mjs'), descriptor], { env, cwd: g.worktree, detached: true, windowsHide: true, stdio: 'ignore' });
     } else {
       // wt may forward into an existing process, so transmit identity inside its child bootstrap.
       const payload = Buffer.from(JSON.stringify({ env: Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith('PI_TEAM_'))), cwd: g.worktree, exe: process.env.PI_CMD || 'pi.cmd', args })).toString('base64');
