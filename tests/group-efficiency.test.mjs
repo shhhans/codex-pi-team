@@ -7,6 +7,21 @@ import { git } from '../.pi/runtime/group-store.mjs';
 import { promptFor, startTask } from '../.pi/runtime/group-service.mjs';
 import { turnContext } from '../.pi/runtime/turn-context.mjs';
 
+test('invalid snapshot identity is rejected before creating a task branch or recovery transition', () => {
+  const f = fixture(); try {
+    const worktree = join(f.root, 'verification');
+    registerFixtureGroup(f.store, 'verification', worktree);
+    const input = { task_id: 'VERIFY', objective: 'verify joint candidate', acceptance: ['exact candidate verified'], base_ref: 'develop', integration_id: 'joint', verification_snapshot: { integration_id: 'different', commit: 'a'.repeat(40), tree: 'b'.repeat(40) } };
+    const branch = git(worktree, 'branch', '--show-current');
+    assert.throws(() => startTask(f.store, 'verification', input), /verification_snapshot/);
+    assert.equal(f.store.group('verification').transition, undefined);
+    assert.equal(f.store.group('verification').active_task, null);
+    assert.equal(git(worktree, 'branch', '--show-current'), branch);
+    input.verification_snapshot.integration_id = 'joint';
+    assert.deepEqual(startTask(f.store, 'verification', input).verification_snapshot, input.verification_snapshot);
+  } finally { f.cleanup(); }
+});
+
 test('per-turn authority retains current work and exact snapshot identity without repeating stable contracts or ACK bodies', () => {
   const snapshot = { integration_id: 'joint', commit: 'a'.repeat(40), tree: 'b'.repeat(40) };
   const state = { group: { group_id: 'model', worktree: 'D:/model', generation: 2, definition_epoch: 1, applied_definition: { description: 'large stable responsibility' } },

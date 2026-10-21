@@ -13,6 +13,16 @@ const unpack = row => row ? JSON.parse(row.data) : null;
 export const identifier = x => { if (typeof x !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(x) || x.endsWith('.') || /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(x)) throw Error('invalid Windows-safe identifier'); return x; };
 const id = identifier;
 const required = (x, name) => { if (typeof x !== 'string' || !x.trim()) throw Error(`${name} is required`); return x; };
+export function integrationMetadata(input) {
+  const metadata = {};
+  if (input.integration_id != null) metadata.integration_id = id(input.integration_id);
+  if (input.verification_snapshot != null) {
+    const snapshot = input.verification_snapshot;
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) || !metadata.integration_id || snapshot.integration_id !== metadata.integration_id || !/^[a-f0-9]{40,64}$/.test(snapshot.commit || '') || !/^[a-f0-9]{40,64}$/.test(snapshot.tree || '')) throw Error('verification_snapshot requires matching integration_id and exact Git commit/tree');
+    metadata.verification_snapshot = { integration_id: metadata.integration_id, commit: snapshot.commit, tree: snapshot.tree };
+  }
+  return metadata;
+}
 export function alive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
 export function parseCurrentState(text) {
   const match = /^\[current_state:\s*("(?:[^"\\]|\\.)*")\]\s*(?:\r?\n|$)/.exec(text);
@@ -116,12 +126,7 @@ export class GroupStore {
     return this.tx(() => {
       const g = this.group(group); if (g.archived || g.active_task) throw Error('group is archived or already has a task'); this.assertIdle(group);
       const t = { task_id: id(input.task_id), group_id: group, generation: g.generation + 1, objective: required(input.objective, 'objective'), acceptance: input.acceptance, documentation_paths: documentPaths(input.documentation_paths), documentation_checklist: input.documentation_checklist || ['Check module documentation against the delivered implementation; explain any no-change result.'], base_ref: required(input.base_ref, 'base_ref'), base_commit: git(g.worktree, 'rev-parse', 'HEAD'), branch: required(input.branch, 'branch'), outcome: 'pending', round: 0, delivery: null, review: null, finalization: null };
-      if (input.integration_id != null) t.integration_id = id(input.integration_id);
-      if (input.verification_snapshot != null) {
-        const snapshot = input.verification_snapshot;
-        if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) || snapshot.integration_id !== t.integration_id || !/^[a-f0-9]{40,64}$/.test(snapshot.commit || '') || !/^[a-f0-9]{40,64}$/.test(snapshot.tree || '')) throw Error('verification_snapshot requires matching integration_id and exact Git commit/tree');
-        t.verification_snapshot = { integration_id: t.integration_id, commit: snapshot.commit, tree: snapshot.tree };
-      }
+      Object.assign(t, integrationMetadata(input));
       if (!Array.isArray(t.acceptance) || !t.acceptance.length || t.acceptance.some(x => typeof x !== 'string' || !x.trim())) throw Error('acceptance must contain observable results');
       if (!Array.isArray(t.documentation_checklist) || !t.documentation_checklist.length || t.documentation_checklist.some(x => typeof x !== 'string' || !x.trim())) throw Error('documentation_checklist must contain observable checks');
       if (git(g.worktree, 'branch', '--show-current') !== t.branch || git(g.worktree, 'status', '--porcelain')) throw Error('task requires its clean, explicitly selected branch');

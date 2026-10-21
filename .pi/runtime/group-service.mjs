@@ -1,4 +1,4 @@
-import { ROLES, git, alive, identifier } from './group-store.mjs';
+import { ROLES, git, alive, identifier, integrationMetadata } from './group-store.mjs';
 import { mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname, isAbsolute } from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
@@ -123,6 +123,7 @@ function startTaskUnlocked(store, group, input) {
   if (git(store.projectRoot, 'status', '--porcelain') || git(store.projectRoot, 'branch', '--show-current') !== input.base_ref) throw Error('task start requires a clean committed Lead checkout on the registered base_ref');
   if (git(g.worktree, 'rev-parse', 'HEAD') !== git(store.projectRoot, 'rev-parse', 'HEAD')) throw Error('sync the clean idle group worktree to the committed Lead baseline before starting a task');
   identifier(input.task_id);
+  integrationMetadata(input); // Reject malformed bindings before recording a Git transition.
   if (typeof input.objective !== 'string' || !input.objective.trim() || !Array.isArray(input.acceptance) || !input.acceptance.length || input.acceptance.some(x => typeof x !== 'string' || !x.trim())) throw Error('task requires an objective and observable acceptance results');
   if (g.archived || g.active_task) throw Error('group is not available');
   if (git(g.worktree, 'status', '--porcelain')) throw Error('group worktree is dirty');
