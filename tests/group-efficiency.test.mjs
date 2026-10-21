@@ -6,6 +6,7 @@ import { fixture, registerFixtureGroup } from './group-fixture.mjs';
 import { git } from '../.pi/runtime/group-store.mjs';
 import { promptFor, startTask } from '../.pi/runtime/group-service.mjs';
 import { turnContext } from '../.pi/runtime/turn-context.mjs';
+import { RoleTools } from '../.pi/runtime/role-tools.mjs';
 
 test('invalid snapshot identity is rejected before creating a task branch or recovery transition', () => {
   const f = fixture(); try {
@@ -51,6 +52,11 @@ test('cross-group Coordinator message wakes the recipient task while preserving 
     assert.equal(delivery.data.source_task_id, 'T1');
     assert.equal(delivery.data.from_group, 'sample');
     assert.equal(f.store.claim('peer', 'coordinator', 'receiver').some(message => message.id === receipt.message_id), true);
+    const tools = new RoleTools(f.store, 'sample', 'coordinator', 'sender');
+    const malformed = tools.invoke('team_send', { to: 'peer:coordinator', body: 'Interface question' });
+    assert.equal(malformed.code, 'INVALID_RECIPIENT');
+    assert.equal(malformed.next_action, 'correct_recipient_fields');
+    assert.deepEqual(malformed.expected.cross_group, { to: 'coordinator', group_id: 'target-group' });
     assert.throws(() => f.store.send(f.actor('executor'), { group_id: 'peer', to: 'coordinator', body: 'Forbidden route' }), /cross-group/);
   } finally { f.cleanup(); }
 });

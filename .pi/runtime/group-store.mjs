@@ -213,7 +213,7 @@ export class GroupStore {
         if (actor.launch_id && this.session(actor.group_id, actor.role)?.launch_id !== actor.launch_id) throw Error('stale role process');
         if (source.active_task && (actor.task_id !== source.active_task || actor.generation !== source.generation)) throw Error('stale task or generation');
         if (to === 'lead' && actor.role !== 'coordinator') throw Error('only Coordinator addresses Lead');
-        if (to !== 'lead' && !ROLES.includes(to)) throw Error('invalid recipient');
+        if (to !== 'lead' && !ROLES.includes(to)) throw Object.assign(new TeamError('INVALID_RECIPIENT', 'Use a literal role in to. For cross-group Coordinator messages use separate fields: to="coordinator", group_id="target-group"; do not concatenate group and role.', 'correct_recipient_fields'), { expected: { to: ['coordinator', 'executor', 'validator', 'lead'], cross_group: { to: 'coordinator', group_id: 'target-group' } } });
         if (target !== actor.group_id && (actor.role !== 'coordinator' || to !== 'coordinator')) throw Error('cross-group communication requires Coordinators');
       }
       // Inbox eligibility belongs to the recipient's task. Keep the sender's
