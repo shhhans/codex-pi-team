@@ -33,7 +33,7 @@ Lead owns group definitions. YAML front matter in `groups/<id>/group.md` contain
 
 ## Task and document workflow
 
-There is at most one active task per group. The Lead-owned task includes objective, acceptance results, base ref and, when needed, explicit `documentation_paths` and `documentation_checklist`. Coordinator writes `task.md`; Executor writes `plan.md`; Validator submits exactly one adversarial `plan-review.md`. The plan review is advice, not a pass/ACK gate. Executor reads it and implements while recording concern handling. A second plan-review round is prohibited.
+There is at most one active task per group. The Lead-owned task includes objective, acceptance results, base ref and, when needed, explicit `documentation_paths` and `documentation_checklist`. Coordinator writes `task.md` and selects direct implementation, plan-only, or a plan with one adversarial review. Only the selected route requires `plan.md` and/or `plan-review.md`. The plan review is advice, not a pass/ACK gate. Executor reads it and implements while recording concern handling. A second plan-review round is prohibited.
 
 After each Executor delivery, Validator reviews its exact commit/source/diff/tests and submits `code-review-NN.md`. Following a passing code review, Validator checks assigned module Markdown against delivered behavior and submits a documentation report. Runtime commits only the explicit documentation paths. Coordinator checks the exact code commit, documentation commit, checklist and actual module text, then passes or returns that revision. Delivery to Lead requires both reviews to pass. Lead alone accepts and integrates. Process files live under `groups/<group>/tasks/<task>/`; independent Validator evidence lives under `review-NN/`.
 
@@ -48,3 +48,7 @@ Use `inventory`/`team_groups` and inspect persisted records before saying a grou
 ## Reusable-content hygiene
 
 Keep this file, active role prompts and active skills task-agnostic. Do not add task identifiers, issue numbers, task-only artifacts, host paths, raw prompts, envelopes, audit rows or runtime traces. Task-specific scope belongs in the assigned task document or runtime context.
+
+## Optional task planning
+
+Coordinator may submit task work with planning=direct, plan, or review; omission retains review. Direct tasks need no plan artifacts. Choose proportionately; final independent code/documentation reviews and Lead acceptance remain required. Do not expand Lead scope to satisfy an optional process.

@@ -229,6 +229,7 @@ export class GroupStore {
       if (t.outcome !== 'pending') throw Error('task is closed');
       const docsRevision = t.docs_revision || 1;
       const rules = { task: ['coordinator', 'task.md'], plan: ['executor', 'plan.md'], plan_review: ['validator', 'plan-review.md'], implementation: ['executor', 'implementation.md'], code_review: ['validator', ''], documentation: ['validator', `documentation-${input.round}-${docsRevision}.md`], documentation_review: ['coordinator', `documentation-review-${input.round}-${docsRevision}.md`], delivery: ['coordinator', 'delivery.md'], resolution: ['coordinator', `decision-${input.round}.md`] };
+      if (input.planning != null && (input.kind !== 'task' || !['direct', 'plan', 'review'].includes(input.planning))) throw Error('planning must be direct, plan, or review on task submission only');
       const rule = rules[input.kind]; if (!rule || actor.role !== rule[0]) throw Error('artifact not owned by this role');
       const round = input.kind === 'delivery' ? t.round : ['implementation', 'code_review', 'resolution', 'documentation', 'documentation_review'].includes(input.kind) ? input.round : 0;
       if (!Number.isInteger(round) || round < 0) throw Error('invalid round');
@@ -239,6 +240,7 @@ export class GroupStore {
       if (rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel)) throw Error('artifact escapes worktree');
       const content = required(readFileSync(full, 'utf8'), 'artifact content');
       const stored = this.artifact(t.task_id, input.kind, ['documentation', 'documentation_review'].includes(input.kind) ? round * 10000 + docsRevision : round);
+      if (stored && input.kind === 'task' && input.planning != null && input.planning !== (t.planning || 'review')) throw Error('submitted planning route is immutable');
       if (stored) { if (stored.content.replaceAll('\r\n', '\n') !== content.replaceAll('\r\n', '\n') || input.kind !== 'documentation' && stored.commit !== (input.commit || null) || stored.verdict !== (input.verdict || null)) throw Error('submitted artifact is immutable'); return { ...stored, replay: true }; }
       const resolutionKind = this.db.prepare("SELECT kind FROM work WHERE task_id=? AND owner='coordinator' AND status='open' AND kind IN (?,?)").get(t.task_id, `blocked-${round}`, `revision-${round}`)?.kind;
       const workKind = ['documentation', 'documentation_review'].includes(input.kind) ? `${input.kind}-${round}-${docsRevision}` : input.kind === 'implementation' ? `implementation-${round}` : input.kind === 'code_review' ? `code_review-${round}` : input.kind === 'resolution' ? resolutionKind : input.kind === 'delivery' ? `delivery-${round}` : input.kind;
@@ -280,8 +282,10 @@ export class GroupStore {
       this.db.prepare('INSERT INTO artifacts VALUES (?,?,?,?)').run(t.task_id, input.kind, artifactRound, json(value));
       this.db.prepare("UPDATE work SET status='complete',result=? WHERE id=?").run(json({ artifact: file, round }), work.id);
       switch (input.kind) {
-        case 'task': this.addWork(t, 'plan', 'executor'); break;
-        case 'plan': this.addWork(t, 'plan_review', 'validator'); break;
+        case 'task':
+          t.planning = input.planning || 'review';
+          this.addWork(t, t.planning === 'direct' ? 'implementation-1' : 'plan', 'executor'); break;
+        case 'plan': this.addWork(t, t.planning === 'plan' ? 'implementation-1' : 'plan_review', t.planning === 'plan' ? 'executor' : 'validator'); break;
         case 'plan_review': this.addWork(t, 'implementation-1', 'executor'); break;
         case 'implementation': this.addWork(t, `code_review-${round}`, 'validator'); break;
         case 'code_review':
