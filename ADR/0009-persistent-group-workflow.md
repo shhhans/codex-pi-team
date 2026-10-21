@@ -42,6 +42,12 @@ Three role sessions may remain allocated between tasks once the group is in use,
 
 ## Enforcement boundary
 
+### Reviewed joint integration
+
+Parallel tasks may share a Lead-owned `integration_id` and exact baseline while retaining distinct task identities and independent three-role workflows. Cross-group Coordinator messages bind pending delivery to the receiver's current task and retain the sender task separately. A reviewed joint candidate records the member tasks, exact code/documentation commits, candidate commit/tree and independent verification group. It does not authorize merging arbitrary task branch tips.
+
+The independent evaluation task must bind its `verification_snapshot` to the exact candidate integration ID, commit and tree. Final integration requires Lead acceptance of the members and that evaluation, unchanged reviewed evidence, candidate integrity and a clean unchanged Lead baseline. Mandatory declared integration tests run before the target advances. Task branches, worktrees and evidence remain recoverable; failure and retry do not establish successful completion. The existing single-task target-drift guard remains in force.
+
 Tool wrappers restrict obvious writes and stage-dependent operations, but do not form a shell sandbox. Validator may inspect production source and run tests but may not edit production code. During assigned documentation work, Validator may edit only the task's explicitly listed Markdown module files and its documentation report. Runtime validates documentation paths and commits only listed prose. Git and evidence checks reject drift before review, documentation-review and Lead acceptance. Transport receipt is not proof that a message affected work; inspect resulting artifacts and revisions.
 
 ## Verification boundary

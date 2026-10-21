@@ -3,6 +3,7 @@ import { createGroup, updateGroup, adoptGroup, reconcileRegistration, syncGroup,
 import { registeredGroups, onboardingState } from '../.pi/runtime/group-onboarding.mjs';
 import { scheduleOnboarding } from './group-init-runner.mjs';
 import { ServiceManager } from '../.pi/runtime/service-manager.mjs';
+import { createIntegrationSnapshot, inspectIntegrationSnapshot, bindIntegrationVerification, finalizeIntegrationSnapshot } from '../.pi/runtime/integration-snapshot.mjs';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync, fork } from 'node:child_process';
@@ -49,6 +50,10 @@ export async function execute(store, command, args) {
     case 'request-changes': return store.requestChanges(a, readInput(b).reason);
     case 'close-incomplete': return store.cancel(a, readInput(b).reason);
     case 'finalize': return finalize(store, a);
+    case 'integration-create': return createIntegrationSnapshot(store, readInput(a));
+    case 'integration-inspect': return inspectIntegrationSnapshot(store, a);
+    case 'integration-bind': return bindIntegrationVerification(store, a, b);
+    case 'integration-finalize': return finalizeIntegrationSnapshot(store, a, readInput(b));
     case 'doctor': return { node: process.version, sqlite: true, roles: roleConfig(), legacy_pending: store.legacyPending(), pi: execFileSync('where.exe', ['pi.cmd'], { encoding: 'utf8', windowsHide: true }).trim(), pi_version: invokeWindows(process.env.PI_CMD || 'pi.cmd', ['--version']).trim(), web_access: existsSync(join(process.env.USERPROFILE, '.pi/agent/npm/node_modules/pi-web-access/index.ts')) };
     case 'codex-setup': {
       store.assertCutover();
@@ -57,7 +62,7 @@ export async function execute(store, command, args) {
       try { invokeWindows('codex.cmd', ['mcp', 'remove', 'agent-blackboard']); retired = true; } catch { /* May have been supplied by a plugin rather than a standalone entry. */ }
       return { registered: 'pi-team', retired_standalone_blackboard: retired, note: 'Disable any separately installed Blackboard plugin connection during cutover.' };
     }
-    default: throw Error(`Unknown v2 command: ${command}. Use group-create <json>, group-adopt/update <group> <json>, group-init/sync/start/stop/resume/archive <group>, start <group> <task-json>, send/inbox/wait, inspect/accept/finalize <task>, blackboard [port], service-recover, inventory, doctor, codex-setup.`);
+    default: throw Error(`Unknown v2 command: ${command}. Use group-create <json>, group-adopt/update <group> <json>, group-init/sync/start/stop/resume/archive <group>, start <group> <task-json>, send/inbox/wait, inspect/accept/finalize <task>, integration-create <json>, integration-inspect <id>, integration-bind <id> <verification-task>, integration-finalize <id> <json>, blackboard [port], service-recover, inventory, doctor, codex-setup.`);
   }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

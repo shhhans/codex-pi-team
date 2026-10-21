@@ -38,6 +38,18 @@ Finalization reads `.pi/project.json` from the target project for an explicit in
 
 ## Runtime and operations
 
+### Joint candidates for parallel groups
+
+Lead may assign distinct groups tasks carrying the same optional `integration_id`, all starting from the exact same committed baseline. Coordinator-to-Coordinator messages are addressed to the recipient's active task; `source_task_id` preserves the sender's task identity. This allows different task IDs to exchange interface questions and wake their recipients.
+
+After the member tasks pass code and documentation review, `integration-create <json>` builds a separate candidate worktree. Its descriptor supplies `integration_id`, at least two `task_ids` from different groups, an independent `verification_group_id`, and an absolute candidate `worktree`. `integration-inspect <id>` returns the exact candidate commit and tree. Assign independent evaluation with the same integration ID and `verification_snapshot: {"integration_id":"...","commit":"...","tree":"..."}` from that manifest. Evaluation checks this fixed joint candidate and keeps its tests and evidence in its own worktree. Lead accepts the member deliveries and independent evaluation, then runs `integration-finalize <id> <json>` with `verification_task_id`. The matching MCP tools are `team_integration_create`, `team_integration_inspect` and `team_integration_finalize`.
+
+Evaluation may start alongside the implementing groups to prepare independent reference tests. Once the candidate exists, Lead uses `integration-bind <id> <verification-task-id>` / `team_integration_bind` before evaluation's first delivery. This records the exact immutable snapshot and notifies its Coordinator. Binding an already delivered task or replacing an existing different binding is refused.
+
+Joint integration requires the exact reviewed commits, unchanged candidate and Lead baseline, explicit independent verification binding, and the configured mandatory integration command. It preserves the original single-task finalizer's target-drift guard. Current implementation and live-provider verification limits remain recorded in `implementation_notes/GROUP-EFFICIENCY.md`.
+
+Role-facing `team_read` returns current work cards with canonical submission paths and rounds, new unsettled messages, and a versioned group/task contract. The contract is included on first use, after compaction, after identity changes or with `refresh_context:true`; `detail:true` requests the full diagnostic projection. Routine per-turn system context contains current identity, work and version references without historical ACK bodies. These projections do not change SQLite authority or submission inbox barriers.
+
 Blackboard shows a fixed Coordinator/Executor/Validator card for each registered group. Cards display the actual session model, OS-observed process state, and the last parsed model `current_state` with its receipt time; they do not infer current work or completion. Stopped sessions retain their last activity. A live PID without a matching recorded process-start identity is shown as unconfirmed. New session registrations record that identity; historical records are not backfilled. Responsibilities are expandable, and refresh errors preserve the last successful view with an explicit stale-data warning. A role-configuration mismatch is displayed without launching replacement roles.
 
 Changing `.pi/roles.json` (provider, model or tool configuration) changes the shared role version. Run `group-init` for each idle group before using the new configuration: old role sessions are archived and all three roles acknowledge in a fresh epoch. Updating the file alone does not replace models in persisted sessions.

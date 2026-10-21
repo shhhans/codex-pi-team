@@ -3,6 +3,7 @@ import { execute } from '../../scripts/pi-team-v2.mjs';
 import { createGroup, updateGroup, adoptGroup, syncGroup } from '../../.pi/runtime/group-service.mjs';
 import { scheduleOnboarding } from '../../scripts/group-init-runner.mjs';
 import { registeredGroups } from '../../.pi/runtime/group-onboarding.mjs';
+import { createIntegrationSnapshot, inspectIntegrationSnapshot, bindIntegrationVerification, finalizeIntegrationSnapshot } from '../../.pi/runtime/integration-snapshot.mjs';
 
 const definitions = [
   ['team_groups', 'Read registered configuration and runtime state independently of Blackboard.', ['project_root'], {}],
@@ -18,6 +19,10 @@ const definitions = [
   ['team_inspect', 'Inspect task evidence without acceptance.', ['project_root', 'task_id'], {}],
   ['team_accept', 'Record Lead acceptance of the reviewed delivery.', ['project_root', 'task_id', 'rationale'], { rationale: { type: 'string' } }],
   ['team_finalize', 'Integrate a Lead-accepted task; preserve group sessions/worktree.', ['project_root', 'task_id'], {}],
+  ['team_integration_create', 'Build an immutable joint candidate from exact reviewed deliveries of distinct groups.', ['project_root', 'integration_id', 'task_ids', 'verification_group_id', 'worktree'], { integration_id: { type: 'string' }, task_ids: { type: 'array', minItems: 2, items: { type: 'string' } }, verification_group_id: { type: 'string' }, worktree: { type: 'string' } }],
+  ['team_integration_inspect', 'Inspect the recorded joint candidate and its verification identity.', ['project_root', 'integration_id'], { integration_id: { type: 'string' } }],
+  ['team_integration_bind', 'Bind a pending independent evaluation task to the exact candidate before its first delivery.', ['project_root', 'integration_id', 'verification_task_id'], { integration_id: { type: 'string' }, verification_task_id: { type: 'string' } }],
+  ['team_integration_finalize', 'Integrate a jointly reviewed candidate after exact independent verification and mandatory tests.', ['project_root', 'integration_id', 'verification_task_id'], { integration_id: { type: 'string' }, verification_task_id: { type: 'string' } }],
 ];
 export const tools = definitions.map(([name, description, required, extra]) => ({ name, description, inputSchema: { type: 'object', properties: { project_root: { type: 'string' }, group_id: { type: 'string' }, task_id: { type: 'string' }, ...extra }, required, additionalProperties: false } }));
 export async function call(name, args) {
@@ -37,6 +42,10 @@ export async function call(name, args) {
       case 'team_inspect': return execute(store, 'inspect', [args.task_id]);
       case 'team_accept': return store.accept(args.task_id, args.rationale);
       case 'team_finalize': return execute(store, 'finalize', [args.task_id]);
+      case 'team_integration_create': return createIntegrationSnapshot(store, args);
+      case 'team_integration_inspect': return inspectIntegrationSnapshot(store, args.integration_id);
+      case 'team_integration_bind': return bindIntegrationVerification(store, args.integration_id, args.verification_task_id);
+      case 'team_integration_finalize': return finalizeIntegrationSnapshot(store, args.integration_id, { verification_task_id: args.verification_task_id });
       default: throw Error('unknown tool');
     }
   } finally { store.close(); }
