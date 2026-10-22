@@ -1,3 +1,13 @@
+# Project state — efficiency increment closeout (2026-10-22)
+
+This snapshot supersedes conflicting current-state claims below; earlier evidence remains historical. The efficiency increment adds versioned actionable notifications, acceptance-bound cross-task shared knowledge, classified combined result/code/documentation review with legacy compatibility, structured role prompts, concise artifacts and role-specific submit schemas. Coordinator still has no shell or direct task-completion route. Lead acceptance/integration remains mandatory.
+
+Latest inspected full deterministic result: 103/103 passed, 193.042s, exit 0; log .traces/EEF-05-20261022/deterministic-tests.log. Runtime/prompt/skill/spec hashes match the EEF-05 source snapshot at closeout. EEF-05 was accepted/finalized in the isolated efficiency fixture, product diff empty, integration eb284dc6467834290aa5fd5ffb4fbc57fcbd65a9, knowledge v4/epoch4 published and all three role processes stopped in the recorded cleanup. This is bounded isolated evidence, not original-project deployment or a new availability check of other retained groups.
+
+EEF-1 through 5 are micro lifecycle experiments (actual IDs EFF-1/2/3, EEF-04/05), not representative business tasks. Only EFF-1 changes result from1 to2; subsequent tasks verify the same result. EEF-04 to05 elapsed351.348→314.764s and both execution-role outputs fell, but fresh input and latency did not uniformly improve. Redundant confirmation wakeups, repeated tests/history exploration and incomplete report-budget compliance remain. Lead direct handling of small work and subsequent Team alignment are agreed design directions, not newly implemented workflow branches. See implementation_notes/TOKEN-EFFICIENCY-CLOSEOUT-2026-10-22.md for scope, evidence and limitations.
+
+## Previous operational snapshots
+
 # Project state — v2 closeout (2026-10-22)
 
 ## Current authoritative snapshot

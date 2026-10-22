@@ -1,4 +1,4 @@
-// Dynamic authority only. Stable contracts and ACK bodies belong in team_read.
+// Dynamic authority only. Versioned contracts and work details are injected as durable context messages.
 export function turnContext(state, lifecycle, role) {
   const g = state.group, t = state.task;
   return {
@@ -11,6 +11,6 @@ export function turnContext(state, lifecycle, role) {
       verification_snapshot: t.verification_snapshot || null } : null,
     work: [...(lifecycle?.work || []), ...state.work].map(({ id, kind, owner }) => ({ id, kind, owner })),
     onboarding: lifecycle ? { operation_id: lifecycle.operation_id, status: lifecycle.status, epoch: lifecycle.epoch } : null,
-    context_action: 'Use team_read for work paths, current messages and the versioned responsibility/task contract. After compaction use refresh_context:true.',
+    context_action: 'Use injected runtime context for work paths, messages and the versioned contract. Use team_read for missing context or recovery; after compaction use refresh_context:true.',
   };
 }

@@ -92,3 +92,44 @@ test('clean CRLF implementation evidence matches its LF Git blob; actual rewrite
     assert.throws(() => f.store.assertEvidence(f.store.group('sample'), f.store.task('T1')), /submitted evidence changed/);
   } finally { f.cleanup(); }
 });
+
+test('injected work is actionable without a model team_read and failed injection can retry context and messages', () => {
+  const f = fixture(); try {
+    f.store.register('sample', 'coordinator', { pid: process.pid, launch_id: 'notify' });
+    const tools = new RoleTools(f.store, 'sample', 'coordinator', 'notify');
+    f.store.send({ group_id: 'sample', role: 'lead' }, { to: 'coordinator', body: 'Keep the task bounded.' });
+    assert.throws(() => tools.injectContext(() => { throw Error('injection failed'); }), /injection failed/);
+    const snapshot = tools.injectContext(value => value);
+    assert.equal(snapshot.context.task.objective, 'return two');
+    assert.ok(snapshot.messages.some(m => m.data.body === 'Keep the task bounded.'));
+    const work = snapshot.work[0];
+    f.file('task.md');
+    const receipt = tools.invoke('team_submit', { kind: 'task', planning: 'direct', work_id: work.id });
+    assert.equal(receipt.ok, true, JSON.stringify(receipt));
+    const next = tools.injectContext(value => value);
+    assert.equal(next.context_changed, false);
+    assert.equal(next.messages.length, 0);
+    tools.invalidateReadContext();
+    const recovered = tools.injectContext(value => value);
+    assert.ok(recovered.context);
+    assert.ok(recovered.messages.some(m => m.data.body === 'Keep the task bounded.'));
+    f.store.settle('sample', 'coordinator', 'notify', false);
+    assert.ok(f.store.claim('sample', 'coordinator', 'notify').length);
+  } finally { f.cleanup(); }
+});
+
+test('review notification includes exact commits and references for the assigned route', () => {
+  const f = fixture(); try {
+    f.prepare(); const commit = f.deliver(1);
+    f.store.register('sample', 'validator', { pid: process.pid, launch_id: 'review-notify' });
+    const tools = new RoleTools(f.store, 'sample', 'validator', 'review-notify');
+    const snapshot = tools.injectContext(value => value);
+    const work = snapshot.work.find(w => w.kind === 'code_review-1');
+    assert.equal(work.commit, commit);
+    assert.equal(work.round, 1);
+    assert.ok(work.references.includes('groups/sample/tasks/T1/task.md'));
+    assert.ok(work.references.includes('groups/sample/tasks/T1/plan-review.md'));
+    assert.ok(work.references.includes('groups/sample/tasks/T1/implementation.md'));
+    assert.equal(snapshot.task.planning, 'review');
+  } finally { f.cleanup(); }
+});

@@ -1,3 +1,4 @@
+import { publishSharedContext } from './shared-context.mjs';
 // Guarded, immutable candidate integration for work delivered by parallel groups.
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -67,7 +68,7 @@ function cleanupIntegrated(store,snap,verificationId,id) {
       if(g.active_task!==taskId) throw Error(`group state changed during batch finalization: ${g.group_id}`);
       if(git(g.worktree,'diff','--cached','--name-only')) throw Error(`group ${g.group_id} index is not empty`);
       git(g.worktree,'switch',g.idle_branch); git(g.worktree,'merge','--ff-only',snap.base_ref);
-      store.tx(()=>{g.active_task=null;g.generation++;store.put('groups',g.group_id,g);t.finalization={merged:true,commit:snap.integrated_commit,tested:true,complete:true,branch_preserved:true,integration_id:id};store.put('tasks',taskId,t);});
+      store.tx(()=>{g.active_task=null;g.generation++;store.put('groups',g.group_id,g);t.finalization={merged:true,commit:snap.integrated_commit,tested:true,complete:true,branch_preserved:true,integration_id:id};store.put('tasks',taskId,t);publishSharedContext(store,t);});
     } catch(error){
       t.finalization={...t.finalization,merged:true,commit:snap.integrated_commit,tested:true,complete:false,branch_preserved:true,integration_id:id,last_error:error.message,failed_at:now()};store.put('tasks',taskId,t);
       snap.status='cleanup_failed';snap.cleanup_error=error.message;persist(store,snap);throw error;
@@ -207,7 +208,7 @@ export function finalizeIntegrationSnapshot(store,id,options={}) {
         if(g.active_task===taskId){
           if(git(g.worktree,'diff','--cached','--name-only')) throw Error(`group ${g.group_id} index is not empty`);
           git(g.worktree,'switch',g.idle_branch); git(g.worktree,'merge','--ff-only',snap.base_ref);
-          store.tx(()=>{g.active_task=null;g.generation++;store.put('groups',g.group_id,g);t.finalization={merged:true,commit:snap.integrated_commit,tested:true,complete:true,branch_preserved:true,integration_id:id};store.put('tasks',taskId,t);});
+          store.tx(()=>{g.active_task=null;g.generation++;store.put('groups',g.group_id,g);t.finalization={merged:true,commit:snap.integrated_commit,tested:true,complete:true,branch_preserved:true,integration_id:id};store.put('tasks',taskId,t);publishSharedContext(store,t);});
         } else if(!t.finalization?.complete) throw Error(`group state changed during batch finalization: ${g.group_id}`);
       } catch(error){ t.finalization={...t.finalization,merged:true,commit:snap.integrated_commit,tested:true,complete:false,branch_preserved:true,integration_id:id,last_error:error.message,failed_at:now()}; store.put('tasks',taskId,t); snap.status='cleanup_failed'; snap.cleanup_error=error.message; persist(store,snap); throw error; }
     }

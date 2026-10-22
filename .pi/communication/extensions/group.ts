@@ -36,14 +36,14 @@ export default function (pi: ExtensionAPI) {
   const wake = () => {
     if (stopped || active || compacting || !ctx?.isIdle() || store.session(group, role)?.fault) return;
     const messages = store.claim(group, role, launch); if (!messages) return;
-    try { pi.sendUserMessage(`Pi Team inbox: ${JSON.stringify(messages)}\nUse team_read for current task and open work. Read the submitted documents before acting.`, { deliverAs: 'followUp' }); }
+    try { pi.sendUserMessage('Pi Team work or messages are ready. Use the runtime context injected for this turn; read its referenced documents before acting.', { deliverAs: 'followUp' }); }
     catch { store.settle(group, role, launch, false); }
   };
   const presentDuringTurn = () => {
     if (!active || compacting || stopped) return;
     const messages = store.present(group, role, launch);
     if (!messages.length) return;
-    try { queuedSteering = true; pi.sendUserMessage(`Pi Team inbox: ${JSON.stringify(messages)}\nThese messages arrived during your work. Reconsider them before editing or submitting; registered deliveries remain immutable.`, { deliverAs: 'steer' }); }
+    try { queuedSteering = true; roleTools.injectContext(snapshot => pi.sendUserMessage(`Pi Team runtime context: ${JSON.stringify(snapshot)}\nReconsider these messages before editing or submitting; registered deliveries remain immutable.`, { deliverAs: 'steer' })); }
     catch (e) {
       queuedSteering = false;
       for (const m of messages) store.db.prepare('UPDATE messages SET presented_at=NULL WHERE id=?').run(m.id);
@@ -53,9 +53,24 @@ export default function (pi: ExtensionAPI) {
   pi.on('turn_start', async () => { queuedSteering = false; });
   pi.on('tool_result', async () => { presentDuringTurn(); });
   pi.on('turn_end', async () => { presentDuringTurn(); });
-  pi.registerTool({ name: 'team_read', label: 'Read group work', description: 'Read authoritative current work and new messages. Stable group/task context appears once per version; refresh_context requests it again. detail requests full diagnostic history and sessions. Use the returned work id and artifact_path for submission; runtime derives round and path.', parameters: Type.Object({ refresh_context: Type.Optional(Type.Boolean()), detail: Type.Optional(Type.Boolean()) }), async execute(_id, input) { return reply(roleTools.invoke('team_read', input)); } });
+  pi.registerTool({ name: 'team_read', label: 'Read group work', description: 'Read authoritative current work and new messages. Stable group/task context appears once per version; refresh_context requests it again. shared_context:true retrieves published team knowledge. detail requests full diagnostic history and sessions. A complete injected runtime context already contains current work; no routine read is needed. Use the returned work id and artifact_path for submission; runtime derives round and path.', parameters: Type.Object({ refresh_context: Type.Optional(Type.Boolean()), shared_context: Type.Optional(Type.Boolean()), detail: Type.Optional(Type.Boolean()) }), async execute(_id, input) { return reply(roleTools.invoke('team_read', input)); } });
   pi.registerTool({ name: 'team_send', label: 'Send group message', description: 'Persist a question, answer, or decision. to is a literal role: coordinator, executor, validator or lead. For another group, Coordinator uses to:"coordinator" and group_id:"target-group" as separate fields; never use a colon address or group ID as to. Omit group_id for your own group. This does not submit an artifact or finish work.', parameters: Type.Object({ to: Type.Union([Type.Literal('coordinator'), Type.Literal('executor'), Type.Literal('validator'), Type.Literal('lead')]), group_id: Type.Optional(Type.String()), body: Type.String(), task_id: Type.Optional(Type.String()), generation: Type.Optional(Type.Integer()), refs: Type.Optional(Type.Array(Type.String())), reply_to: Type.Optional(Type.Integer()) }), async execute(_id, input) { return reply(roleTools.invoke('team_send', input)); } });
-  pi.registerTool({ name: 'team_submit', label: 'Submit owned work', description: 'Atomically submit owned work; only ok:true receipt proves handoff. Use work_id from team_read. For onboarding use kind=onboarding and body acknowledging group and role responsibilities; no path or task required. Coordinator task submission may select planning=direct (implement now), plan (plan then implement), or review (one plan review); omitted keeps review. Record the reason in task.md; scope and final independent code/documentation review are unchanged. Process kinds: task, plan, plan_review, implementation, code_review, documentation, documentation_review, delivery, resolution. Documentation reports: documentation-<round>-<revision>.md; Coordinator review: documentation-review-<round>-<revision>.md, verdict pass/changes_requested. Read current work and task for paths/versions.', parameters: Type.Object({ task_id: Type.Optional(Type.String()), generation: Type.Optional(Type.Integer()), work_id: Type.Optional(Type.Union([Type.Integer(), Type.String()])), kind: Type.String(), planning: Type.Optional(Type.Union([Type.Literal('direct'), Type.Literal('plan'), Type.Literal('review')])), path: Type.Optional(Type.String()), body: Type.Optional(Type.String()), round: Type.Optional(Type.Integer()), commit: Type.Optional(Type.String()), verdict: Type.Optional(Type.String()) }), async execute(_id, input) { return reply(queuedSteering ? { ok: false, code: 'INBOX_PENDING', message: 'New inbox messages are queued for your next response. Reconsider before submitting.', next_action: 'read_messages_and_reconsider' } : roleTools.invoke('team_submit', input)); } });
+  const submitKinds = role === 'executor' ? ['onboarding', 'plan', 'implementation'] : role === 'validator' ? ['onboarding', 'plan_review', 'code_review', 'documentation'] : ['onboarding', 'task', 'documentation_review', 'delivery', 'resolution'];
+  const submitFields: Record<string, any> = {
+    task_id: Type.Optional(Type.String()), generation: Type.Optional(Type.Integer()), work_id: Type.Optional(Type.Union([Type.Integer(), Type.String()])),
+    kind: Type.Union(submitKinds.map(kind => Type.Literal(kind))), path: Type.Optional(Type.String()), body: Type.Optional(Type.String()), round: Type.Optional(Type.Integer()), commit: Type.Optional(Type.String()),
+  };
+  if (role !== 'executor') submitFields.verdict = Type.Optional(Type.Union([Type.Literal('pass'), Type.Literal('changes_requested'), Type.Literal('blocked')]));
+  if (role === 'coordinator') Object.assign(submitFields, {
+    shared_context: Type.Optional(Type.Object({ mode: Type.Union([Type.Literal('update'), Type.Literal('reuse')]), version: Type.Optional(Type.Integer()) })),
+    task_type: Type.Optional(Type.Union([Type.Literal('non_change'), Type.Literal('small_change'), Type.Literal('large_change')])), planning: Type.Optional(Type.Union([Type.Literal('direct'), Type.Literal('plan'), Type.Literal('review')])),
+  });
+  const submitRoleHelp = role === 'executor'
+    ? 'Submit plan or implementation. Implementation requires the full clean HEAD commit; use the assigned work round.'
+    : role === 'validator'
+      ? 'Submit assigned plan_review, code_review or legacy documentation. Code review requires pass/changes_requested/blocked; target commit and round derive from owned work. Classified tasks combine result/code and authorized documentation review in code-review-NN.md.'
+      : 'Task: task_type=non_change/small_change/large_change and planning=direct/plan/review (omitted keeps legacy review). Delivery: shared_context update freezes ## Shared knowledge; reuse requires version. Legacy documentation_review requires verdict.';
+  pi.registerTool({ name: 'team_submit', label: 'Submit owned work', description: 'Atomically submit owned work; only ok:true receipt proves handoff. Use injected work_id; path and round derive from owned work. Write the process artifact first and omit body; do not copy its text here. Onboarding alone uses body to acknowledge role/module responsibilities, without path or task. ' + submitRoleHelp, parameters: Type.Object(submitFields), async execute(_id, input) { return reply(queuedSteering ? { ok: false, code: 'INBOX_PENDING', message: 'New inbox messages are queued for your next response. Reconsider before submitting.', next_action: 'read_messages_and_reconsider' } : roleTools.invoke('team_submit', input)); } });
   if (role === 'coordinator') pi.registerTool({ name: 'team_service', label: 'Manage configured service', description: 'Inspect/start/stop a named service from .pi/services.json. No arbitrary command input. Review mode exports the registered delivery commit to an isolated snapshot.', parameters: Type.Object({ action: Type.Union([Type.Literal('describe'), Type.Literal('status'), Type.Literal('start'), Type.Literal('stop'), Type.Literal('recover_lock')]), service_id: Type.Optional(Type.String()), mode: Type.Optional(Type.Union([Type.Literal('development'), Type.Literal('review')])) }), async execute(_id, input) {
     try {
       roleTools.actor();
@@ -78,8 +93,11 @@ export default function (pi: ExtensionAPI) {
   });
   pi.on('agent_start', async () => { active = true; roleTools.begin(); turnFailed = false; turnGeneration = store.group(group).generation; turnEpoch = store.group(group).definition_epoch; store.updateSession(group, role, launch, { busy: true }); });
   pi.on('before_agent_start', async event => {
-    const current = store.read(group, role);
-    return { systemPrompt: `${event.systemPrompt}\nCurrent group context (runtime authority): ${JSON.stringify(turnContext(current, onboardingState(store, group, role), role))}` };
+    roleTools.begin();
+    return roleTools.injectContext(snapshot => ({
+      systemPrompt: event.systemPrompt + '\nCurrent runtime identity: ' + JSON.stringify(turnContext(store.read(group, role), onboardingState(store, group, role), role)),
+      message: { customType: 'pi-team-context', content: 'Current runtime work and messages: ' + JSON.stringify(snapshot) + '\nUse these IDs and paths. Read referenced task/review documents before acting. Use team_read for missing context, recovery, rejection or refresh after compaction. No assigned work means end idle.', display: false },
+    }));
   });
   pi.on('tool_call', async event => {
     if (!['bash', 'edit', 'write'].includes(event.toolName)) return;
@@ -103,7 +121,7 @@ export default function (pi: ExtensionAPI) {
     if (path === `groups/${group}/group.md`) return { block: true, reason: 'Only Lead changes group definitions.' };
     if (role === 'validator' && path.startsWith(taskPath) && !(/\/code-review-\d+\.md$/.test(path) || /\/review-\d+\//.test(path) || /\/documentation-\d+-\d+\.md$/.test(path) || path.endsWith('/plan-review.md'))) return { block: true, reason: 'Write independent evidence or assigned documentation reports; never overwrite delivery evidence.' };
     if (role === 'coordinator' && !path.startsWith(taskPath)) return { block: true, reason: 'Coordinator writes process documents only.' };
-    if (role === 'validator' && !path.startsWith(taskPath) && !(t.documentation_paths?.includes(path) && state.work.some(w => w.kind.startsWith('documentation-')))) return { block: true, reason: 'Module Markdown edits require assigned documentation work and an explicit documentation_paths entry.' };
+    if (role === 'validator' && !path.startsWith(taskPath) && !(t.documentation_paths?.includes(path) && state.work.some(w => w.kind.startsWith('documentation-') || t.task_type && t.task_type !== 'non_change' && w.kind.startsWith('code_review-')))) return { block: true, reason: 'Module Markdown edits require authorized change-task review or legacy documentation work and an explicit documentation_paths entry.' };
     if (role === 'executor' && !path.startsWith(taskPath) && !state.work.some(w => w.kind.startsWith('implementation-'))) return { block: true, reason: 'No open implementation work; do not change production during planning or review.' };
   });
   pi.on('agent_end', async event => {

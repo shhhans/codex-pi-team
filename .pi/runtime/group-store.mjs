@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, realpathSync, existsSync, readdirSync } from '
 import { resolve, join, relative, isAbsolute, sep } from 'node:path';
 import { documentPaths, commitDocuments } from './document-alignment.mjs';
 import { processStartStamp } from './process-observation.mjs';
+import { freezeSharedContext } from './shared-context.mjs';
 
 export const ROLES = ['coordinator', 'executor', 'validator'];
 export function git(root, ...args) { return execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim(); }
@@ -55,6 +56,7 @@ export class GroupStore {
       CREATE TABLE IF NOT EXISTS sessions (group_id TEXT NOT NULL, role TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(group_id,role));
       CREATE TABLE IF NOT EXISTS operations (name TEXT PRIMARY KEY, pid INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS project_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS shared_context (group_id TEXT NOT NULL, version INTEGER NOT NULL, definition_epoch INTEGER NOT NULL, source_task TEXT NOT NULL UNIQUE, data TEXT NOT NULL, PRIMARY KEY(group_id,version));
       PRAGMA user_version=2;`);
     this.tx(() => {
       const current = this.db.prepare("SELECT value FROM project_metadata WHERE key='lead_root'").get();
@@ -228,8 +230,10 @@ export class GroupStore {
       if (actor.launch_id && this.pending(g.group_id, actor.role).length) throw new TeamError('INBOX_PENDING', 'New messages must be presented before submission', 'read_messages_and_reconsider');
       if (t.outcome !== 'pending') throw Error('task is closed');
       const docsRevision = t.docs_revision || 1;
+      if (input.shared_context != null && input.kind !== 'delivery') throw Error('shared_context is only allowed on delivery');
       const rules = { task: ['coordinator', 'task.md'], plan: ['executor', 'plan.md'], plan_review: ['validator', 'plan-review.md'], implementation: ['executor', 'implementation.md'], code_review: ['validator', ''], documentation: ['validator', `documentation-${input.round}-${docsRevision}.md`], documentation_review: ['coordinator', `documentation-review-${input.round}-${docsRevision}.md`], delivery: ['coordinator', 'delivery.md'], resolution: ['coordinator', `decision-${input.round}.md`] };
       if (input.planning != null && (input.kind !== 'task' || !['direct', 'plan', 'review'].includes(input.planning))) throw Error('planning must be direct, plan, or review on task submission only');
+      if (input.task_type != null && (input.kind !== 'task' || !['non_change', 'small_change', 'large_change'].includes(input.task_type))) throw Error('task_type must be non_change, small_change, or large_change on task submission only');
       const rule = rules[input.kind]; if (!rule || actor.role !== rule[0]) throw Error('artifact not owned by this role');
       const round = input.kind === 'delivery' ? t.round : ['implementation', 'code_review', 'resolution', 'documentation', 'documentation_review'].includes(input.kind) ? input.round : 0;
       if (!Number.isInteger(round) || round < 0) throw Error('invalid round');
@@ -240,7 +244,10 @@ export class GroupStore {
       if (rel.startsWith(`..${sep}`) || rel === '..' || isAbsolute(rel)) throw Error('artifact escapes worktree');
       const content = required(readFileSync(full, 'utf8'), 'artifact content');
       const stored = this.artifact(t.task_id, input.kind, ['documentation', 'documentation_review'].includes(input.kind) ? round * 10000 + docsRevision : round);
+      const sharedContext = input.kind === 'delivery' ? freezeSharedContext(this, g, t, input.shared_context, content) : null;
+      if (stored && JSON.stringify(stored.shared_context || null) !== JSON.stringify(sharedContext)) throw Error('submitted shared context is immutable');
       if (stored && input.kind === 'task' && input.planning != null && input.planning !== (t.planning || 'review')) throw Error('submitted planning route is immutable');
+      if (stored && input.kind === 'task' && input.task_type !== t.task_type) throw Error('submitted task type is immutable');
       if (stored) { if (stored.content.replaceAll('\r\n', '\n') !== content.replaceAll('\r\n', '\n') || input.kind !== 'documentation' && stored.commit !== (input.commit || null) || stored.verdict !== (input.verdict || null)) throw Error('submitted artifact is immutable'); return { ...stored, replay: true }; }
       const resolutionKind = this.db.prepare("SELECT kind FROM work WHERE task_id=? AND owner='coordinator' AND status='open' AND kind IN (?,?)").get(t.task_id, `blocked-${round}`, `revision-${round}`)?.kind;
       const workKind = ['documentation', 'documentation_review'].includes(input.kind) ? `${input.kind}-${round}-${docsRevision}` : input.kind === 'implementation' ? `implementation-${round}` : input.kind === 'code_review' ? `code_review-${round}` : input.kind === 'resolution' ? resolutionKind : input.kind === 'delivery' ? `delivery-${round}` : input.kind;
@@ -248,6 +255,7 @@ export class GroupStore {
       if (!work) throw new TeamError('NO_OPEN_WORK', 'No matching open work for this submission; a new delivery requires review feedback or Coordinator resolution', 'read_current_work');
       const artifactRound = ['documentation', 'documentation_review'].includes(input.kind) ? round * 10000 + docsRevision : round;
       const value = { task_id: t.task_id, kind: input.kind, round, revision: docsRevision, path: file, content, commit: input.commit || null, verdict: input.verdict || null, at: new Date().toISOString() };
+      if (sharedContext) value.shared_context = sharedContext;
       if (input.kind === 'plan' || input.kind === 'plan_review') {
         const changed = git(g.worktree, 'diff', t.base_commit, '--name-only', '--', '.', `:(exclude)groups/${g.group_id}/**`);
         if (changed) throw Error('production changed before the single plan review');
@@ -263,7 +271,14 @@ export class GroupStore {
       if (input.kind === 'code_review') {
         if (!t.delivery || t.delivery.round !== round || input.commit !== t.delivery.commit) throw Error('review targets a stale delivery');
         if (!['pass', 'changes_requested', 'blocked'].includes(input.verdict)) throw Error('invalid review verdict');
-        this.assertDelivery(g, t);
+        this.assertDelivery(g, t, !!t.task_type && t.task_type !== 'non_change' && input.verdict === 'pass');
+        if (t.task_type === 'non_change' && input.verdict === 'pass' && git(g.worktree, 'diff', t.base_commit, t.delivery.commit, '--name-only', '--', '.', `:(exclude)groups/${g.group_id}/tasks/${t.task_id}/**`)) throw new TeamError('TASK_TYPE_MISMATCH', 'non_change delivery modifies product files; submit blocked and ask Coordinator to resolve within Lead scope', 'report_to_coordinator');
+        if (t.task_type && input.verdict === 'pass') {
+          const commit = t.task_type === 'non_change' ? t.delivery.commit : commitDocuments(git, g, t);
+          t.documentation = { code_commit: t.delivery.commit, commit, round, revision: 1, verdict: 'pass', report: file, integrated_review: true };
+          this.assertDelivery(g, t);
+          value.documentation = { ...t.documentation };
+        }
         t.review = { round, verdict: input.verdict, commit: input.commit, path: file };
       }
       if (input.kind === 'documentation') {
@@ -283,6 +298,7 @@ export class GroupStore {
       this.db.prepare("UPDATE work SET status='complete',result=? WHERE id=?").run(json({ artifact: file, round }), work.id);
       switch (input.kind) {
         case 'task':
+          t.task_type = input.task_type;
           t.planning = input.planning || 'review';
           this.addWork(t, t.planning === 'direct' ? 'implementation-1' : 'plan', 'executor'); break;
         case 'plan': this.addWork(t, t.planning === 'plan' ? 'implementation-1' : 'plan_review', t.planning === 'plan' ? 'executor' : 'validator'); break;
@@ -290,7 +306,7 @@ export class GroupStore {
         case 'implementation': this.addWork(t, `code_review-${round}`, 'validator'); break;
         case 'code_review':
           if (input.verdict !== 'blocked') this.db.prepare("UPDATE work SET status='cancelled' WHERE task_id=? AND kind=? AND status='open'").run(t.task_id, `blocked-${round}`);
-          if (input.verdict === 'pass') this.addWork(t, `documentation-${round}-${docsRevision}`, 'validator');
+          if (input.verdict === 'pass') this.addWork(t, t.task_type ? `delivery-${round}` : `documentation-${round}-${docsRevision}`, t.task_type ? 'coordinator' : 'validator');
           else if (input.verdict === 'changes_requested') this.addWork(t, `implementation-${round + 1}`, 'executor');
           else this.addWork(t, `blocked-${round}`, 'coordinator');
           break;
@@ -299,7 +315,7 @@ export class GroupStore {
           if (input.verdict === 'pass') this.addWork(t, `delivery-${round}`, 'coordinator');
           else { t.docs_revision = docsRevision + 1; this.addWork(t, `documentation-${round}-${t.docs_revision}`, 'validator'); }
           break;
-        case 'delivery': this.notice(g.group_id, 'lead', { type: 'delivery', task_id: t.task_id, path: file, delivery: t.delivery, review: t.review, documentation: t.documentation }); break;
+        case 'delivery': this.notice(g.group_id, 'lead', { type: 'delivery', task_id: t.task_id, path: file, delivery: t.delivery, review: t.review, documentation: t.documentation, shared_context: value.shared_context && { ...value.shared_context, content: undefined } }); break;
         case 'resolution': this.db.prepare("UPDATE work SET status='cancelled' WHERE task_id=? AND kind=? AND status='open'").run(t.task_id, `code_review-${round}`); this.addWork(t, `implementation-${round + 1}`, 'executor'); break;
       }
       this.put('tasks', t.task_id, t); return value;

@@ -1,3 +1,4 @@
+import { publishSharedContext } from './shared-context.mjs';
 import { ROLES, git, alive, identifier, integrationMetadata } from './group-store.mjs';
 import { mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname, isAbsolute } from 'node:path';
@@ -216,9 +217,9 @@ function startTaskUnlocked(store, group, input) {
 }
 export function promptFor(group, role, startup = null) {
   const action = startup ? startup.work.length
-    ? `Startup assignment: ${JSON.stringify(startup.work.map(({ id, kind }) => ({ id, kind })))}. Use team_read for the current assignment and context.`
+    ? `Startup assignment: ${JSON.stringify(startup.work.map(({ id, kind }) => ({ id, kind })))}. Use the injected runtime context for current work IDs, paths, messages and the versioned contract. Read the referenced task before acting.`
     : startup.messages?.some(message => !message.read_at)
-      ? 'Unsettled messages are available. Use team_read to handle them; if no work is assigned, reply only when necessary and end idle.'
+      ? 'Unsettled messages are available. Handle them using the injected runtime context; if no work is assigned, reply only when necessary and end idle.'
       : 'No work is assigned to you at startup. End idle and wait for a runtime work or peer-message notification. Do not inventory files, read old tasks, or probe implementation while waiting.'
     : 'Use team_read to discover onboarding or the active task and generation.';
   return `You are the persistent ${role} of group ${group.group_id}. Group responsibility: ${group.applied_definition?.description || 'read groups/' + group.group_id + '/group.md'}. Worktree: ${group.worktree}. Read AGENTS.md and your selected private skill. ${action} Never assume an old task is still current. Prefix assistant text with [current_state: "a concrete description"]. Submit process documents through team_submit; writing a file alone does not hand off work. End each completed turn idle; the runtime wakes you for new work. Do not poll or stop the group. Native Windows command syntax applies to bash; use PowerShell examples and dedicated read/grep/find tools. Only Lead accepts and merges.`;
@@ -332,7 +333,7 @@ function finalizeUnlocked(store, taskId, options = {}) {
   } else if (git(g.worktree, 'status', '--porcelain')) throw Error('incomplete task evidence must be committed or explicitly preserved before detach');
   git(g.worktree, 'switch', g.idle_branch);
   git(g.worktree, 'merge', '--ff-only', target);
-  store.tx(() => { g.active_task = null; g.generation += 1; store.put('groups', g.group_id, g); t.finalization = { ...t.finalization, complete: true, last_error: null, branch_preserved: true }; store.put('tasks', taskId, t); });
+  store.tx(() => { g.active_task = null; g.generation += 1; store.put('groups', g.group_id, g); t.finalization = { ...t.finalization, complete: true, last_error: null, branch_preserved: true }; store.put('tasks', taskId, t); publishSharedContext(store, t); });
   return t.finalization;
 }
 

@@ -1,9 +1,23 @@
 ---
 name: review-group-task
-description: Perform one adversarial plan review, then independently inspect code, tests and module scope for each delivery.
+description: Independently review the assigned plan or exact delivery and authorized documentation.
 ---
-Use team_read and act only on assigned work. Read the task and any actually submitted plan; only assigned plan_review requires plan-review.md once. Direct/plan-only tasks require no plan review; concerns do not create another approval round. For implementation work inspect the referenced delivery commit, source, diff and tests. Write code-review-NN.md with acceptance evidence, required fixes, separate suggestions and remaining coverage. Submit round, commit and pass/changes_requested/blocked. Tests you author belong in the task document directory; never modify production files. Every new delivery requires a new report. Escalate ambiguity and no-progress loops to Coordinator; never weaken expectations to fit code. Preserve history, remain idle between events, and never accept a task. current_state is display only.
+Follow the Validator role instructions and injected work. Read task.md and referenced artifacts. Use groups/<group>/group.md for the module definition. Independently test the exact delivery with the required project entrypoint/environment. Preserve history; only Lead accepts.
 
-Task identity is injected by runtime. Use the owned work_id; round and review target can derive from that work. Require an ok:true submission receipt. On rejection follow code/next_action and authoritative work; never infer success from prose. Handle incoming steering messages before delivery. Preserve frozen delivery files; independent review evidence goes under review-NN/. An unfinished_work alert requires Coordinator recovery or escalation.
+## code-review-NN.md template
+Ordinary tasks: at most 1800 characters including whitespace; ceiling, not target. Necessary overruns need one sentence explaining why. Reference long evidence; never truncate required findings.
 
-For documentation work, align only task.documentation_paths (explicit Markdown files), address documentation_checklist, and submit documentation-<round>-<revision>.md as kind=documentation. Runtime commits module prose; leave the index empty. Coordinator checks independently and can return another revision. Changes to executable material require Executor implementation and a new code review. Do not revise old reports.
+```markdown
+# Review
+Delivery: <exact commit>; classification: <type and scope/diff conclusion>
+
+| Check | Independent evidence and result |
+|---|---|
+| <acceptance/risk> | <source/command, result> |
+
+Documentation: <classified change: each checklist item/alignment or no-change reason; non_change: unchanged product documentation; legacy: separate assignment follows>
+Findings: <must-fix; suggestions and uncovered risks separately, or none>
+Verdict: <pass/changes_requested/blocked>
+```
+
+Use one combined report for classified tasks, no additional documentation/evidence summary. Optional logs/tests belong under review-NN/ and must answer a concrete check. Legacy documentation work still uses documentation-<round>-<revision>.md and each assigned checklist item. Submit the assigned kind with work_id and required verdict, without body; target/path/round derive from work. Never stage/commit. Require ok:true receipt and end with a short acknowledgement. No polling or repeated unchanged-context reads.

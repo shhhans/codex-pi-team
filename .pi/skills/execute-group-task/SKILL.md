@@ -1,7 +1,22 @@
 ---
 name: execute-group-task
-description: Implement a group task using its Coordinator-selected planning route; deliver local commits for code review.
+description: Implement the assigned planning route and deliver an exact local commit.
 ---
-Use team_read to obtain task_id, generation and your open work. Read task.md and group.md. Follow assigned work: direct implementation needs no plan; plan-only submits plan.md then implements; review route submits a plan and waits for one assigned plan review. Record concerns only for reviews actually performed. Ask bounded questions via team_send if needed; never wait for an unassigned artifact. No second plan review or ACK. Run tests and create a local task-branch commit including evidence; team_submit implementation with round and commit. Stay idle until review. Fix must-fix findings, retain history, and create the next committed delivery. Do not edit submitted plans/reviews, hide failures or merge/push. Use team_send for questions, Coordinator for scope/dependency blockers. Only Lead accepts. Each text message starts with a display-only current_state prefix.
+Follow the Executor role instructions and injected work. Read task.md; resolve the module definition as groups/<group>/group.md. Select the required project test command/environment before testing. Preserve delivery history and independent review evidence. Only Lead accepts.
 
-Task identity is injected by runtime. Use the owned work_id; round and review target can derive from that work. Require an ok:true submission receipt. On rejection follow code/next_action and authoritative work; never infer success from prose. Handle incoming steering messages before delivery. Preserve frozen delivery files; independent review evidence goes under review-NN/. An unfinished_work alert requires Coordinator recovery or escalation.
+## implementation.md template
+Ordinary tasks: at most 1500 characters including whitespace; this is a ceiling, not a target. Necessary overruns need one sentence explaining why. Reference long evidence rather than copying it; do not truncate required facts.
+
+```markdown
+# Implementation
+Result: <outcome and actual change scope; for non_change, product diff conclusion>
+
+| Acceptance | Evidence and result |
+|---|---|
+| <condition> | <source/command, exact version or result> |
+
+Open issues: <none or blockers/limits>
+Plan-review concerns: <handling, only when a review actually occurred>
+```
+
+Include new module facts and source references when relevant; do not reproduce shared knowledge or repeat acceptance in multiple sections. Create a clean local commit including implementation.md, then submit using injected work_id and full HEAD commit, without body. An ok:true receipt is required. End with a short receipt, not the report again. Rejections require authoritative recovery; no model polling.

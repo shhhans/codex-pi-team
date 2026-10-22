@@ -17,7 +17,7 @@ const definitions = [
   ['team_inbox', 'Read Coordinator reports after a message cursor.', ['project_root', 'group_id'], { cursor: { type: 'integer' } }],
   ['team_wait', 'Wait up to 55 seconds for new Coordinator reports.', ['project_root', 'group_id'], { cursor: { type: 'integer' }, timeout_ms: { type: 'integer' } }],
   ['team_inspect', 'Inspect task evidence without acceptance.', ['project_root', 'task_id'], {}],
-  ['team_accept', 'Record Lead acceptance of the reviewed delivery.', ['project_root', 'task_id', 'rationale'], { rationale: { type: 'string' } }],
+  ['team_accept', 'Record Lead acceptance of the reviewed delivery, including any proposed shared knowledge update and its sources. Inspect the frozen delivery first; successful integration publishes the accepted update.', ['project_root', 'task_id', 'rationale'], { rationale: { type: 'string' } }],
   ['team_finalize', 'Integrate a Lead-accepted task; preserve group sessions/worktree.', ['project_root', 'task_id'], {}],
   ['team_integration_create', 'Build an immutable joint candidate from exact reviewed deliveries of distinct groups.', ['project_root', 'integration_id', 'task_ids', 'verification_group_id', 'worktree'], { integration_id: { type: 'string' }, task_ids: { type: 'array', minItems: 2, items: { type: 'string' } }, verification_group_id: { type: 'string' }, worktree: { type: 'string' } }],
   ['team_integration_inspect', 'Inspect the recorded joint candidate and its verification identity.', ['project_root', 'integration_id'], { integration_id: { type: 'string' } }],

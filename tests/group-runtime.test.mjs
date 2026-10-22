@@ -477,19 +477,36 @@ test('task switching recovers a recorded Git/SQLite interruption and keeps opera
 test('installed Pi loads the real extension: tools, message prefix, handoff, guards and session recovery', async () => {
   const packageRoot = process.env.PI_TEAM_PI_PACKAGE_ROOT || join(process.env.APPDATA || '', 'npm/node_modules/@earendil-works/pi-coding-agent');
   const { loadExtensions } = await import(pathToFileURL(join(packageRoot, 'dist/core/extensions/loader.js')).href);
-  const f = fixture(); const previous = {}; const loaded = []; const steered = [];
+  const f = fixture(); const previous = {}; const loaded = []; const steered = []; let failSteer = false;
   const ctx = { isIdle: () => true, sessionManager: { getSessionFile: () => join(f.root, 'session.jsonl') }, ui: { setStatus() {} }, getContextUsage: () => ({ percent: 0 }) };
   try {
     for (const role of ['coordinator', 'executor', 'validator']) {
       for (const [key, value] of Object.entries({ PI_TEAM_GROUP_ID: 'sample', PI_TEAM_ROLE: role, PI_TEAM_LAUNCH_ID: role, PI_TEAM_PROJECT_ROOT: f.main, PI_TEAM_SESSION_ID: `${role}-session` })) { if (!(key in previous)) previous[key] = process.env[key]; process.env[key] = value; }
       const result = await loadExtensions([join(import.meta.dirname, '../.pi/communication/extensions/group.ts')], f.wt);
       assert.deepEqual(result.errors, []);
-      result.runtime.sendUserMessage = (content, options) => steered.push({ role, content, options });
+      result.runtime.sendUserMessage = (content, options) => { if (failSteer) { failSteer = false; throw Error('notification rejected'); } steered.push({ role, content, options }); };
       const ext = result.extensions[0]; loaded.push(ext);
+      const schema = ext.tools.get('team_submit').definition.parameters;
+      const kinds = schema.properties.kind.anyOf.map(value => value.const);
+      assert.deepEqual(kinds, role === 'executor' ? ['onboarding', 'plan', 'implementation'] : role === 'validator' ? ['onboarding', 'plan_review', 'code_review', 'documentation'] : ['onboarding', 'task', 'documentation_review', 'delivery', 'resolution']);
+      assert.ok(schema.properties.body); // onboarding acknowledgement remains available
+      for (const field of ['task_type', 'planning', 'shared_context']) assert.equal(field in schema.properties, role === 'coordinator');
+      assert.equal('verdict' in schema.properties, role !== 'executor');
+      for (const field of ['work_id', 'path', 'round', 'commit']) assert.ok(schema.properties[field]);
       for (const fn of ext.handlers.get('session_start') || []) await fn({}, ctx);
       assert.deepEqual([...ext.tools.keys()], role === 'coordinator' ? ['team_read', 'team_send', 'team_submit', 'team_service'] : ['bash', 'team_read', 'team_send', 'team_submit']);
     }
     const [c, e, v] = loaded;
+    const inject = c.handlers.get('before_agent_start')[0];
+    const initialContext = await inject({ systemPrompt: 'system' }, ctx);
+    assert.equal(initialContext.message.customType, 'pi-team-context');
+    assert.equal(initialContext.message.display, false);
+    assert.match(initialContext.message.content, /return two/);
+    assert.match(initialContext.message.content, /artifact_path/);
+    assert.doesNotMatch(initialContext.systemPrompt, /return two/);
+    const laterContext = await inject({ systemPrompt: 'system' }, ctx);
+    assert.match(laterContext.message.content, /context_changed":false/);
+    assert.doesNotMatch(laterContext.message.content, /return two/);
     const tool = (ext, name, input) => ext.tools.get(name).definition.execute('call', input, undefined, undefined, ctx);
     const submit = async (ext, kind, name, extra = {}) => { await tool(ext, 'team_read', {}); const result = await tool(ext, 'team_submit', { task_id: 'T1', generation: 1, kind, path: f.file(name), ...extra }); assert.equal(JSON.parse(result.content[0].text).ok, true, result.content[0].text); return result; };
     assert.equal(JSON.parse((await tool(c, 'team_read', {})).content[0].text).task.task_id, 'T1');
@@ -503,6 +520,9 @@ test('installed Pi loads the real extension: tools, message prefix, handoff, gua
     for (const fn of e.handlers.get('agent_start')) await fn({}, ctx);
     await tool(e, 'team_read', {});
     f.store.send(f.actor('validator'), { to: 'executor', body: 'late but pre-delivery requirement' });
+    failSteer = true;
+    await assert.rejects(() => e.handlers.get('tool_result')[0]({ toolName: 'bash' }, ctx), /notification rejected/);
+    assert.ok(f.store.pending('sample', 'executor').some(m => m.data.body === 'late but pre-delivery requirement'));
     for (const fn of e.handlers.get('tool_result')) await fn({ toolName: 'bash' }, ctx);
     assert.equal(steered.at(-1).options.deliverAs, 'steer');
     assert.match(steered.at(-1).content, /late but pre-delivery requirement/);

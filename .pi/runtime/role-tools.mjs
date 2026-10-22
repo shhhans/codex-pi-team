@@ -1,6 +1,7 @@
 // The model supplies intent; identity and submission receipts come from runtime.
 import { onboardingState, submitOnboarding } from './group-onboarding.mjs';
 import { resolve, relative } from 'node:path';
+import { currentSharedContext } from './shared-context.mjs';
 export class RoleTools {
   constructor(store, group, role, launch) {
     Object.assign(this, { store, group, role, launch });
@@ -75,11 +76,14 @@ export class RoleTools {
     return names[base] ? prefix + names[base] : null;
   }
   workCards(work, task) {
-    return work.map(w => ({ id: w.id, kind: w.kind, owner: w.owner, status: w.status, artifact_path: this.artifactPath(w.kind, task?.task_id), round: this.workRound(w.kind), ...(w.kind.startsWith('code_review-') && task?.delivery?.commit ? { commit: task.delivery.commit } : {}) }));
+    const prefix = 'groups/' + this.group + '/tasks/' + task?.task_id + '/';
+    return work.map(w => ({ id: w.id, kind: w.kind, owner: w.owner, status: w.status, artifact_path: this.artifactPath(w.kind, task?.task_id), round: this.workRound(w.kind),
+      references: task ? [prefix + 'task.md', ...(task.planning && task.planning !== 'direct' && !['task', 'plan'].includes(w.kind) ? [prefix + 'plan.md'] : []), ...(task.planning === 'review' && /^(implementation|code_review|documentation|delivery)/.test(w.kind) ? [prefix + 'plan-review.md'] : []), ...(task.delivery ? [prefix + 'implementation.md'] : []), ...(task.review?.path ? [task.review.path] : []), ...(task.documentation?.report ? [task.documentation.report] : [])].filter((path, index, paths) => path !== this.artifactPath(w.kind, task.task_id) && paths.indexOf(path) === index) : [],
+      ...(task?.delivery?.commit ? { commit: task.delivery.commit } : {}), ...(task?.documentation?.commit ? { documentation_commit: task.documentation.commit } : {}) }));
   }
   compactRead(raw, presented, input) {
     const lifecycle = onboardingState(this.store, this.group, this.role);
-    const task = raw.task && { task_id: raw.task.task_id, generation: raw.task.generation, objective: raw.task.objective, acceptance: raw.task.acceptance, documentation_paths: raw.task.documentation_paths, documentation_checklist: raw.task.documentation_checklist, base_ref: raw.task.base_ref, integration_id: raw.task.integration_id, verification_snapshot: raw.task.verification_snapshot, round: raw.task.round, delivery: raw.task.delivery, review: raw.task.review, documentation: raw.task.documentation, docs_revision: raw.task.docs_revision, outcome: raw.task.outcome, finalization: raw.task.finalization };
+    const task = raw.task && { task_id: raw.task.task_id, planning: raw.task.planning, task_type: raw.task.task_type, generation: raw.task.generation, objective: raw.task.objective, acceptance: raw.task.acceptance, documentation_paths: raw.task.documentation_paths, documentation_checklist: raw.task.documentation_checklist, base_ref: raw.task.base_ref, base_commit: raw.task.base_commit, integration_id: raw.task.integration_id, verification_snapshot: raw.task.verification_snapshot, round: raw.task.round, delivery: raw.task.delivery, review: raw.task.review, documentation: raw.task.documentation, docs_revision: raw.task.docs_revision, outcome: raw.task.outcome, finalization: raw.task.finalization };
     const group = { group_id: raw.group.group_id, name: raw.group.name, description: raw.group.applied_definition?.description || raw.group.description, worktree: raw.group.worktree, generation: raw.group.generation, definition_epoch: raw.group.definition_epoch };
     const work = [...(lifecycle?.work || []), ...raw.work];
     const onboardingActive = lifecycle?.status === 'pending';
@@ -89,7 +93,7 @@ export class RoleTools {
     const messages = inbox.map(({ id, data, presented_at }) => ({ id, data, presented_at }));
     if (messages.length) this.messageCursor = Math.max(this.messageCursor, ...messages.map(m => m.id));
     this.recoverClaimedMessages = false;
-    const contract = { group, task: task && { task_id: task.task_id, objective: task.objective, acceptance: task.acceptance, documentation_paths: task.documentation_paths, documentation_checklist: task.documentation_checklist, base_ref: task.base_ref, integration_id: task.integration_id, verification_snapshot: task.verification_snapshot } };
+    const contract = { group, shared_context: currentSharedContext(this.store, this.group), task: task && { task_id: task.task_id, task_type: task.task_type, objective: task.objective, acceptance: task.acceptance, documentation_paths: task.documentation_paths, documentation_checklist: task.documentation_checklist, base_ref: task.base_ref, base_commit: task.base_commit, integration_id: task.integration_id, verification_snapshot: task.verification_snapshot } };
     const key = JSON.stringify([raw.group.definition_epoch, raw.group.generation, task?.task_id, contract]);
     const changed = this.contextKey !== key;
     const include = input.refresh_context || changed;
@@ -97,11 +101,23 @@ export class RoleTools {
     this.contextKey = key;
     const taskVersion = raw.task && JSON.stringify({ generation: raw.task.generation, round: raw.task.round, delivery: raw.task.delivery?.commit, review: raw.task.review, documentation: raw.task.documentation, docs_revision: raw.task.docs_revision, outcome: raw.task.outcome });
     const result = { ok: true, group, work: this.workCards(work, raw.task), task: task && { ...task, objective: undefined, acceptance: undefined, documentation_paths: undefined, documentation_checklist: undefined, base_ref: undefined }, messages, lifecycle: lifecycle && { operation_id: lifecycle.operation_id, status: lifecycle.status, epoch: lifecycle.epoch, ...(onboardingActive ? { receipts: lifecycle.receipts } : {}), work: lifecycle.work }, context_ref: `${raw.group.group_id}:${raw.group.generation}:${raw.group.definition_epoch}:${task?.task_id || 'idle'}:${this.contextVersion}`, task_version: taskVersion, work_version: work.map(w => w.id).join(','), message_version: messages.at(-1)?.id ?? this.messageCursor };
+    if (input.shared_context) result.shared_context = currentSharedContext(this.store, this.group, true);
     if (include) result.context = contract;
     else result.context_changed = false;
     return result;
   }
   invalidateReadContext() { this.contextKey = null; this.recoverClaimedMessages = true; }
+  injectContext(deliver) {
+    const checkpoint = [this.contextKey, this.contextVersion, this.messageCursor, this.recoverClaimedMessages];
+    try {
+      const result = this.invoke('team_read');
+      if (!result.ok) throw Error(JSON.stringify(result));
+      return deliver(result);
+    } catch (error) {
+      [this.contextKey, this.contextVersion, this.messageCursor, this.recoverClaimedMessages] = checkpoint;
+      throw error;
+    }
+  }
   finish() {
     const g = this.store.group(this.group);
     if (g.active_task !== this.identity.task_id || g.generation !== this.identity.generation || g.definition_epoch !== this.identity.definition_epoch) return;
